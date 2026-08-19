@@ -29,6 +29,11 @@ use crate::theme::Palette;
 #[derive(Default)]
 pub struct Controls {
     pending: Vec<EmbedderControl>,
+    /// The control drawn on the previous frame. A popup must survive its own
+    /// opening click: the press that asked for a context menu can still be in
+    /// egui's input when the menu first appears, and would dismiss it as a
+    /// click outside on the very frame it opened.
+    drawn: Option<EmbedderControlId>,
 }
 
 /// What the user did with the control on screen.
@@ -75,6 +80,9 @@ impl Controls {
             return;
         };
 
+        let settled = self.drawn == Some(self.pending[index].id());
+        self.drawn = Some(self.pending[index].id());
+
         let ctx = root.ctx().clone();
         // Text measurement needs a painter; `Context::fonts` hands out a view
         // that cannot lay out.
@@ -101,7 +109,7 @@ impl Controls {
                 let options = select.options().to_vec();
                 let multiple = select.allow_select_multiple();
                 let mut chosen = select.selected_options();
-                let picked = draw_select(&ctx, palette, content_rect, anchor, &options, &chosen, multiple);
+                let picked = draw_select(&ctx, palette, content_rect, anchor, &options, &chosen, multiple, settled);
                 match picked {
                     Some(Picked::Option(id)) => {
                         if multiple {
@@ -126,7 +134,7 @@ impl Controls {
             },
             EmbedderControl::ColorPicker(picker) => {
                 let anchor = to_window(picker.position());
-                match draw_color_picker(&ctx, palette, content_rect, anchor, picker.current_color())
+                match draw_color_picker(&ctx, palette, content_rect, anchor, picker.current_color(), settled)
                 {
                     Some(Some(colour)) => {
                         picker.select(Some(colour));
@@ -141,7 +149,7 @@ impl Controls {
             },
             EmbedderControl::ContextMenu(menu) => {
                 let anchor = to_window(menu.position());
-                match draw_context_menu(&ctx, &measure, palette, content_rect, anchor, menu.items()) {
+                match draw_context_menu(&ctx, &measure, palette, content_rect, anchor, menu.items(), settled) {
                     Some(Some(action)) => resolution = Some(Resolution::Menu(action)),
                     Some(None) => resolution = Some(Resolution::Cancel),
                     None => {},
@@ -370,6 +378,7 @@ fn draw_select(
     options: &[SelectElementOptionOrOptgroup],
     selected: &[usize],
     multiple: bool,
+    settled: bool,
 ) -> Option<Picked> {
     const ROW: f32 = 26.0;
     let mut rows = 0.0;
@@ -433,7 +442,7 @@ fn draw_select(
             }
         }
     });
-    if picked.is_none() && clicked_outside(ctx, rect) {
+    if picked.is_none() && settled && clicked_outside(ctx, rect) {
         picked = Some(Picked::Cancel);
     }
     picked
@@ -484,6 +493,7 @@ fn draw_color_picker(
     content_rect: Rect,
     anchor: Rect,
     current: Option<RgbColor>,
+    settled: bool,
 ) -> Option<Option<RgbColor>> {
     // A fixed palette rather than a colour wheel: enough for the handful of
     // pages that use `<input type=color>`, and it cannot be got subtly wrong.
@@ -541,7 +551,7 @@ fn draw_color_picker(
             }
         }
     });
-    if result.is_none() && clicked_outside(ctx, rect) {
+    if result.is_none() && settled && clicked_outside(ctx, rect) {
         result = Some(None);
     }
     result
@@ -555,6 +565,7 @@ fn draw_context_menu(
     content_rect: Rect,
     anchor: Rect,
     items: &[ContextMenuItem],
+    settled: bool,
 ) -> Option<Option<ContextMenuAction>> {
     const ROW: f32 = 28.0;
     const SEPARATOR: f32 = 9.0;
@@ -625,7 +636,7 @@ fn draw_context_menu(
             }
         }
     });
-    if result.is_none() && clicked_outside(ctx, rect) {
+    if result.is_none() && settled && clicked_outside(ctx, rect) {
         result = Some(None);
     }
     result
