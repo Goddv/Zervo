@@ -279,8 +279,12 @@ pub fn reveal(path: &Path) {
         .arg("-R")
         .arg(path)
         .spawn();
+    // No portable "reveal", so open the containing folder. Good enough, and
+    // every desktop has it.
     #[cfg(not(target_os = "macos"))]
-    let _ = path;
+    let _ = std::process::Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(path))
+        .spawn();
 }
 
 /// Open a finished file with its default application.
@@ -288,7 +292,7 @@ pub fn open_file(path: &Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(path).spawn();
     #[cfg(not(target_os = "macos"))]
-    let _ = path;
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
 
 /// Human-readable byte count.

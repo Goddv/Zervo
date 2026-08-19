@@ -1,0 +1,200 @@
+name: Linux
+
+# Zervo compiles the Servo engine, so a cold build is the better part of an
+# hour. Linux runners are free on public repos, but there is no reason to spend
+# an hour on every push either — release tags and manual dispatch only.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      engine-downloads:
+        description: Build with engine-backed downloads (uses the patched engine)
+        type: boolean
+        default: true
+      media:
+        description: Build with audio and video (system GStreamer)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # to attach packages to a release
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+  # Servo has no download support of its own (servo/servo#40210), so released
+  # builds compile against a fork carrying the embedder-download patch. Pinned
+  # to a revision, never a branch.
+  SERVO_FORK: https://github.com/Goddv/servo
+  SERVO_REV: 0d5a12189e5003ee95b335642470e2baf25fe607
+
+jobs:
+  deb:
+    name: Ubuntu (.deb)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        # Servo's own list, from python/servo/platform/linux_packages/apt.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ca-certificates ccache clang cmake curl g++ git gperf \
+            libdbus-1-dev libfreetype6-dev libgl1-mesa-dri libgles2-mesa-dev \
+            libglib2.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-ugly \
+            gstreamer1.0-plugins-base libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-libav libgstrtspserver-1.0-dev gstreamer1.0-tools \
+            libges-1.0-dev libharfbuzz-dev liblzma-dev libudev-dev libunwind-dev \
+            libvulkan1 libx11-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 \
+            xorg-dev libxkbcommon0 libxkbcommon-x11-0 \
+            libgstreamer-plugins-good1.0-dev mesa-vulkan-drivers dpkg-dev
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-linux-deb-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-linux-deb-
+
+      - name: Point Cargo at the patched engine
+        if: ${{ inputs.engine-downloads != 'false' }}
+        run: |
+          cat >> .cargo/config.toml <<EOF
+
+          [patch.crates-io]
+          servo = { git = "$SERVO_FORK", rev = "$SERVO_REV" }
+          EOF
+
+      - name: Build and package
+        run: |
+          FEATURES=""
+          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
+            FEATURES="engine-downloads"
+          fi
+          if [ "${{ inputs.media }}" != "false" ]; then
+            FEATURES="${FEATURES:+$FEATURES,}media"
+          fi
+          ARGS=(--profile release --deb)
+          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
+          ./scripts/package-linux.sh "${ARGS[@]}"
+
+      - name: Inspect the package
+        run: |
+          dpkg-deb --info target/linux/*.deb
+          dpkg-deb --contents target/linux/*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zervo-deb
+          path: target/linux/*.deb
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/linux/*.deb
+
+  rpm:
+    name: Fedora (.rpm)
+    runs-on: ubuntu-24.04
+    # Built inside Fedora rather than on Ubuntu: rpmbuild works the library
+    # requirements out from the binary, and those have to be Fedora's sonames.
+    container: fedora:41
+    timeout-minutes: 240
+
+    steps:
+      - name: Install build dependencies
+        # Servo's own list, from python/servo/platform/linux_packages/dnf,
+        # plus what the runner itself needs inside a bare container.
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            libtool gcc-c++ libXi-devel freetype-devel libunwind-devel \
+            mesa-libGL-devel mesa-libEGL-devel glib2-devel libX11-devel \
+            libXrandr-devel gperf fontconfig-devel cabextract ttmkfdir \
+            expat-devel rpm-build cmake libXcursor-devel libXmu-devel dbus-devel \
+            ncurses-devel harfbuzz-devel ccache clang clang-libs llvm \
+            python3-devel gstreamer1-devel gstreamer1-plugins-base-devel \
+            gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel \
+            gstreamer1-plugins-ugly-free libjpeg-turbo-devel zlib-ng \
+            libjpeg-turbo vulkan-loader libxkbcommon libxkbcommon-x11 \
+            git curl tar findutils which xz
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Select the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-linux-rpm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-linux-rpm-
+
+      - name: Point Cargo at the patched engine
+        if: ${{ inputs.engine-downloads != 'false' }}
+        run: |
+          cat >> .cargo/config.toml <<EOF
+
+          [patch.crates-io]
+          servo = { git = "$SERVO_FORK", rev = "$SERVO_REV" }
+          EOF
+
+      - name: Build and package
+        # No sccache here: it is not in the Fedora image and a cold build is the
+        # expected cost for a release.
+        env:
+          RUSTC_WRAPPER: ""
+          SCCACHE_GHA_ENABLED: ""
+        run: |
+          FEATURES=""
+          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
+            FEATURES="engine-downloads"
+          fi
+          if [ "${{ inputs.media }}" != "false" ]; then
+            FEATURES="${FEATURES:+$FEATURES,}media"
+          fi
+          ARGS=(--profile release --rpm)
+          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
+          ./scripts/package-linux.sh "${ARGS[@]}"
+
+      - name: Inspect the package
+        run: |
+          rpm -qip target/linux/*.rpm
+          rpm -qlp target/linux/*.rpm
+          echo "--- requires ---"
+          rpm -qRp target/linux/*.rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zervo-rpm
+          path: target/linux/*.rpm
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/linux/*.rpm

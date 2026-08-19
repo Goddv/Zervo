@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Zervo
+GenericName=Web Browser
+Comment=A sidebar-first browser built on the Servo engine
+Exec=zervo %u
+Icon=zervo
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=zervo
+Keywords=browser;web;internet;servo;

@@ -333,9 +333,40 @@ impl AppState {
         picker.submit();
     }
 
+    /// No native panel outside macOS, so ask the desktop for one. The right
+    /// answer is the XDG desktop portal over D-Bus; zenity is what almost every
+    /// GNOME and Fedora install already has, and it is a great deal less code.
     #[cfg(not(target_os = "macos"))]
-    fn run_file_picker(&self, picker: servo::FilePicker) {
-        picker.dismiss();
+    fn run_file_picker(&self, mut picker: servo::FilePicker) {
+        use std::path::PathBuf;
+        use std::process::Command;
+
+        let mut command = Command::new("zenity");
+        command.arg("--file-selection");
+        if picker.allow_select_multiple() {
+            command.args(["--multiple", "--separator=\n"]);
+        }
+        let Ok(output) = command.output() else {
+            log::warn!("no file picker available: install zenity to upload files");
+            picker.dismiss();
+            return;
+        };
+        if !output.status.success() {
+            // A non-zero exit is how zenity reports that the user cancelled.
+            picker.dismiss();
+            return;
+        }
+        let paths: Vec<PathBuf> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        if paths.is_empty() {
+            picker.dismiss();
+            return;
+        }
+        picker.select(&paths);
+        picker.submit();
     }
 }
 
