@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Zervo icon — layer 1: background. Full-bleed; the system applies the squircle mask. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#1e1e2a"/>
+      <stop offset="0.55" stop-color="#191922"/>
+      <stop offset="1" stop-color="#221c38"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.32" cy="0.26" r="0.75">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#a78bfa" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.78" cy="0.85" r="0.6">
+      <stop offset="0" stop-color="#7254dc" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#7254dc" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <rect width="1024" height="1024" fill="url(#glow2)"/>
+</svg>

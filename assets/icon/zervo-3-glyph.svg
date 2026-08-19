@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Zervo icon — layer 3: the Z glyph. Transparent background. -->
+  <defs>
+    <linearGradient id="z" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f1ff"/>
+      <stop offset="0.55" stop-color="#d9ccff"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <path d="M 318 330 L 706 330 C 640 432 462 570 318 694 L 706 694"
+        fill="none" stroke="url(#z)" stroke-width="104"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

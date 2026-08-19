@@ -1,0 +1,13 @@
+# Local development against a patched Servo checkout.
+#
+# Uncomment and point at your fork to build with `--features engine-downloads`
+# (see docs/SERVO.md). Left commented so a fresh clone builds against the
+# pinned upstream revision with no setup.
+#
+# [patch.crates-io]
+# servo = { path = "/absolute/path/to/servo/components/servo" }
+
+[env]
+# Unoptimised Stylo frames overflow the default 512 KB style-thread stack on
+# complex pages; Servo exposes this knob for exactly that reason.
+SERVO_STYLE_THREAD_STACK_SIZE_KB = "2048"

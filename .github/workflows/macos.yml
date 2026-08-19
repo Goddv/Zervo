@@ -1,0 +1,110 @@
+name: macOS
+
+# Zervo compiles the Servo engine, so a cold build is roughly an hour of macOS
+# runner time. macOS minutes bill at 10x on private repos, so the build runs on
+# release tags and manual dispatch only. (On a public repo GitHub-hosted
+# runners are free and unlimited — if this repo is public, feel free to add
+# `pull_request` here; with sccache warm the job is ~15-25 minutes.)
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Cargo profile
+        type: choice
+        options: [release, dev-fast]
+        default: release
+      engine-downloads:
+        description: Build with engine-backed downloads (needs a patched Servo)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # to attach the .dmg to a release
+
+env:
+  CARGO_TERM_COLOR: always
+  # sccache is the single biggest lever here: Servo's own CI measures ~15 min
+  # warm against ~54 min cold for the same profile.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+
+jobs:
+  build:
+    name: Build .app
+    # macos-15 is Apple Silicon, which is what Zervo targets. Do not pin
+    # macos-14: it is deprecated and scheduled for removal.
+    # If a fat-LTO link runs out of memory (arm64 runners have 7 GB), switch to
+    # macos-15-intel, which has 14 GB.
+    runs-on: macos-15
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Stop XProtect
+        # XProtect scans the packaged .dmg and can fail the job; Servo's own
+        # macOS CI does exactly this.
+        run: sudo pkill -9 XProtect || true
+
+      - name: Show environment
+        # cmake and pkg-config — Servo's only macOS system dependencies — are
+        # already on the runner image, so there is no brew step.
+        run: |
+          sw_vers && cmake --version | head -1 && pkg-config --version
+          df -h / | tail -1
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Rust toolchain
+        # Pinned by rust-toolchain.toml, matching Servo's own channel.
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo registry
+        # Only the inputs are cached. The build output is far larger than the
+        # 10 GB per-repo cache limit (a Servo target dir runs to tens of GB),
+        # so caching target/ would silently never restore.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build and bundle
+        run: |
+          ARGS=(--profile "${{ inputs.profile || 'release' }}" --dmg)
+          if [ "${{ inputs.engine-downloads }}" = "true" ]; then
+            ARGS+=(--features engine-downloads)
+          fi
+          ./scripts/bundle-macos.sh "${ARGS[@]}"
+
+      - name: sccache stats
+        run: sccache --show-stats
+
+      - name: Report sizes
+        run: du -sh target/Zervo.app target/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zervo-macos-arm64
+          path: target/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/*.dmg
+          body: |
+            Unsigned build. macOS will refuse to open it until you clear the
+            quarantine flag:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/Zervo.app
+            ```
+
+            See docs/PACKAGING.md for why.

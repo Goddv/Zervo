@@ -1,0 +1,79 @@
+[package]
+name = "zervo"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MPL-2.0"
+description = "A calm, workspace-oriented browser built on the Servo engine"
+repository = "https://github.com/goddv/zervo"
+readme = "README.md"
+publish = false
+
+[features]
+default = []
+# File downloads driven by the engine. Requires a Servo build carrying
+# patches/servo/0001-embedder-file-downloads.patch — see docs/SERVO.md.
+# Without it Zervo still runs; unrenderable responses simply are not offered.
+engine-downloads = []
+
+[dependencies]
+# ── The engine ────────────────────────────────────────────────────────────
+# Servo publishes to crates.io (roughly monthly). Using the registry release
+# rather than a git dependency keeps clones small and the lockfile stable;
+# updating Zervo to a newer engine is a one-line version bump here.
+# See docs/SERVO.md.
+servo = { version = "0.5.0", default-features = false, features = [
+    "background_hang_monitor",
+    "baked-in-resources",
+    "bundled_freetype",
+    "clipboard",
+    "js_jit",
+    "webgpu",
+] }
+
+# ── Chrome ────────────────────────────────────────────────────────────────
+egui = "0.34.3"
+egui-winit = { version = "0.34.3", default-features = false, features = ["clipboard"] }
+egui_glow = { version = "0.34.3", features = ["winit"] }
+glow = "0.17.0"
+winit = "0.30.13"
+
+# ── Support ───────────────────────────────────────────────────────────────
+chrono = "0.4"
+dirs = "6.0"
+euclid = "0.22"
+keyboard-types = { version = "0.8.3", features = ["serde", "webdriver"] }
+log = "0.4"
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSColor",
+    "NSGraphics",
+    "NSImage",
+    "NSResponder",
+    "NSView",
+    "NSVisualEffectView",
+    "NSWindow",
+    "objc2-quartz-core",
+] }
+objc2-foundation = { version = "0.3.1", default-features = false, features = ["NSData", "NSGeometry"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer"] }
+resvg = "0.48.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# A middle profile: optimised enough to browse with, fast enough to iterate on.
+[profile.dev-fast]
+inherits = "dev"
+opt-level = 2
+incremental = true
+debug = "line-tables-only"

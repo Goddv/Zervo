@@ -1,0 +1,26 @@
+name: Check
+
+# Cheap checks only. Anything that compiles the crate also compiles the Servo
+# engine (about an hour), so type-checking and linting are not run here — see
+# macos.yml. Formatting needs no compilation and is worth enforcing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup component add rustfmt
+      - run: cargo fmt --all --check
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck scripts/*.sh

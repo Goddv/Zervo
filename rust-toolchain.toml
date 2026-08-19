@@ -1,0 +1,5 @@
+# Matches the toolchain Servo pins, since Zervo builds the engine from source.
+# When bumping Servo in Cargo.toml, check servo/rust-toolchain.toml too.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]

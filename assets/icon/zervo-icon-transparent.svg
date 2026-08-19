@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Zervo icon — flat preview of all layers with an approximate squircle mask.
+       For the real app icon, assemble the three layer files in Icon Composer. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#1e1e2a"/>
+      <stop offset="0.55" stop-color="#191922"/>
+      <stop offset="1" stop-color="#221c38"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.32" cy="0.26" r="0.75">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#a78bfa" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.78" cy="0.85" r="0.6">
+      <stop offset="0" stop-color="#7254dc" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#7254dc" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c9b8ff" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#a78bfa" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#8f6ef2" stop-opacity="0.8"/>
+    </linearGradient>
+    <linearGradient id="z" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f1ff"/>
+      <stop offset="0.55" stop-color="#d9ccff"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="60" y="60" width="904" height="904" rx="204"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="url(#bg)" opacity="0.30"/>
+    <rect width="1024" height="1024" fill="url(#glow)"/>
+    <rect width="1024" height="1024" fill="url(#glow2)"/>
+
+    <!-- Back half of the orbit (behind the Z) -->
+    <g transform="rotate(-24 512 512)">
+      <path d="M 114 512 A 398 148 0 0 1 910 512" fill="none"
+            stroke="url(#ring)" stroke-width="20" stroke-linecap="round" opacity="0.55"/>
+    </g>
+
+    <path d="M 318 330 L 706 330 C 640 432 462 570 318 694 L 706 694"
+          fill="none" stroke="url(#z)" stroke-width="104"
+          stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Front half of the orbit (in front of the Z) + satellite -->
+    <g transform="rotate(-24 512 512)">
+      <path d="M 910 512 A 398 148 0 0 1 114 512" fill="none"
+            stroke="url(#ring)" stroke-width="20" stroke-linecap="round"/>
+      <circle cx="880" cy="430" r="26" fill="#c9b8ff"/>
+    </g>
+  </g>
+</svg>

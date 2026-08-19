@@ -1,0 +1,246 @@
+//! User settings, persisted as JSON in the platform config directory
+//! (`~/Library/Application Support/Zervo/settings.json` on macOS).
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use crate::theme::{AccentColor, ThemeMode};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SearchEngine {
+    DuckDuckGo,
+    Google,
+    Bing,
+    Startpage,
+}
+
+impl SearchEngine {
+    pub const ALL: [SearchEngine; 4] = [
+        SearchEngine::DuckDuckGo,
+        SearchEngine::Google,
+        SearchEngine::Bing,
+        SearchEngine::Startpage,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            SearchEngine::DuckDuckGo => "DuckDuckGo",
+            SearchEngine::Google => "Google",
+            SearchEngine::Bing => "Bing",
+            SearchEngine::Startpage => "Startpage",
+        }
+    }
+
+    /// Build a search URL from an already-percent-escaped query.
+    pub fn query_url(&self, escaped_query: &str) -> String {
+        match self {
+            SearchEngine::DuckDuckGo => {
+                format!("https://duckduckgo.com/?q={escaped_query}")
+            },
+            SearchEngine::Google => {
+                format!("https://www.google.com/search?q={escaped_query}")
+            },
+            SearchEngine::Bing => format!("https://www.bing.com/search?q={escaped_query}"),
+            SearchEngine::Startpage => {
+                format!("https://www.startpage.com/sp/search?query={escaped_query}")
+            },
+        }
+    }
+}
+
+/// Which app icon Zervo wears in the Dock.
+///
+/// Both variants are composed from the same layered artwork authored in
+/// Apple's Icon Composer (`assets/icon/Zervo.icon`); the transparent variant
+/// is that document's translucency setting made visible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AppIcon {
+    Default,
+    Transparent,
+}
+
+impl AppIcon {
+    pub const ALL: [AppIcon; 2] = [AppIcon::Default, AppIcon::Transparent];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            AppIcon::Default => "Default",
+            AppIcon::Transparent => "Transparent",
+        }
+    }
+}
+
+/// What a freshly opened tab shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NewTabPage {
+    /// The internal zervo://newtab page.
+    #[serde(alias = "Blank")]
+    ZervoPage,
+    Homepage,
+}
+
+/// Background treatment of the zervo://newtab page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NewTabBackground {
+    /// Slow ambient drift of accent-tinted light blobs.
+    Aurora,
+    /// Flowing sine bands.
+    Waves,
+    /// Drifting points of light.
+    Particles,
+    /// Static multi-point colour wash.
+    Mesh,
+    /// Faint geometric grid.
+    Grid,
+    /// Simple vertical fade.
+    Gradient,
+    Plain,
+}
+
+impl NewTabBackground {
+    pub const ALL: [NewTabBackground; 7] = [
+        NewTabBackground::Aurora,
+        NewTabBackground::Waves,
+        NewTabBackground::Particles,
+        NewTabBackground::Mesh,
+        NewTabBackground::Grid,
+        NewTabBackground::Gradient,
+        NewTabBackground::Plain,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            NewTabBackground::Aurora => "Aurora",
+            NewTabBackground::Waves => "Waves",
+            NewTabBackground::Particles => "Particles",
+            NewTabBackground::Mesh => "Mesh",
+            NewTabBackground::Grid => "Grid",
+            NewTabBackground::Gradient => "Gradient",
+            NewTabBackground::Plain => "Plain",
+        }
+    }
+
+    /// True for backgrounds that animate and therefore need timed repaints.
+    pub fn animated(&self) -> bool {
+        matches!(
+            self,
+            NewTabBackground::Aurora | NewTabBackground::Waves | NewTabBackground::Particles
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub theme: ThemeMode,
+    pub accent: AccentColor,
+    pub homepage: String,
+    pub search_engine: SearchEngine,
+    pub new_tab_page: NewTabPage,
+    pub new_tab_background: NewTabBackground,
+    /// Show tab close buttons always, instead of only on hover.
+    pub always_show_tab_close: bool,
+    pub show_forward_button: bool,
+    pub show_reload_button: bool,
+    /// Show the pinned-tab essentials grid.
+    pub show_essentials: bool,
+    /// Show tab counts next to workspace names.
+    pub show_tab_counts: bool,
+    /// Denser sidebar rows.
+    pub compact_sidebar: bool,
+    /// Reveal a collapsed sidebar when the pointer nears the window edge.
+    pub sidebar_autohide: bool,
+    /// Save files without asking where.
+    pub downloads_auto: bool,
+    /// Strength of the glow strip across the top of the window, 0.0..=1.0.
+    /// Zero turns it off entirely.
+    pub top_glow: f32,
+    /// Accent-tinted outline around the web content card.
+    pub content_border: bool,
+    /// Opacity of the chrome (sidebar and surrounds), 0.35..=1.0. Below 1.0
+    /// the window is translucent; the web content itself stays opaque.
+    pub chrome_opacity: f32,
+
+    // ── New tab page widgets.
+    pub newtab_clock: bool,
+    pub newtab_greeting: bool,
+    /// Pinned tabs shown as shortcut tiles on the new tab page.
+    pub newtab_quick_links: bool,
+    pub newtab_search: bool,
+    pub newtab_logo: bool,
+    /// Overrides the time-of-day greeting when non-empty.
+    pub newtab_message: String,
+
+    /// Dock icon variant.
+    pub app_icon: AppIcon,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: ThemeMode::Auto,
+            accent: AccentColor::Lavender,
+            homepage: "https://servo.org".to_owned(),
+            search_engine: SearchEngine::DuckDuckGo,
+            new_tab_page: NewTabPage::ZervoPage,
+            new_tab_background: NewTabBackground::Aurora,
+            always_show_tab_close: false,
+            show_forward_button: true,
+            show_reload_button: true,
+            show_essentials: true,
+            show_tab_counts: true,
+            compact_sidebar: false,
+            sidebar_autohide: true,
+            downloads_auto: true,
+            top_glow: 1.0,
+            content_border: true,
+            chrome_opacity: 0.85,
+            newtab_clock: true,
+            newtab_greeting: true,
+            newtab_quick_links: true,
+            newtab_search: true,
+            newtab_logo: true,
+            newtab_message: String::new(),
+            app_icon: AppIcon::Default,
+        }
+    }
+}
+
+fn settings_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("Zervo").join("settings.json"))
+}
+
+/// Pre-rename location, still read once so existing preferences carry over.
+fn legacy_settings_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("Zervo").join("settings.json"))
+}
+
+pub fn load() -> Settings {
+    let read = |path: Option<PathBuf>| -> Option<Settings> {
+        let contents = std::fs::read_to_string(path?).ok()?;
+        serde_json::from_str(&contents).ok()
+    };
+    read(settings_path())
+        .or_else(|| read(legacy_settings_path()))
+        .unwrap_or_default()
+}
+
+impl Settings {
+    pub fn save(&self) {
+        let Some(path) = settings_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match serde_json::to_string_pretty(self) {
+            Ok(json) => {
+                if let Err(error) = std::fs::write(&path, json) {
+                    log::warn!("Failed to save settings: {error}");
+                }
+            },
+            Err(error) => log::warn!("Failed to serialize settings: {error}"),
+        }
+    }
+}
