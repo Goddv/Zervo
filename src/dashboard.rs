@@ -579,7 +579,7 @@ pub fn draw(
         if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
             ctx.data_mut(|data| data.insert_temp(open_id, !open));
         }
-        if open && let Some(kind) = draw_add_menu(root, palette, add) {
+        if open && let Some(kind) = add_menu(root, palette, add) {
             ctx.data_mut(|data| data.insert_temp(open_id, false));
             changes.push(Change::Add(kind));
         }
@@ -680,7 +680,7 @@ fn menu<T: Copy>(
     chosen
 }
 
-fn draw_add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<WidgetKind> {
+pub fn add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<WidgetKind> {
     let rows: Vec<(String, WidgetKind, bool)> = WidgetKind::ALL
         .iter()
         .map(|kind| (kind.label().to_owned(), *kind, false))

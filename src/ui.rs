@@ -1421,6 +1421,7 @@ const ADDRESS_PILL_MAX_WIDTH: f32 = 900.0;
 /// and settings snapped to the right.
 fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     let palette = chrome.palette;
+    let ctx = root.ctx().clone();
     let window = root.ctx().content_rect();
     let height = chrome
         .settings
@@ -1509,6 +1510,21 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     let _ = icons::icon_button(&mut group, Icon::Extensions, NAVBAR_ICON, &palette, false)
         .on_hover_text("Extensions — not supported by the engine yet");
 
+    // Only once there is a shelf to put one on. Left of the extensions button,
+    // since it belongs to what the drag just revealed rather than to the
+    // permanent row.
+    let shelf_open = strip.height() > NAVBAR_ROW + 10.0;
+    let add_widget = shelf_open.then(|| {
+        let response = icons::icon_button(&mut group, Icon::Plus, NAVBAR_ICON, &palette, true)
+            .on_hover_text("Add a widget");
+        if response.clicked() {
+            let open = Id::new("zervo_navbar_add_widget");
+            let was = root_data_flag(&ctx, open);
+            ctx.data_mut(|data| data.insert_temp(open, !was));
+        }
+        response.rect
+    });
+
     // ── Centre: the address pill, centred on the window rather than on the
     // space left between the two groups, so it does not drift as they change.
     let width = navbar_pill_width(root, chrome, actions, row);
@@ -1551,6 +1567,17 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                 },
                 crate::dashboard::Change::Media(action) => UiAction::MediaAction(action),
             });
+        }
+    }
+
+    // The menu behind the bar's add button, anchored under it.
+    if let Some(anchor) = add_widget {
+        let open = Id::new("zervo_navbar_add_widget");
+        if root_data_flag(&ctx, open)
+            && let Some(kind) = crate::dashboard::add_menu(root, &palette, anchor)
+        {
+            ctx.data_mut(|data| data.insert_temp(open, false));
+            actions.push(UiAction::AddWidget(kind));
         }
     }
 
@@ -1619,6 +1646,12 @@ fn navbar_resize(
         chrome.settings.navbar_height = height;
         actions.push(UiAction::PersistSettings);
     }
+}
+
+/// A remembered boolean, for the little bits of open/closed state that do not
+/// deserve a field of their own.
+fn root_data_flag(ctx: &egui::Context, id: Id) -> bool {
+    ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false)
 }
 
 /// The pill's width, draggable by either edge. Dragging one edge moves the
