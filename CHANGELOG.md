@@ -63,17 +63,39 @@ and leaves out `Gecko/20100101`, and enough sites match on exactly those to serv
 a "browser not supported" page. Zervo now presents the plain Firefox string. It's
 a setting if you'd rather be honest about it.
 
-### Still missing
+### Audio and video
 
-`<video>` and `<audio>` don't play. That needs GStreamer, which on macOS means a
-system framework install and bundling a pile of libraries into the .app, so it's
-its own milestone rather than a change. [docs/PARITY.md](docs/PARITY.md) has the
-detail, along with everything else still between this and a browser you could use
-daily.
+`<video>` and `<audio>` play, in the builds you download. This needs GStreamer,
+which on macOS means the official framework rather than anything you can `brew
+install`, so `scripts/bundle-gstreamer.py` copies the 92 libraries and 38 plugins
+it needs into the .app and rewrites their install names. The bundle grows by
+about 150 MB, which is the price of not requiring everyone to install a framework
+first.
+
+Three separate things had to be right before a single frame decoded, and each one
+hid the next: the binary needed an rpath of its own, `@rpath/…` references had to
+be rewritten rather than left alone, and the rewritten paths had to be *shorter*
+than the originals or `install_name_tool` refuses to write them at all. Build it
+with `--features media`.
+
+### Local files open
+
+`file://` URLs went through the "looks like a hostname" branch of the address bar
+and came out as `https://file:///…`, so opening a local file was impossible —
+from the address bar or the command line. Absolute paths and `~/` work too.
+
+### Page console output
+
+There are no devtools, so `console.log` went nowhere at all. It goes to the
+terminal now, which makes debugging a page in Zervo enormously less annoying.
 
 ### Commits
 
 ```
+17e4900  app: show page console output
+28978fc  ui: open local files
+17cce01  media: make the bundled GStreamer actually load
+d7357f3  media: bundle GStreamer so audio and video work
 9f9d8a8  ui: let a popup survive its own opening click
 51823c9  ui: wire up input methods
 a07646e  ci: build releases against the patched engine

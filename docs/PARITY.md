@@ -14,17 +14,11 @@ propagated into `prefers-color-scheme`.
 
 As of 0.3.0, also: `alert`/`confirm`/`prompt`, `<select>` popups, `<input
 type=color>`, `<input type=file>` through the system open panel, the context
-menu, input methods, cookies and logins surviving a restart, and file downloads
-in released builds.
+menu, input methods, cookies and logins surviving a restart, `file://` URLs,
+page console output, and — in released builds — file downloads and audio and
+video playback.
 
-## Tier 0 — the things that make it feel broken
-
-### No audio or video
-
-`<video>` and `<audio>` need `--features media`, which needs GStreamer. The
-plumbing is in place — the Cargo feature, the bundling script and the CI install
-step — but the build itself is only as available as the framework, which has to
-be installed system-wide with admin rights. See [PACKAGING.md](PACKAGING.md).
+Tier 0 is done. What is left is the list below.
 
 ## Tier 1 — expected behaviour, and the API already exists
 
