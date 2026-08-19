@@ -1326,7 +1326,7 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     draw_address_pill(&mut host, chrome, actions, NAVBAR_PILL_HEIGHT);
 
     // ── The shelf the extra height uncovers.
-    if strip.height() > NAVBAR_ROW + 8.0 {
+    if strip.height() > NAVBAR_ROW + 10.0 {
         let shelf = Rect::from_min_max(
             pos2(window.left() + theme::CONTENT_MARGIN, row.max.y),
             pos2(window.right() - theme::CONTENT_MARGIN, strip.max.y - 6.0),
@@ -1397,10 +1397,23 @@ fn navbar_resize(
     // there.
     crate::dashboard::draw_grabber(root.painter(), &chrome.palette, strip, emphasis);
 
+    // Closed, or open far enough to show a whole widget. Those are the two
+    // heights worth resting at, so a release near either lands on it — the
+    // shelf ends up uncovered rather than cut off mid-card. Anywhere else is
+    // left alone, in case someone wants it there.
+    let uncovered = NAVBAR_ROW + crate::dashboard::SHELF_OPEN_HEIGHT + 6.0;
     let mut height = stored;
     if response.dragged() {
         height = (height + response.drag_delta().y).clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT);
         chrome.settings.navbar_height = height;
+    }
+    if response.drag_stopped() {
+        for rest in [NAVBAR_ROW, uncovered] {
+            if (height - rest).abs() < 18.0 {
+                height = rest;
+                chrome.settings.navbar_height = height;
+            }
+        }
     }
     // Written once the drag ends, not every frame of it.
     if !root.ctx().egui_is_using_pointer() && (height - stored).abs() > 0.5 {

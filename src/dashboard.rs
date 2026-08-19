@@ -73,7 +73,15 @@ pub enum Change {
 }
 
 const GAP: f32 = 10.0;
-const PAD: f32 = 8.0;
+const PAD: f32 = 6.0;
+/// Widgets are a fixed height, never stretched to whatever the shelf happens
+/// to be. Dragging reveals more of a card that keeps its size, the way a card
+/// slides out of a stack; a card that grows and shrinks with the drag reads as
+/// a rubber sheet instead.
+const WIDGET_HEIGHT: f32 = 52.0;
+
+/// The bar height at which the shelf shows a whole widget.
+pub const SHELF_OPEN_HEIGHT: f32 = WIDGET_HEIGHT + PAD * 2.0;
 
 /// Draw the strip into `area`. Returns whatever the user asked for.
 pub fn draw(
@@ -89,6 +97,12 @@ pub fn draw(
     }
 
     let ctx = root.ctx().clone();
+    // Everything is clipped to the shelf, so a half-open one shows the top of
+    // a whole card rather than a squashed one — it is sliding out from under
+    // the controls, not being compressed by them.
+    let mut root = root.new_child(egui::UiBuilder::new().max_rect(area));
+    root.set_clip_rect(area);
+    let root = &mut root;
     let drag_id = Id::new("zervo_widget_drag");
     let dragging = ctx.data(|data| data.get_temp::<usize>(drag_id));
 
@@ -98,7 +112,7 @@ pub fn draw(
     for kind in placed {
         let rect = Rect::from_min_size(
             pos2(x, area.min.y + PAD),
-            vec2(kind.width(), area.height() - PAD * 2.0),
+            vec2(kind.width(), WIDGET_HEIGHT),
         );
         slots.push(rect);
         x += kind.width() + GAP;
@@ -177,7 +191,7 @@ pub fn draw(
     // ── The add tile, at the end of the row.
     let add = Rect::from_min_size(
         pos2(x, area.min.y + PAD),
-        vec2(38.0, area.height() - PAD * 2.0),
+        vec2(38.0, WIDGET_HEIGHT),
     );
     if add.max.x <= area.max.x - PAD {
         let response = root.interact(add, Id::new("zervo_widget_add"), Sense::click());
@@ -272,8 +286,14 @@ fn draw_widget(
     changes: &mut Vec<Change>,
 ) {
     let painter = root.painter();
-    for shape in glass::shapes(rect, palette, Glass::new(10).strength(if held { 1.0 } else { 0.8 }))
-    {
+    // Opaque, with the shadow left on: these stack over the content card, and
+    // a translucent card in a pile does not read as a card.
+    painter.rect_filled(rect, CornerRadius::same(10), palette.bg);
+    for shape in glass::shapes(
+        rect,
+        palette,
+        Glass::new(10).strength(if held { 1.0 } else { 0.85 }),
+    ) {
         painter.add(shape);
     }
 
