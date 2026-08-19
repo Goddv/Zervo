@@ -111,6 +111,49 @@ if [ "$MAKE_DMG" = "1" ]; then
     STAGE="$(mktemp -d)"
     cp -R "$APP" "$STAGE/"
     ln -s /Applications "$STAGE/Applications"
+
+    # Anything downloaded from the internet is quarantined, and macOS refuses to
+    # open a quarantined app that is not signed by a paid Developer ID with the
+    # singularly unhelpful "Zervo is damaged and can't be opened". Say so here,
+    # where someone who has just mounted the disk image will see it, rather than
+    # only in release notes they may never have read.
+    # Quoted heredoc, so the version goes in afterwards: an unquoted one would
+    # also try to expand the "$99/year" below.
+    cat > "$STAGE/READ ME FIRST.txt" <<'README'
+Zervo @VERSION@
+==============
+
+1. Drag Zervo onto the Applications folder here.
+
+2. Open Terminal and run this line:
+
+       xattr -dr com.apple.quarantine /Applications/Zervo.app
+
+3. Open Zervo normally.
+
+Why step 2?
+-----------
+macOS quarantines everything downloaded from the internet, and refuses to
+open quarantined apps unless they are signed with a paid Apple Developer ID
+($99/year) and notarised by Apple. Zervo is not, so without step 2 macOS
+tells you the app "is damaged and can't be opened", which is not true —
+it just means Apple has not been paid to vouch for it.
+
+The command removes the download flag. It does not change the app.
+
+Requirements
+------------
+- An Apple Silicon Mac (M1 or later). This build will not run on Intel.
+- macOS 11 or later.
+
+Zervo runs on Servo, an independent web engine that is still young, so
+expect sites to render badly or not at all. It is something to try, not a
+browser to depend on.
+
+https://github.com/Goddv/Zervo
+README
+    sed -i '' "s/@VERSION@/$VERSION/" "$STAGE/READ ME FIRST.txt"
+
     rm -f "$DMG"
     hdiutil create -volname "Zervo" -srcfolder "$STAGE" -ov -format UDZO "$DMG" > /dev/null
     rm -rf "$STAGE"
