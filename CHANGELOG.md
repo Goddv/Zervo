@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.3.2 — 19 August 2026
+
+The navigation bar became something you can arrange, and Linux got its first
+packages.
+
+### The bar is yours to arrange
+
+The wand beside the add-widget button turns the row into things to move rather
+than things to press. Drag items within a group or across to the other side of
+the address pill, with a caret showing where a drop lands; the x takes an item
+off; whatever is off waits in a tray underneath where a click puts it back. Both
+groups are remembered.
+
+This needed the bar to stop being a fixed sequence of calls — it is a list of
+items now, each carrying its own icon, tooltip, enabled state and action. A
+sequence of calls cannot be reordered by definition.
+
+### Widgets
+
+Cells scale with the window. The column count is fixed at twelve and the cells
+narrow, rather than the grid losing columns — which used to shove everything on
+the right into the same place on a small window. A widget at column six is at
+column six in any window, and positions are never rewritten behind your back.
+
+Widgets can be dropped anywhere on the shelf, including a row with nothing above
+it, with a thin line showing the cell they would snap to. They resize by
+dragging a corner in whole cells, or from a list of sizes behind the same
+corner. The shelf's own add tile is gone: the bar's plus does the same job
+without spending shelf space on it.
+
+### Fixes
+
+Hover-only controls could not be clicked. Remove and resize on widgets, and
+remove and rename on favourites, were shown only while their card reported
+itself hovered — but registering those controls on top of the card is exactly
+what stops the card counting as hovered, so they blinked at the pointer and were
+unreachable. Hover comes from the pointer position now.
+
+The favourites card was unusable for a related reason: it grew outward from the
+star's centre, so while animating it sat on top of the star and swallowed the
+click that had opened it. It grows downward from underneath now, and takes no
+input until it has arrived. Favourites can be renamed, removed, and shown as
+tiles instead of a list.
+
+The shelf can reach every row it offers. The grid allowed four and the bar's
+maximum height allowed two, so it stopped at two however hard it was dragged.
+
+### Linux
+
+First `.deb` and `.rpm` builds. The `.rpm` is built inside Fedora and the `.deb`
+on Ubuntu, because a binary linked against one distribution's libraries will not
+reliably run on the other, and `rpmbuild` derives its requirements from the
+binary. Neither package carries a hand-written dependency list.
+
+Worth being straight about: these are the first Linux builds that have ever
+existed, and nobody has run one. They compile and package. Whether Zervo opens a
+window on Linux is untested — the rendering context, X11 versus Wayland and the
+GL setup have never been exercised.
+
 ## 0.3.1 — 19 August 2026
 
 Two fixes on top of 0.3.0, one of which is why pages looked wrong.

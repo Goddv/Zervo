@@ -41,6 +41,11 @@ jobs:
 
       - name: Install build dependencies
         # Servo's own list, from python/servo/platform/linux_packages/apt.
+        # Noninteractive, or a package that wants to ask something — tzdata is
+        # the usual culprit — waits for an answer that never comes and the job
+        # sits there until it times out.
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \

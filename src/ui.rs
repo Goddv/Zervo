@@ -1637,7 +1637,6 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
             shelf,
         ) {
             actions.push(match change {
-                crate::dashboard::Change::Add(kind) => UiAction::AddWidget(kind),
                 crate::dashboard::Change::Remove(index) => UiAction::RemoveWidget(index),
                 crate::dashboard::Change::Swap { a, b } => UiAction::SwapWidgets(a, b),
                 crate::dashboard::Change::Place { index, col, row } => {

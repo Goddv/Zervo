@@ -56,9 +56,9 @@ impl WidgetKind {
     /// What it is placed at before anyone resizes it.
     pub fn default_size(self) -> Size {
         match self {
-            WidgetKind::Clock => Size::cells(2, 1),
-            WidgetKind::NowPlaying => Size::cells(4, 1),
-            WidgetKind::Transport => Size::cells(3, 1),
+            WidgetKind::Clock => Size::cells(1, 1),
+            WidgetKind::NowPlaying => Size::cells(3, 1),
+            WidgetKind::Transport => Size::cells(2, 1),
         }
     }
 }
@@ -99,11 +99,12 @@ impl Size {
 
     /// The sizes offered in the menu. Not every combination — a list nobody
     /// can scan is worse than a short one, and the grid takes any pair.
-    pub const CHOICES: [Size; 9] = [
+    pub const CHOICES: [Size; 10] = [
         Size::cells(1, 1),
         Size::cells(2, 1),
         Size::cells(3, 1),
         Size::cells(4, 1),
+        Size::cells(6, 1),
         Size::cells(2, 2),
         Size::cells(4, 2),
         Size {
@@ -159,7 +160,6 @@ impl Placed {
 /// What the shelf wants done, handed back rather than applied here so the
 /// settings stay the one place that owns the arrangement.
 pub enum Change {
-    Add(WidgetKind),
     Remove(usize),
     Resize(usize, Size),
     Swap { a: usize, b: usize },
@@ -167,22 +167,38 @@ pub enum Change {
     Media(servo::MediaSessionActionType),
 }
 
-/// One grid cell, and the space between cells.
-const CELL: f32 = 52.0;
+/// A cell is a fixed height and a share of the width. The column count is
+/// constant, so a widget at column six is at column six in any window: the
+/// cells narrow with the window rather than the grid losing columns, which
+/// would push everything on the right into the same place.
+const CELL_HEIGHT: f32 = 52.0;
+pub const COLUMNS: u8 = 12;
 const GAP: f32 = 10.0;
 const PAD: f32 = 6.0;
 /// The most rows the shelf will ever offer.
 pub const MAX_ROWS: u8 = 4;
 
+/// How wide one cell is in `area`.
+fn cell_width(area: Rect) -> f32 {
+    let inner = area.shrink(PAD).width();
+    ((inner - (COLUMNS - 1) as f32 * GAP) / COLUMNS as f32).max(12.0)
+}
+
+/// The width `cells` columns come to.
+fn extent_w(cells: u8, cell: f32) -> f32 {
+    cells as f32 * cell + cells.saturating_sub(1) as f32 * GAP
+}
+
 /// The shelf height that shows `rows` whole rows. The bar's limits are derived
 /// from this rather than guessed, so the tallest bar always fits a whole number
 /// of rows instead of ending part-way through one.
 pub const fn height_for_rows(rows: u8) -> f32 {
-    rows as f32 * CELL + (rows as f32 - 1.0) * GAP + PAD * 2.0
+    rows as f32 * CELL_HEIGHT + (rows as f32 - 1.0) * GAP + PAD * 2.0
 }
 
+/// The height `cells` rows come to.
 fn extent(cells: u8) -> f32 {
-    cells as f32 * CELL + cells.saturating_sub(1) as f32 * GAP
+    cells as f32 * CELL_HEIGHT + cells.saturating_sub(1) as f32 * GAP
 }
 
 /// How many rows the arrangement needs. A `Full` height resolves to this, so a
@@ -223,7 +239,6 @@ fn footprint(widget: &Placed, columns: u8, rows: u8) -> (u8, u8, u8, u8) {
 /// The first cell a new widget fits in, so adding one does not drop it on top
 /// of something else.
 pub fn free_cell(placed: &[Placed], size: Size) -> (u8, u8) {
-    const COLUMNS: u8 = 12;
     let rows = MAX_ROWS;
     let width = match size.w {
         Span::Cells(n) => n.clamp(1, COLUMNS),
@@ -260,7 +275,7 @@ pub fn open_height(placed: &[Placed]) -> f32 {
 /// widget stays where it was put.
 fn visible_rows(area: Rect) -> u8 {
     let inner = area.shrink(PAD);
-    (((inner.height() + GAP) / (CELL + GAP)).floor() as u8).clamp(1, MAX_ROWS)
+    (((inner.height() + GAP) / (CELL_HEIGHT + GAP)).floor() as u8).clamp(1, MAX_ROWS)
 }
 
 fn grid_rows(placed: &[Placed], area: Rect) -> u8 {
@@ -270,18 +285,18 @@ fn grid_rows(placed: &[Placed], area: Rect) -> u8 {
 fn layout(placed: &[Placed], area: Rect) -> Vec<Rect> {
     let rows = grid_rows(placed, area);
     let inner = area.shrink(PAD);
-    let columns = (((inner.width() + GAP) / (CELL + GAP)).floor() as u8).max(1);
+    let cell = cell_width(area);
 
     placed
         .iter()
         .map(|widget| {
-            let (col, row, width, height) = footprint(widget, columns, rows);
+            let (col, row, width, height) = footprint(widget, COLUMNS, rows);
             Rect::from_min_size(
                 pos2(
-                    inner.min.x + col as f32 * (CELL + GAP),
-                    inner.min.y + row as f32 * (CELL + GAP),
+                    inner.min.x + col as f32 * (cell + GAP),
+                    inner.min.y + row as f32 * (CELL_HEIGHT + GAP),
                 ),
-                vec2(extent(width), extent(height)),
+                vec2(extent_w(width, cell), extent(height)),
             )
         })
         .collect()
@@ -290,6 +305,7 @@ fn layout(placed: &[Placed], area: Rect) -> Vec<Rect> {
 /// The cell the pointer is over, clamped so the widget stays on the grid.
 fn cell_at(area: Rect, pos: egui::Pos2, size: Size, columns: u8, rows: u8) -> (u8, u8) {
     let inner = area.shrink(PAD);
+    let cell = cell_width(area);
     let width = match size.w {
         Span::Cells(n) => n.clamp(1, columns),
         Span::Full => columns,
@@ -298,9 +314,9 @@ fn cell_at(area: Rect, pos: egui::Pos2, size: Size, columns: u8, rows: u8) -> (u
         Span::Cells(n) => n.clamp(1, rows),
         Span::Full => rows,
     };
-    let col = (((pos.x - inner.min.x) / (CELL + GAP)).round() as i32)
+    let col = (((pos.x - inner.min.x) / (cell + GAP)).round() as i32)
         .clamp(0, columns.saturating_sub(width) as i32) as u8;
-    let row = (((pos.y - inner.min.y) / (CELL + GAP)).round() as i32)
+    let row = (((pos.y - inner.min.y) / (CELL_HEIGHT + GAP)).round() as i32)
         .clamp(0, rows.saturating_sub(height) as i32) as u8;
     (col, row)
 }
@@ -338,7 +354,8 @@ pub fn draw(
     // Nothing under the pointer means nothing happens, which is easier to
     // predict than a drop that lands somewhere by proximity.
     let inner = area.shrink(PAD);
-    let columns = (((inner.width() + GAP) / (CELL + GAP)).floor() as u8).max(1);
+    let cell = cell_width(area);
+    let columns = COLUMNS;
     let rows = grid_rows(placed, area);
 
     // Where a held widget would land: the cell under the pointer, snapped.
@@ -346,7 +363,8 @@ pub fn draw(
     // with nothing above it.
     let snap = match (dragging, pointer) {
         (Some(held), Some(pos)) => placed.get(held).map(|widget| {
-            let (col, row) = cell_at(area, pos - vec2(CELL, CELL) / 2.0, widget.size, columns, rows);
+            let (col, row) =
+                cell_at(area, pos - vec2(cell, CELL_HEIGHT) / 2.0, widget.size, columns, rows);
             let (_, _, width, height) = footprint(
                 &Placed { col, row, ..*widget },
                 columns,
@@ -357,10 +375,10 @@ pub fn draw(
                 row,
                 Rect::from_min_size(
                     pos2(
-                        inner.min.x + col as f32 * (CELL + GAP),
-                        inner.min.y + row as f32 * (CELL + GAP),
+                        inner.min.x + col as f32 * (cell + GAP),
+                        inner.min.y + row as f32 * (CELL_HEIGHT + GAP),
                     ),
-                    vec2(extent(width), extent(height)),
+                    vec2(extent_w(width, cell), extent(height)),
                 ),
             )
         }),
@@ -441,10 +459,9 @@ pub fn draw(
         }
 
         let drawn = match (held, pointer) {
-            (true, Some(pos)) => Rect::from_min_size(
-                pos - vec2(CELL, CELL) / 2.0,
-                slot.size(),
-            ),
+            (true, Some(pos)) => {
+                Rect::from_min_size(pos - vec2(cell, CELL_HEIGHT) / 2.0, slot.size())
+            },
             _ => *slot,
         };
         if held {
@@ -503,10 +520,11 @@ pub fn draw(
             if resizing == Some(index)
                 && let Some(pos) = pointer
             {
-                let wanted = size_from_corner(*slot, pos, columns, rows);
+                let wanted = size_from_corner(*slot, pos, cell, columns, rows);
                 let (_, _, width, height) =
                     footprint(&Placed { size: wanted, ..*widget }, columns, rows);
-                let preview = Rect::from_min_size(slot.min, vec2(extent(width), extent(height)));
+                let preview =
+                    Rect::from_min_size(slot.min, vec2(extent_w(width, cell), extent(height)));
                 root.painter().rect_stroke(
                     preview,
                     CornerRadius::same(10),
@@ -545,53 +563,14 @@ pub fn draw(
         }
     }
 
-    // ── The add tile, after the last widget.
-    let inner = area.shrink(PAD);
-    let after = slots.iter().map(|slot| slot.max.x).fold(inner.min.x, f32::max);
-    let add = Rect::from_min_size(
-        pos2(
-            if slots.is_empty() { inner.min.x } else { after + GAP },
-            inner.min.y,
-        ),
-        vec2(38.0, CELL),
-    );
-    if add.max.x <= inner.max.x {
-        let response = root.interact(add, Id::new("zervo_widget_add"), Sense::click());
-        let open_id = Id::new("zervo_widget_menu");
-        let open = ctx.data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
-        root.painter().rect_stroke(
-            add,
-            CornerRadius::same(10),
-            Stroke::new(
-                1.0_f32,
-                palette
-                    .border
-                    .gamma_multiply(if response.hovered() { 1.6 } else { 1.0 }),
-            ),
-            StrokeKind::Inside,
-        );
-        icons::draw_icon(
-            root.painter(),
-            Rect::from_center_size(add.center(), vec2(15.0, 15.0)),
-            Icon::Plus,
-            palette.text_muted,
-        );
-        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-            ctx.data_mut(|data| data.insert_temp(open_id, !open));
-        }
-        if open && let Some(kind) = add_menu(root, palette, add) {
-            ctx.data_mut(|data| data.insert_temp(open_id, false));
-            changes.push(Change::Add(kind));
-        }
-    }
-
     changes
 }
 
 /// The size a corner drag is asking for, in whole cells.
-fn size_from_corner(slot: Rect, pos: egui::Pos2, columns: u8, rows: u8) -> Size {
-    let width = (((pos.x - slot.min.x + GAP) / (CELL + GAP)).round() as i32).clamp(1, columns as i32);
-    let height = (((pos.y - slot.min.y + GAP) / (CELL + GAP)).round() as i32).clamp(1, rows as i32);
+fn size_from_corner(slot: Rect, pos: egui::Pos2, cell: f32, columns: u8, rows: u8) -> Size {
+    let width = (((pos.x - slot.min.x + GAP) / (cell + GAP)).round() as i32).clamp(1, columns as i32);
+    let height =
+        (((pos.y - slot.min.y + GAP) / (CELL_HEIGHT + GAP)).round() as i32).clamp(1, rows as i32);
     Size::cells(width as u8, height as u8)
 }
 
@@ -744,7 +723,7 @@ fn draw_widget(
 
     // A one-cell widget has no room for two lines, so they show less rather
     // than overflowing.
-    let roomy = rect.height() > CELL * 1.4;
+    let roomy = rect.height() > CELL_HEIGHT * 1.4;
 
     match kind {
         WidgetKind::Clock => {
