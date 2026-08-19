@@ -54,6 +54,7 @@ pub enum Icon {
     Lock,
     History,
     Extensions,
+    Arrange,
 }
 
 impl Icon {
@@ -66,6 +67,7 @@ impl Icon {
             // is the nearest glyph we actually have. Swap the codepoint in
             // phosphor.rs if the pack is ever extended.
             Icon::Extensions => glyph::SLIDERS,
+            Icon::Arrange => glyph::MAGICWAND,
             Icon::Back => glyph::ARROWLEFT,
             Icon::Forward => glyph::ARROWRIGHT,
             Icon::Reload => glyph::RELOAD,

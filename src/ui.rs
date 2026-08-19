@@ -47,6 +47,13 @@ pub enum UiAction {
     AddWidget(crate::dashboard::WidgetKind),
     RemoveWidget(usize),
     SwapWidgets(usize, usize),
+    MoveNavItem {
+        item: NavItem,
+        side: NavSide,
+        index: usize,
+    },
+    RemoveNavItem(NavItem),
+    AddNavItem(NavItem),
     PlaceWidget { index: usize, col: u8, row: u8 },
     ResizeWidget(usize, crate::dashboard::Size),
     MediaAction(servo::MediaSessionActionType),
@@ -1419,6 +1426,94 @@ const ADDRESS_PILL_MAX_WIDTH: f32 = 900.0;
 /// window controls and navigation snapped to the left beside the traffic
 /// lights, the address pill centred on the window, and extensions, downloads
 /// and settings snapped to the right.
+/// Something that can sit in the navigation bar. The bar is a list of these
+/// rather than a fixed sequence of calls, so it can be rearranged.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+pub enum NavItem {
+    Sidebar,
+    Back,
+    Forward,
+    Reload,
+    Favourite,
+    Extensions,
+    History,
+    Downloads,
+    Settings,
+}
+
+/// Which side of the address pill an item lives on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NavSide {
+    Left,
+    Right,
+}
+
+impl NavItem {
+    pub const ALL: [NavItem; 9] = [
+        NavItem::Sidebar,
+        NavItem::Back,
+        NavItem::Forward,
+        NavItem::Reload,
+        NavItem::Favourite,
+        NavItem::Extensions,
+        NavItem::History,
+        NavItem::Downloads,
+        NavItem::Settings,
+    ];
+
+    pub fn default_left() -> Vec<NavItem> {
+        vec![
+            NavItem::Sidebar,
+            NavItem::Back,
+            NavItem::Forward,
+            NavItem::Reload,
+            NavItem::Favourite,
+        ]
+    }
+
+    pub fn default_right() -> Vec<NavItem> {
+        vec![
+            NavItem::Extensions,
+            NavItem::History,
+            NavItem::Downloads,
+            NavItem::Settings,
+        ]
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            NavItem::Sidebar => Icon::Sidebar,
+            NavItem::Back => Icon::Back,
+            NavItem::Forward => Icon::Forward,
+            NavItem::Reload => Icon::Reload,
+            NavItem::Favourite => Icon::Star,
+            NavItem::Extensions => Icon::Extensions,
+            NavItem::History => Icon::History,
+            NavItem::Downloads => Icon::Download,
+            NavItem::Settings => Icon::Gear,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            NavItem::Sidebar => "Sidebar",
+            NavItem::Back => "Back",
+            NavItem::Forward => "Forward",
+            NavItem::Reload => "Reload",
+            NavItem::Favourite => "Favourites",
+            NavItem::Extensions => "Extensions",
+            NavItem::History => "History",
+            NavItem::Downloads => "Downloads",
+            NavItem::Settings => "Settings",
+        }
+    }
+}
+
+/// One button's worth of width in the bar.
+fn nav_item_width() -> f32 {
+    NAVBAR_ICON + 12.0
+}
+
 fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     let palette = chrome.palette;
     let ctx = root.ctx().clone();
@@ -1432,98 +1527,84 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     // opens space underneath them rather than spreading them out.
     let row = Rect::from_min_size(strip.min, vec2(strip.width(), NAVBAR_ROW));
 
-    let (can_go_back, can_go_forward, is_web) = chrome
-        .browser
-        .active_tab()
-        .map(|tab| (tab.can_go_back, tab.can_go_forward, tab.kind == TabKind::Web))
-        .unwrap_or_default();
-
-    // ── Left: sidebar, navigation, favourites. Beside the traffic lights.
-    let left = Rect::from_min_max(
-        pos2(window.left() + TRAFFIC_LIGHTS, row.min.y),
-        pos2(window.center().x, row.max.y),
-    );
-    let mut group = root.new_child(
-        egui::UiBuilder::new()
-            .max_rect(left)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    group.spacing_mut().item_spacing.x = 2.0;
-    if icons::icon_button(&mut group, Icon::Sidebar, NAVBAR_ICON, &palette, true)
-        .on_hover_text("Show sidebar")
-        .clicked()
-    {
-        actions.push(UiAction::ToggleSidebar);
-    }
-    group.add_space(6.0);
-    if icons::icon_button(&mut group, Icon::Back, NAVBAR_ICON, &palette, can_go_back).clicked() {
-        actions.push(UiAction::Back);
-    }
-    if icons::icon_button(&mut group, Icon::Forward, NAVBAR_ICON, &palette, can_go_forward).clicked() {
-        actions.push(UiAction::Forward);
-    }
-    if chrome.settings.show_reload_button
-        && icons::icon_button(&mut group, Icon::Reload, NAVBAR_ICON, &palette, is_web)
-            .on_hover_text("Reload (⌘R)")
-            .clicked()
-    {
-        actions.push(UiAction::Reload);
-    }
-    let star = draw_favourite_star(&mut group, chrome, actions);
-
-    // ── Right: extensions, downloads, settings. Snapped to the edge.
-    let right = Rect::from_min_max(
-        pos2(window.center().x, row.min.y),
-        pos2(window.right() - 10.0, row.max.y),
-    );
-    let mut group = root.new_child(
-        egui::UiBuilder::new()
-            .max_rect(right)
-            .layout(egui::Layout::right_to_left(egui::Align::Center)),
-    );
-    group.spacing_mut().item_spacing.x = 2.0;
-    if icons::icon_button(&mut group, Icon::Gear, NAVBAR_ICON, &palette, true)
-        .on_hover_text("Settings (⌘,)")
-        .clicked()
-    {
-        actions.push(UiAction::OpenSettings);
-    }
-    let active = chrome.downloads.active_count();
-    if icons::icon_button(&mut group, Icon::Download, NAVBAR_ICON, &palette, true)
-        .on_hover_text(if active > 0 {
-            format!("Downloads ({active} active)")
-        } else {
-            "Downloads".to_owned()
-        })
-        .clicked()
-    {
-        actions.push(UiAction::OpenDownloads);
-    }
-    if icons::icon_button(&mut group, Icon::History, NAVBAR_ICON, &palette, true)
-        .on_hover_text("History")
-        .clicked()
-    {
-        actions.push(UiAction::OpenHistory);
-    }
-    // Nothing behind this yet: Servo has no extension support, and there is no
-    // point pretending otherwise in the tooltip.
-    let _ = icons::icon_button(&mut group, Icon::Extensions, NAVBAR_ICON, &palette, false)
-        .on_hover_text("Extensions — not supported by the engine yet");
-
-    // Only once there is a shelf to put one on. Left of the extensions button,
-    // since it belongs to what the drag just revealed rather than to the
-    // permanent row.
+    let config = root_data_flag(&ctx, Id::new("zervo_navbar_config"));
     let shelf_open = strip.height() > NAVBAR_ROW + 10.0;
-    let add_widget = shelf_open.then(|| {
-        let response = icons::icon_button(&mut group, Icon::Plus, NAVBAR_ICON, &palette, true)
-            .on_hover_text("Add a widget");
-        if response.clicked() {
-            let open = Id::new("zervo_navbar_add_widget");
-            let was = root_data_flag(&ctx, open);
-            ctx.data_mut(|data| data.insert_temp(open, !was));
+
+    // ── Where every item sits, both sides, worked out before anything is
+    // drawn: arranging needs all of them to know where a drop lands.
+    let spacing = 2.0;
+    let item_size = vec2(nav_item_width(), NAVBAR_ICON + 8.0);
+    let mut placed: Vec<(NavSide, usize, NavItem, Rect)> = Vec::new();
+    let mut x = window.left() + TRAFFIC_LIGHTS;
+    for (index, item) in chrome.settings.navbar_left.iter().enumerate() {
+        let rect = Rect::from_min_size(pos2(x, row.center().y - item_size.y / 2.0), item_size);
+        placed.push((NavSide::Left, index, *item, rect));
+        x += nav_item_width() + spacing;
+    }
+    let count = chrome.settings.navbar_right.len() as f32;
+    let mut x =
+        window.right() - 10.0 - (count * nav_item_width() + (count - 1.0).max(0.0) * spacing);
+    let right_edge_start = x;
+    for (index, item) in chrome.settings.navbar_right.iter().enumerate() {
+        let rect = Rect::from_min_size(pos2(x, row.center().y - item_size.y / 2.0), item_size);
+        placed.push((NavSide::Right, index, *item, rect));
+        x += nav_item_width() + spacing;
+    }
+
+    if config {
+        draw_navbar_config(root, chrome, actions, &placed, row);
+    } else {
+        for (_, _, item, rect) in &placed {
+            draw_nav_item(root, chrome, actions, *item, *rect);
         }
-        response.rect
-    });
+    }
+
+    // ── Adding a widget, and arranging the bar. Both belong to what the drag
+    // revealed, so they come with the shelf — except that leaving arrange mode
+    // has to stay possible once it is on.
+    let mut extras = Vec::new();
+    if shelf_open {
+        extras.push(Icon::Plus);
+    }
+    if shelf_open || config {
+        extras.push(Icon::Arrange);
+    }
+    let mut add_widget = None;
+    if !extras.is_empty() {
+        let width = extras.len() as f32 * nav_item_width() + (extras.len() - 1) as f32 * spacing;
+        let tray = Rect::from_min_size(
+            pos2(right_edge_start - 10.0 - width, row.center().y - item_size.y / 2.0),
+            vec2(width, item_size.y),
+        );
+        let mut group = root.new_child(
+            egui::UiBuilder::new()
+                .max_rect(tray)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        group.spacing_mut().item_spacing.x = spacing;
+        for icon in extras {
+            let response = icons::icon_button(&mut group, icon, NAVBAR_ICON, &palette, true);
+            if icon == Icon::Plus {
+                let response = response.on_hover_text("Add a widget");
+                if response.clicked() {
+                    let open = Id::new("zervo_navbar_add_widget");
+                    let was = root_data_flag(&ctx, open);
+                    ctx.data_mut(|data| data.insert_temp(open, !was));
+                }
+                add_widget = Some(response.rect);
+            } else if response
+                .on_hover_text(if config {
+                    "Done arranging"
+                } else {
+                    "Arrange the bar"
+                })
+                .clicked()
+            {
+                let id = Id::new("zervo_navbar_config");
+                ctx.data_mut(|data| data.insert_temp(id, !config));
+            }
+        }
+    }
 
     // ── Centre: the address pill, centred on the window rather than on the
     // space left between the two groups, so it does not drift as they change.
@@ -1536,7 +1617,7 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     draw_address_pill(&mut host, chrome, actions, NAVBAR_PILL_HEIGHT);
 
     // ── The shelf the extra height uncovers.
-    if strip.height() > NAVBAR_ROW + 10.0 {
+    if shelf_open {
         let shelf = Rect::from_min_max(
             pos2(window.left() + theme::CONTENT_MARGIN, row.max.y),
             pos2(window.right() - theme::CONTENT_MARGIN, strip.max.y - SHELF_BOTTOM),
@@ -1586,8 +1667,262 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     // Reserve the strip so the content card starts below it.
     root.allocate_rect(strip, Sense::hover());
 
-    // Favourites hover card last, over everything else in the bar.
-    draw_favourites_card(root, chrome, actions, star);
+    // Favourites hover card last, over everything else in the bar. Not while
+    // arranging, when the star is something to move rather than to use.
+    if !config
+        && let Some((.., star)) = placed
+            .iter()
+            .find(|(_, _, item, _)| *item == NavItem::Favourite)
+    {
+        draw_favourites_card(root, chrome, actions, *star);
+    }
+}
+
+/// Arrange mode: the bar's own buttons become things to move, not to press.
+///
+/// Items are dragged between and within the two groups, an insertion caret
+/// shows where one would land, and the x takes it off the bar. Whatever has
+/// been taken off waits in a tray underneath, where it can be put back.
+fn draw_navbar_config(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    placed: &[(NavSide, usize, NavItem, Rect)],
+    row: Rect,
+) {
+    let palette = chrome.palette;
+    let ctx = root.ctx().clone();
+    let drag_id = Id::new("zervo_nav_drag");
+    let dragging = ctx.data(|data| data.get_temp::<NavItem>(drag_id));
+    let pointer = ctx.input(|input| input.pointer.latest_pos());
+
+    // Where a drop would insert: before or after whichever item the pointer is
+    // nearest, on that item's side.
+    let target = pointer.and_then(|pos| {
+        placed
+            .iter()
+            .filter(|(.., rect)| {
+                pos.y >= row.min.y && pos.y <= row.max.y && (pos.x - rect.center().x).abs() < 60.0
+            })
+            .min_by(|a, b| {
+                let da = (pos.x - a.3.center().x).abs();
+                let db = (pos.x - b.3.center().x).abs();
+                da.total_cmp(&db)
+            })
+            .map(|(side, index, _, rect)| {
+                (
+                    *side,
+                    if pos.x > rect.center().x { index + 1 } else { *index },
+                    *rect,
+                    pos.x > rect.center().x,
+                )
+            })
+    });
+
+    // The whole row reads as editable while this is on.
+    root.painter().rect_filled(
+        row,
+        CornerRadius::same(8),
+        palette.accent.gamma_multiply(0.06),
+    );
+
+    for (slot, (_, _, item, rect)) in placed.iter().enumerate() {
+        let response = root.interact(*rect, drag_id.with(slot), Sense::click_and_drag());
+        let held = dragging == Some(*item);
+        if response.drag_started() {
+            ctx.data_mut(|data| data.insert_temp(drag_id, *item));
+        }
+        if held && response.drag_stopped() {
+            ctx.data_mut(|data| data.remove::<NavItem>(drag_id));
+            if let Some((side, index, ..)) = target {
+                actions.push(UiAction::MoveNavItem {
+                    item: *item,
+                    side,
+                    index,
+                });
+            }
+        }
+        if response.hovered() || held {
+            ctx.set_cursor_icon(if held {
+                CursorIcon::Grabbing
+            } else {
+                CursorIcon::Grab
+            });
+        }
+
+        let drawn = match (held, pointer) {
+            (true, Some(pos)) => Rect::from_center_size(pos, rect.size()),
+            _ => *rect,
+        };
+        root.painter().rect_filled(
+            drawn,
+            CornerRadius::same(8),
+            palette.surface.gamma_multiply(if held { 1.0 } else { 0.7 }),
+        );
+        root.painter().rect_stroke(
+            drawn,
+            CornerRadius::same(8),
+            Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.55)),
+            StrokeKind::Inside,
+        );
+        icons::draw_icon(
+            root.painter(),
+            Rect::from_center_size(drawn.center(), vec2(NAVBAR_ICON, NAVBAR_ICON)),
+            item.icon(),
+            palette.text,
+        );
+
+        // Taking it off the bar.
+        let close = Rect::from_center_size(pos2(drawn.max.x - 2.0, drawn.min.y + 2.0), vec2(13.0, 13.0));
+        icons::draw_icon(root.painter(), close.shrink(1.5), Icon::Close, palette.text_muted);
+        if !held
+            && root
+                .interact(close, drag_id.with(("off", slot)), Sense::click())
+                .on_hover_text(format!("Remove {}", item.label()))
+                .clicked()
+        {
+            actions.push(UiAction::RemoveNavItem(*item));
+        }
+    }
+
+    // Where it would land.
+    if dragging.is_some()
+        && let Some((_, _, rect, after)) = target
+    {
+        let x = if after { rect.max.x + 1.0 } else { rect.min.x - 1.0 };
+        root.painter().rect_filled(
+            Rect::from_center_size(pos2(x, rect.center().y), vec2(2.0, rect.height() + 6.0)),
+            CornerRadius::same(1),
+            palette.accent,
+        );
+    }
+
+    // ── The tray of everything currently off the bar.
+    let hidden: Vec<NavItem> = NavItem::ALL
+        .iter()
+        .copied()
+        .filter(|item| !placed.iter().any(|(_, _, placed, _)| placed == item))
+        .collect();
+    let width = (hidden.len().max(1) as f32) * (nav_item_width() + 4.0) + 150.0;
+    let tray = crate::ui::clamp_into(
+        Rect::from_min_size(pos2(row.center().x - width / 2.0, row.max.y + 8.0), vec2(width, 40.0)),
+        ctx.content_rect(),
+    );
+    egui::Area::new(Id::new("zervo_nav_tray"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(tray.min)
+        .constrain(false)
+        .show(&ctx, |ui| {
+            ui.painter().rect_filled(tray, CornerRadius::same(10), palette.bg);
+            for shape in glass::shapes(tray, &palette, Glass::new(10)) {
+                ui.painter().add(shape);
+            }
+            ui.painter().text(
+                pos2(tray.min.x + 12.0, tray.center().y),
+                Align2::LEFT_CENTER,
+                if hidden.is_empty() {
+                    "Drag to rearrange"
+                } else {
+                    "Drag to rearrange, or add back:"
+                },
+                FontId::proportional(12.0),
+                palette.text_muted,
+            );
+            let mut x = tray.min.x + 150.0;
+            for item in &hidden {
+                let slot = Rect::from_min_size(
+                    pos2(x, tray.center().y - (NAVBAR_ICON + 8.0) / 2.0),
+                    vec2(nav_item_width(), NAVBAR_ICON + 8.0),
+                );
+                let response = ui.interact(slot, Id::new("zervo_nav_back").with(*item), Sense::click());
+                if response.hovered() {
+                    ui.painter()
+                        .rect_filled(slot, CornerRadius::same(8), palette.surface_hover);
+                }
+                icons::draw_icon(
+                    ui.painter(),
+                    Rect::from_center_size(slot.center(), vec2(NAVBAR_ICON, NAVBAR_ICON)),
+                    item.icon(),
+                    palette.text_muted,
+                );
+                if response
+                    .on_hover_text(item.label())
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    actions.push(UiAction::AddNavItem(*item));
+                }
+                x += nav_item_width() + 4.0;
+            }
+            ui.advance_cursor_after_rect(tray);
+        });
+}
+
+/// One bar button, doing whatever it does.
+fn draw_nav_item(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    item: NavItem,
+    rect: Rect,
+) {
+    let palette = chrome.palette;
+    let (can_go_back, can_go_forward, is_web) = chrome
+        .browser
+        .active_tab()
+        .map(|tab| (tab.can_go_back, tab.can_go_forward, tab.kind == TabKind::Web))
+        .unwrap_or_default();
+
+    let mut host = root.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+
+    // The star draws itself: it has a saved state and a hover card.
+    if item == NavItem::Favourite {
+        draw_favourite_star(&mut host, chrome, actions);
+        return;
+    }
+
+    let enabled = match item {
+        NavItem::Back => can_go_back,
+        NavItem::Forward => can_go_forward,
+        NavItem::Reload => is_web,
+        // Servo has no extension support, and a button pretending otherwise
+        // would be worse than one that says so.
+        NavItem::Extensions => false,
+        _ => true,
+    };
+    let response = icons::icon_button(&mut host, item.icon(), NAVBAR_ICON, &palette, enabled);
+    let active = chrome.downloads.active_count();
+    let response = match item {
+        NavItem::Sidebar => response.on_hover_text("Show sidebar"),
+        NavItem::Reload => response.on_hover_text("Reload (⌘R)"),
+        NavItem::Settings => response.on_hover_text("Settings (⌘,)"),
+        NavItem::History => response.on_hover_text("History"),
+        NavItem::Extensions => {
+            response.on_hover_text("Extensions — not supported by the engine yet")
+        },
+        NavItem::Downloads => response.on_hover_text(if active > 0 {
+            format!("Downloads ({active} active)")
+        } else {
+            "Downloads".to_owned()
+        }),
+        _ => response,
+    };
+    if response.clicked() {
+        actions.push(match item {
+            NavItem::Sidebar => UiAction::ToggleSidebar,
+            NavItem::Back => UiAction::Back,
+            NavItem::Forward => UiAction::Forward,
+            NavItem::Reload => UiAction::Reload,
+            NavItem::History => UiAction::OpenHistory,
+            NavItem::Downloads => UiAction::OpenDownloads,
+            NavItem::Settings => UiAction::OpenSettings,
+            NavItem::Extensions | NavItem::Favourite => return,
+        });
+    }
 }
 
 /// Drag the bar's bottom edge to change its height. The room this opens up is

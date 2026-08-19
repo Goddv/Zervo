@@ -158,6 +158,9 @@ pub struct Settings {
     pub favourites_grid: bool,
     /// Width of the centred address pill in the navigation bar, in points.
     pub address_pill_width: f32,
+    /// What sits left and right of the address pill, in order.
+    pub navbar_left: Vec<crate::ui::NavItem>,
+    pub navbar_right: Vec<crate::ui::NavItem>,
     /// Widgets placed in the navigation bar's shelf, in order.
     pub navbar_widgets: Vec<crate::dashboard::Placed>,
     /// Height of the navigation bar, in points. Anything above the row the
@@ -212,6 +215,8 @@ impl Default for Settings {
             favourites_grid: false,
             address_pill_width: crate::ui::ADDRESS_PILL_DEFAULT_WIDTH,
             navbar_height: crate::ui::NAVBAR_DEFAULT_HEIGHT,
+            navbar_left: crate::ui::NavItem::default_left(),
+            navbar_right: crate::ui::NavItem::default_right(),
             navbar_widgets: crate::dashboard::Placed::defaults(),
             user_agent_compat: true,
             downloads_auto: true,

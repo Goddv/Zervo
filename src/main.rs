@@ -936,6 +936,34 @@ impl RunningApp {
                 }
                 state.window.request_redraw();
             },
+            UiAction::MoveNavItem { item, side, index } => {
+                let settings = &mut self.settings;
+                settings.navbar_left.retain(|placed| *placed != item);
+                settings.navbar_right.retain(|placed| *placed != item);
+                let list = match side {
+                    ui::NavSide::Left => &mut settings.navbar_left,
+                    ui::NavSide::Right => &mut settings.navbar_right,
+                };
+                let at = index.min(list.len());
+                list.insert(at, item);
+                settings.save();
+                state.window.request_redraw();
+            },
+            UiAction::RemoveNavItem(item) => {
+                self.settings.navbar_left.retain(|placed| *placed != item);
+                self.settings.navbar_right.retain(|placed| *placed != item);
+                self.settings.save();
+                state.window.request_redraw();
+            },
+            UiAction::AddNavItem(item) => {
+                if !self.settings.navbar_left.contains(&item)
+                    && !self.settings.navbar_right.contains(&item)
+                {
+                    self.settings.navbar_right.push(item);
+                    self.settings.save();
+                }
+                state.window.request_redraw();
+            },
             UiAction::AddWidget(kind) => {
                 let mut widget = dashboard::Placed::new(kind);
                 (widget.col, widget.row) =
