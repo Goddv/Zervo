@@ -2644,10 +2644,24 @@ pub fn normalize_url(input: &str, search_engine: SearchEngine) -> String {
     let input = input.trim();
     if input.starts_with("http://")
         || input.starts_with("https://")
+        || input.starts_with("file://")
         || input.starts_with("about:")
         || input.starts_with("zervo://")
     {
         input.to_owned()
+    } else if input.starts_with('/') || input.starts_with("~/") {
+        // An absolute path is a local file, not a search. Without this a
+        // `file://` URL fell through to the branch below and became
+        // `https://file:///...`, so local files could not be opened at all.
+        let path = if let Some(rest) = input.strip_prefix("~/") {
+            match std::env::var("HOME") {
+                Ok(home) => format!("{home}/{rest}"),
+                Err(_) => input.to_owned(),
+            }
+        } else {
+            input.to_owned()
+        };
+        format!("file://{path}")
     } else if input.contains('.') && !input.contains(' ') {
         format!("https://{input}")
     } else {
