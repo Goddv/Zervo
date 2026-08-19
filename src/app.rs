@@ -340,6 +340,35 @@ impl AppState {
 }
 
 impl servo::WebViewDelegate for AppState {
+    /// Report the real display and window geometry.
+    ///
+    /// Without this `window.screen` is 0x0, and sites that size themselves
+    /// against the screen rather than the viewport — Google's search results
+    /// among them — decide they are on a tiny device and serve their mobile
+    /// layout into a desktop window.
+    fn screen_geometry(&self, _webview: WebView) -> Option<servo::ScreenGeometry> {
+        let monitor = self
+            .window
+            .current_monitor()
+            .or_else(|| self.window.primary_monitor())?;
+        let monitor_size = monitor.size();
+        let size = servo::DeviceIntSize::new(monitor_size.width as i32, monitor_size.height as i32);
+
+        let outer = self.window.outer_size();
+        let position = self.window.outer_position().unwrap_or_default();
+        Some(servo::ScreenGeometry {
+            size,
+            // Close enough: the menu bar and Dock are not subtracted, which
+            // only shows up in `screen.availHeight`.
+            available_size: size,
+            window_rect: servo::DeviceIntRect::from_origin_and_size(
+                servo::DeviceIntPoint::new(position.x, position.y),
+                servo::DeviceIntSize::new(outer.width as i32, outer.height as i32),
+            ),
+        })
+    }
+
+
     fn notify_new_frame_ready(&self, _webview: WebView) {
         self.needs_repaint.set(true);
         self.window.request_redraw();
