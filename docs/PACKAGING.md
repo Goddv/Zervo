@@ -20,20 +20,39 @@ The bundler applies an *ad-hoc* signature (`codesign -s -`). That is enough for
 macOS to load the binary at all on Apple Silicon, but it is **not** a Developer
 ID signature and does not satisfy Gatekeeper.
 
-A user who downloads a `.dmg` from GitHub gets a quarantine flag on it, and
-macOS will refuse to open the app, usually with *"Zervo is damaged and can't be
-opened"* — which is misleading; the app is fine, it is simply unsigned.
+Everything here was measured on macOS 27, not assumed.
 
-They can clear the flag:
+Gatekeeper's verdict turns entirely on one thing: whether the app carries
+`com.apple.quarantine`. Apple's own `gktool scan Zervo.app` says *"Scan
+completed and software is allowed by system policy"* for an unquarantined build
+of Zervo, and *"failed because the software is not signed by a distributor that
+meets the system Gatekeeper requirements"* once the flag is on. The bundle is
+fine either way; the flag is the whole story.
+
+Do not use `spctl -a -t exec` to check this. It reports `rejected` for an
+ad-hoc signed app whether or not it is quarantined, so it tells you nothing
+about what a user will actually see.
+
+The flag does not live on the app inside the disk image. The download stamps it
+on the `.dmg`, the mounted volume then carries a `quarantine` mount flag, and
+the attribute is written onto the copy when the app is dragged out. So the two
+places worth clearing it are the `.dmg` before mounting, or the installed app
+afterwards:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Zervo.app
 ```
 
-or right-click the app → **Open** → **Open** (this path has been removed in
-recent macOS versions for unsigned apps, so the `xattr` command is the reliable
-one). Put whichever instruction applies in your release notes — users should
-not be left staring at "damaged".
+Without that, macOS says *"Zervo is damaged and can't be opened"*, which reads
+like a corrupt download and is not what has happened.
+
+For anyone who would rather not use a terminal, open the app, let it be refused,
+then go to **System Settings → Privacy & Security**, where an **Open Anyway**
+button appears for it. Do not tell users to Control-click → Open: Apple removed
+that bypass for improperly signed apps in macOS Sequoia ([Updates to runtime
+protection in macOS Sequoia][sequoia]).
+
+[sequoia]: https://developer.apple.com/news/?id=saqachfa
 
 Building from source has no such problem: a locally built app is never
 quarantined.

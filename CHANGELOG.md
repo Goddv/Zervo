@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.3.1 — 19 August 2026
+
+Two fixes on top of 0.3.0, one of which is why pages looked wrong.
+
+### Sites rendered as though on a phone
+
+`window.screen` was 0x0. Zervo never implemented `screen_geometry`, and the
+engine's fallback gives nothing, so any site that sizes itself against the screen
+rather than the viewport concluded it was on a very small device. Google served
+its mobile layout into a desktop window, which is what made this obvious, but it
+would have affected anything doing the same thing.
+
+The monitor size and window rectangle are reported now, which also fixes
+`window.outerWidth`, `outerHeight`, `screenX` and `screenY`. `availWidth` and
+`availHeight` are still the full screen rather than minus the menu bar and Dock.
+
+### Telling people how to open the app
+
+macOS refuses to open anything downloaded from the internet unless it is signed
+with a paid Developer ID, and says the app "is damaged and can't be opened",
+which sounds like a broken download rather than a policy. The disk image now
+contains the instructions, and `docs/PACKAGING.md` has been corrected: it no
+longer suggests Control-click → Open, which
+[Apple removed in Sequoia](https://developer.apple.com/news/?id=saqachfa), and it
+warns off `spctl`, which reports `rejected` for this app whether or not it is
+quarantined and so tells you nothing about what a user sees. Apple's own `gktool`
+says the build is "allowed by system policy" once the download flag is gone.
+
+### Not fixed: streaming video
+
+YouTube and friends still say they cannot play video. Servo has no Media Source
+Extensions, and adaptive streaming is built on them; it also reports no H.264
+support to `canPlayType`, even though the bundled GStreamer decodes H.264 fine
+from a local file. Both are engine-side. Written up in
+[docs/PARITY.md](docs/PARITY.md).
+
+### Commits
+
+```
+ee2d944  app: report the real screen geometry
+4318905  packaging: tell people how to open the app
+```
+
 ## 0.3.0 — 19 August 2026
 
 The release where it starts behaving like a browser rather than a viewer.

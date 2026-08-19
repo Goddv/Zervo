@@ -20,6 +20,23 @@ video playback.
 
 Tier 0 is done. What is left is the list below.
 
+## Streaming video does not work
+
+Local and progressive `<video>` plays. YouTube, Netflix, Twitch and most other
+video sites do not, and report "this browser can't play video". Two engine-side
+reasons, measured from a page in Zervo:
+
+- **`MediaSource` is undefined.** Servo has no Media Source Extensions, and
+  adaptive streaming is built on it. This alone is enough for YouTube to refuse
+  before it tries anything.
+- **`canPlayType('video/mp4')` returns `""`**, so H.264 is advertised as
+  unsupported and sites that feature-detect will not offer it — even though the
+  bundled GStreamer decodes H.264 perfectly well, which is easy to confirm with
+  a local `.mp4`. WebM/VP9, Ogg/Theora and Vorbis all report `probably`.
+
+Neither is fixable from the embedder side. `navigator.requestMediaKeySystemAccess`
+is also absent, so anything DRM-protected is out regardless.
+
 ## Tier 1 — expected behaviour, and the API already exists
 
 Each of these is a delegate method or a `WebView` call away.
@@ -43,6 +60,8 @@ Each of these is a delegate method or a `WebView` call away.
   `clear_session_cookies` and `clear_site_data`, and nothing in Settings calls
   them. Now that cookies persist, there is no way to get rid of them.
 - **Dropped files.** Dragging a file onto the window should open it.
+- **`screen.availWidth`/`availHeight`** report the whole display rather than
+  subtracting the menu bar and Dock.
 - **Session restore.** Pure chrome work, no engine involvement: workspaces and
   tabs written out and read back at launch.
 

@@ -125,9 +125,15 @@ Zervo @VERSION@
 
 1. Drag Zervo onto the Applications folder here.
 
-2. Open Terminal and run this line:
+2. Remove the download flag, either way round:
+
+   In Terminal:
 
        xattr -dr com.apple.quarantine /Applications/Zervo.app
+
+   Or without a terminal: open Zervo, let macOS refuse it, then go to
+   System Settings > Privacy & Security, where an "Open Anyway" button
+   will have appeared for it.
 
 3. Open Zervo normally.
 
