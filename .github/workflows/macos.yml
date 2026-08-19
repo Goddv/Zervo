@@ -87,8 +87,11 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-
 
       - name: Install GStreamer
-        if: ${{ inputs.media != 'false' }}
         run: |
+          if [ "${{ inputs.media }}" = "false" ]; then
+            echo "media off; skipping GStreamer"
+            exit 0
+          fi
           BASE=https://github.com/servo/servo-build-deps/releases/download/macOS
           for PKG in gstreamer-1.0 gstreamer-1.0-devel; do
             curl -L -sS -o "/tmp/$PKG.pkg" "$BASE/$PKG-$GSTREAMER_VERSION-universal.pkg"
@@ -101,8 +104,11 @@ jobs:
         # the published crate with no setup. Patching `servo` pulls the whole
         # forked workspace in with it, since its components depend on each
         # other by path.
-        if: ${{ inputs.engine-downloads != 'false' }}
         run: |
+          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
+            echo "engine-downloads off; building against the published crate"
+            exit 0
+          fi
           cat >> .cargo/config.toml <<EOF
 
           [patch.crates-io]

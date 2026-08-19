@@ -71,8 +71,11 @@ jobs:
           restore-keys: cargo-linux-deb-
 
       - name: Point Cargo at the patched engine
-        if: ${{ inputs.engine-downloads != 'false' }}
         run: |
+          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
+            echo "engine-downloads off; building against the published crate"
+            exit 0
+          fi
           cat >> .cargo/config.toml <<EOF
 
           [patch.crates-io]
@@ -154,8 +157,11 @@ jobs:
           restore-keys: cargo-linux-rpm-
 
       - name: Point Cargo at the patched engine
-        if: ${{ inputs.engine-downloads != 'false' }}
         run: |
+          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
+            echo "engine-downloads off; building against the published crate"
+            exit 0
+          fi
           cat >> .cargo/config.toml <<EOF
 
           [patch.crates-io]
