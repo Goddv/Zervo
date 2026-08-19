@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.3.3 — 19 August 2026
+
+Windows, and with it a build for every platform Zervo targets.
+
+### Windows
+
+There is a Windows x64 build now: one self-contained `Zervo.exe`, since almost
+all of Servo links statically there. It is a GUI application rather than a
+console one, so launching it does not leave a terminal sitting behind the
+window — debug builds keep the console, which is where the logs go.
+
+Two things stood between here and a build, and neither was Zervo's code. Cargo
+could not check the engine out at all: the Servo repository carries
+web-platform-tests, whose test262 paths run past the 260 characters Windows
+allows by default, so the build failed ten minutes in with "path too long".
+Long paths are enabled in the registry and in git now, and cargo fetches with
+the command line git — its own git library ignores `core.longpaths`, so setting
+the config without that change looks right and fails identically. And
+SpiderMonkey needs moztools staged under the target directory, which it does not
+fetch for itself; without it the build panics rather than explaining.
+
+Everything that differs by platform outside macOS now goes through one module,
+because the non-macOS paths had quietly assumed Linux. The file dialog is the
+system one through PowerShell, Explorer gets a real reveal — which no other
+desktop offers — and saved passwords use DPAPI. Windows has no keychain command
+that hands a password back, but it does have per-user encryption, which is the
+property that matters.
+
+No media on Windows yet: GStreamer there means an MSI and a bundling step, which
+is its own piece of work. Downloads are in.
+
+### Every platform
+
+| Platform | Artifact |
+| --- | --- |
+| macOS (Apple Silicon) | `.dmg`, GStreamer bundled |
+| Debian and Ubuntu | `.deb`, dependencies derived from the binary |
+| Fedora | `.rpm`, built inside Fedora |
+| Windows x64 | `.exe`, self-contained |
+
+Still true of all three of the new ones: they compile, package and install.
+Nobody has run Zervo on Linux or Windows, and whether it opens a window there is
+untested.
+
 ## 0.3.2 — 19 August 2026
 
 The navigation bar became something you can arrange, and Linux got its first
