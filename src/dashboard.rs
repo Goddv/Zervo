@@ -147,7 +147,7 @@ pub enum Change {
     Add(WidgetKind),
     Remove(usize),
     Resize(usize, Size),
-    Move { from: usize, to: usize },
+    Swap { a: usize, b: usize },
     Media(servo::MediaSessionActionType),
 }
 
@@ -262,15 +262,36 @@ pub fn draw(
     let slots = layout(placed, area);
     let pointer = ctx.input(|input| input.pointer.latest_pos());
 
-    // Where a drag would drop: the slot under the pointer, else the first one
-    // it has passed.
-    let target = pointer.and_then(|pos| {
-        slots
+    // The widget under the pointer is the one that would be swapped with.
+    // Nothing under the pointer means nothing happens, which is easier to
+    // predict than a drop that lands somewhere by proximity.
+    let target = match (dragging, pointer) {
+        (Some(held), Some(pos)) => slots
             .iter()
             .position(|slot| slot.contains(pos))
-            .or_else(|| slots.iter().position(|slot| pos.x < slot.center().x))
-    });
+            .filter(|over| *over != held),
+        _ => None,
+    };
 
+    // Both slots involved in a swap, outlined so the exchange is visible
+    // before it happens.
+    if let (Some(held), Some(over)) = (dragging, target) {
+        for slot in [slots.get(held), slots.get(over)].into_iter().flatten() {
+            root.painter().rect_filled(
+                *slot,
+                CornerRadius::same(10),
+                palette.accent.gamma_multiply(0.08),
+            );
+            root.painter().rect_stroke(
+                *slot,
+                CornerRadius::same(10),
+                Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
+                StrokeKind::Inside,
+            );
+        }
+    }
+
+    let mut held_later = None;
     for (index, (widget, slot)) in placed.iter().zip(slots.iter()).enumerate() {
         let response = root.interact(*slot, drag_id.with(index), Sense::click_and_drag());
         let held = dragging == Some(index);
@@ -280,10 +301,8 @@ pub fn draw(
         }
         if held && response.drag_stopped() {
             ctx.data_mut(|data| data.remove::<usize>(drag_id));
-            if let Some(to) = target
-                && to != index
-            {
-                changes.push(Change::Move { from: index, to });
+            if let Some(over) = target {
+                changes.push(Change::Swap { a: index, b: over });
             }
         }
         if response.hovered() || held {
@@ -303,15 +322,18 @@ pub fn draw(
             *slot
         };
         if held {
-            root.painter().rect_stroke(
-                *slot,
-                CornerRadius::same(10),
-                Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.6)),
-                StrokeKind::Inside,
+            held_later = Some((widget.kind, drawn));
+        } else {
+            draw_widget(
+                root,
+                palette,
+                media,
+                widget.kind,
+                drawn,
+                Look::of(false, target == Some(index)),
+                &mut changes,
             );
         }
-
-        draw_widget(root, palette, media, widget.kind, drawn, held, &mut changes);
 
         // Remove and resize appear on hover, so they are never in the way.
         if response.hovered() && !held {
@@ -345,6 +367,10 @@ pub fn draw(
                 ctx.data_mut(|data| data.insert_temp(sizes_id, index));
             }
         }
+    }
+
+    if let Some((kind, drawn)) = held_later {
+        draw_widget(root, palette, media, kind, drawn, Look::Held, &mut changes);
     }
 
     // ── The size menu, for whichever widget asked for one.
@@ -476,24 +502,49 @@ fn draw_size_menu(root: &mut Ui, palette: &Palette, anchor: Rect, current: Size)
     menu(root, palette, "zervo_widget_size_area", anchor, 120.0, &rows)
 }
 
+/// How a card is drawn: ordinary, carried by the pointer, or the one a drop
+/// would trade places with.
+#[derive(Clone, Copy, PartialEq)]
+enum Look {
+    Normal,
+    Held,
+    Target,
+}
+
+impl Look {
+    fn of(held: bool, target: bool) -> Self {
+        match (held, target) {
+            (true, _) => Look::Held,
+            (_, true) => Look::Target,
+            _ => Look::Normal,
+        }
+    }
+}
+
 fn draw_widget(
     root: &mut Ui,
     palette: &Palette,
     media: &Media,
     kind: WidgetKind,
     rect: Rect,
-    held: bool,
+    look: Look,
     changes: &mut Vec<Change>,
 ) {
     let painter = root.painter();
     // Opaque, with the shadow left on: these stack over the content card, and
     // a translucent card in a pile does not read as a card.
     painter.rect_filled(rect, CornerRadius::same(10), palette.bg);
-    for shape in glass::shapes(
-        rect,
-        palette,
-        Glass::new(10).strength(if held { 1.0 } else { 0.85 }),
-    ) {
+    let material = match look {
+        Look::Held => Glass::new(10),
+        // Lit, so it is obvious which card is being traded with.
+        Look::Target => Glass::new(10).tint(crate::theme::mix(
+            palette.surface,
+            palette.accent,
+            0.30,
+        )),
+        Look::Normal => Glass::new(10).strength(0.85),
+    };
+    for shape in glass::shapes(rect, palette, material) {
         painter.add(shape);
     }
 

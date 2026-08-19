@@ -45,7 +45,7 @@ pub enum UiAction {
     ClearHistory,
     AddWidget(crate::dashboard::WidgetKind),
     RemoveWidget(usize),
-    MoveWidget { from: usize, to: usize },
+    SwapWidgets(usize, usize),
     ResizeWidget(usize, crate::dashboard::Size),
     MediaAction(servo::MediaSessionActionType),
     SavePassword,
@@ -1349,9 +1349,7 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
             actions.push(match change {
                 crate::dashboard::Change::Add(kind) => UiAction::AddWidget(kind),
                 crate::dashboard::Change::Remove(index) => UiAction::RemoveWidget(index),
-                crate::dashboard::Change::Move { from, to } => {
-                    UiAction::MoveWidget { from, to }
-                },
+                crate::dashboard::Change::Swap { a, b } => UiAction::SwapWidgets(a, b),
                 crate::dashboard::Change::Resize(index, size) => {
                     UiAction::ResizeWidget(index, size)
                 },

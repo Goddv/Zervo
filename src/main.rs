@@ -950,11 +950,10 @@ impl RunningApp {
                 }
                 state.window.request_redraw();
             },
-            UiAction::MoveWidget { from, to } => {
+            UiAction::SwapWidgets(a, b) => {
                 let widgets = &mut self.settings.navbar_widgets;
-                if from < widgets.len() && to < widgets.len() {
-                    let moved = widgets.remove(from);
-                    widgets.insert(to, moved);
+                if a < widgets.len() && b < widgets.len() && a != b {
+                    widgets.swap(a, b);
                     self.settings.save();
                 }
                 state.window.request_redraw();
