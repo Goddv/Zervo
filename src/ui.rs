@@ -58,6 +58,9 @@ pub struct UiOutput {
     pub content_rect: egui::Rect,
     /// When true an internal page covers the content area — skip the blit.
     pub settings_open: bool,
+    /// True while a page-initiated dialog or menu is up; the chrome owns the
+    /// pointer over the content area for as long as it is.
+    pub controls_open: bool,
     /// Window-space rect of the autohide sidebar while it is revealed.
     /// Pointer events over it must not be forwarded to the webview.
     pub chrome_overlay: Option<egui::Rect>,
@@ -68,6 +71,8 @@ pub struct UiOutput {
 
 pub struct ChromeContext<'a> {
     pub browser: &'a mut BrowserState,
+    /// Page-initiated dialogs, pickers and context menus awaiting an answer.
+    pub controls: &'a mut crate::controls::Controls,
     pub settings: &'a mut Settings,
     pub palette: Palette,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
@@ -125,10 +130,24 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
 
     let chrome_overlay = draw_sidebar_peek(root, chrome, &mut actions, peek);
 
+    // Page-initiated UI last, over everything else it might overlap.
+    let origin = chrome
+        .browser
+        .active_tab()
+        .and_then(|tab| url::Url::parse(&tab.url).ok())
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "This page".to_owned());
+    let scale = root.pixels_per_point();
+    chrome
+        .controls
+        .draw(root, &chrome.palette, content_rect, scale, &origin);
+    let controls_open = !chrome.controls.is_empty();
+
     UiOutput {
         actions,
         content_rect,
         settings_open,
+        controls_open,
         chrome_overlay,
         ambient,
     }

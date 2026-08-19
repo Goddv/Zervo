@@ -56,13 +56,22 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSColor",
     "NSGraphics",
     "NSImage",
+    "NSOpenPanel",
+    "NSPanel",
+    "NSSavePanel",
     "NSResponder",
     "NSView",
     "NSVisualEffectView",
     "NSWindow",
     "objc2-quartz-core",
 ] }
-objc2-foundation = { version = "0.3.1", default-features = false, features = ["NSData", "NSGeometry"] }
+objc2-foundation = { version = "0.3.1", default-features = false, features = [
+    "NSArray",
+    "NSData",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer"] }
 resvg = "0.48.1"
 
