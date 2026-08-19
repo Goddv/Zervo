@@ -112,9 +112,10 @@ including how the chrome and the engine share one GL context.
 
 ## Contributing
 
-Yes please — see [CONTRIBUTING.md](CONTRIBUTING.md). Good first areas: session
-restore, tab drag-reordering, dialogs (`alert`/`confirm`/`prompt`), IME, and
-Linux/Windows support.
+Yes please — see [CONTRIBUTING.md](CONTRIBUTING.md). [docs/PARITY.md](docs/PARITY.md)
+is the list of what still stands between Zervo and a browser you could use daily,
+in the order the gaps hurt, with where in the code each one lives. Most of it is
+embedder work, not engine work.
 
 If you want to improve the *engine*, contribute to [Servo][servo] directly.
 Note that Servo does not accept AI-generated contributions.
