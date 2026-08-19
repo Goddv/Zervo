@@ -7,6 +7,7 @@
 //! show/focus + hide/blur.
 
 mod app;
+mod controls;
 mod downloads;
 mod glass;
 mod icons;
@@ -52,6 +53,12 @@ use crate::state::{BrowserState, TabId, TabKind};
 use crate::theme::Palette;
 use crate::ui::UiAction;
 
+/// Servo's own user agent already claims Firefox 140, but carries a `Servo/x.y`
+/// token and no `Gecko/20100101`. Enough sites match on exactly those to serve a
+/// "browser not supported" page, so offer the plain Firefox string instead.
+const COMPAT_USER_AGENT: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0";
+
 fn main() -> Result<(), Box<dyn Error>> {
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
@@ -86,6 +93,8 @@ struct RunningApp {
     content_rect_points: egui::Rect,
     /// Revealed autohide sidebar, floating over the content card.
     overlay_rect_points: Option<egui::Rect>,
+    /// A page-initiated dialog or menu is up.
+    controls_open: bool,
     /// Deadline for a deferred egui repaint (e.g. caret blink) — served via
     /// ControlFlow::WaitUntil instead of a max-FPS redraw loop.
     pending_repaint_at: Option<std::time::Instant>,
@@ -163,7 +172,21 @@ impl ApplicationHandler<WakerEvent> for App {
         let rendering_context =
             Rc::new(window_rendering_context.offscreen_context(window.inner_size()));
 
+        // Without a config dir Servo keeps the cookie jar, the auth cache and
+        // the HSTS list in memory only and never writes them out, so every
+        // launch starts logged out of everything.
+        let mut opts = servo::Opts::default();
+        if let Some(dir) = settings::data_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+            opts.config_dir = Some(dir);
+        }
+        let mut preferences = servo::Preferences::default();
+        if settings.user_agent_compat {
+            preferences.user_agent = COMPAT_USER_AGENT.to_owned();
+        }
         let servo = ServoBuilder::default()
+            .opts(opts)
+            .preferences(preferences)
             .event_loop_waker(Box::new(waker.clone()))
             .build();
         servo.setup_logging();
@@ -187,6 +210,8 @@ impl ApplicationHandler<WakerEvent> for App {
             pending_keyboard_events: RefCell::new(HashMap::new()),
             dark_theme: Cell::new(resolved_dark),
             favicons_dirty: Cell::new(false),
+            quit_requested: Cell::new(false),
+            controls: RefCell::new(controls::Controls::default()),
             #[cfg(feature = "engine-downloads")]
             download_events: RefCell::new(Vec::new()),
             last_window_title: RefCell::new(String::new()),
@@ -218,6 +243,7 @@ impl ApplicationHandler<WakerEvent> for App {
             webview_relative_mouse: Cell::new(Point2D::zero()),
             content_rect_points: egui::Rect::ZERO,
             overlay_rect_points: None,
+            controls_open: false,
             pending_repaint_at: None,
             downloads: downloads::DownloadManager::default(),
             #[cfg(target_os = "macos")]
@@ -262,6 +288,15 @@ impl ApplicationHandler<WakerEvent> for App {
         };
         app.handle_window_event(event_loop, event);
         app.state.servo.spin_event_loop();
+        if app.state.quit_requested.get() {
+            event_loop.exit();
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Self::Running(app) = self {
+            app.state.shutdown();
+        }
     }
 }
 
@@ -314,6 +349,7 @@ impl RunningApp {
         // clicks and scrolls would reach the page underneath as well.
         let over_content = self.content_rect_points.contains(cursor_points)
             && !self.settings_open
+            && !self.controls_open
             && !self
                 .overlay_rect_points
                 .is_some_and(|rect| rect.contains(cursor_points));
@@ -481,6 +517,14 @@ impl RunningApp {
                     self.apply_action(UiAction::CloseTab(tab_id));
                 }
             })
+            .shortcut(CMD_OR_CONTROL, 'Q', || {
+                // Handled here rather than by AppKit: there is no menu bar to
+                // carry the standard Quit item, and quitting has to go through
+                // the event loop's exit so the engine is shut down properly and
+                // gets to write its cookie jar out.
+                state.quit_requested.set(true);
+                state.window.request_redraw();
+            })
             .shortcut(CMD_OR_CONTROL, ',', || {
                 self.apply_action(UiAction::OpenSettings);
             })
@@ -569,8 +613,10 @@ impl RunningApp {
 
         self.egui_glow.run(&state.window, |root| {
             let mut browser = state.browser.borrow_mut();
+            let mut controls = state.controls.borrow_mut();
             let mut chrome = ui::ChromeContext {
                 browser: &mut browser,
+                controls: &mut controls,
                 settings: &mut settings,
                 palette,
                 favicons: &favicons,
@@ -578,6 +624,7 @@ impl RunningApp {
             };
             let output = ui::draw(root, &mut chrome);
             drop(browser);
+            drop(controls);
 
             let content_rect = output.content_rect;
             let scale = root.pixels_per_point();
@@ -637,6 +684,7 @@ impl RunningApp {
         if let Some(output) = ui_output {
             self.content_rect_points = output.content_rect;
             self.overlay_rect_points = output.chrome_overlay;
+            self.controls_open = output.controls_open;
             self.settings_open = output.settings_open;
             ambient = output.ambient;
             for action in output.actions {

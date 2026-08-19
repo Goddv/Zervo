@@ -16,6 +16,7 @@ use servo::{
 use url::Url;
 use winit::window::Window;
 
+use crate::controls::Controls;
 use crate::keyboard::CMD_OR_CONTROL;
 use crate::state::{BrowserState, TabId};
 
@@ -66,6 +67,10 @@ pub struct AppState {
     pub dark_theme: Cell<bool>,
     /// Set when any tab's favicon changed; the UI reloads textures on redraw.
     pub favicons_dirty: Cell<bool>,
+    /// ⌘Q was pressed; the event loop exits once the current event is done.
+    pub quit_requested: Cell<bool>,
+    /// Page-initiated UI (dialogs, pickers, context menus) awaiting an answer.
+    pub controls: RefCell<Controls>,
     /// Download events from the engine, drained by the UI each redraw.
     #[cfg(feature = "engine-downloads")]
     pub download_events: RefCell<Vec<DownloadEvent>>,
@@ -110,6 +115,25 @@ impl AppState {
             tab.kind = crate::state::TabKind::Web;
         }
         self.activate_tab(tab_id);
+    }
+
+    /// Release everything that keeps the engine alive, so the `Servo` handle is
+    /// dropped and its `Drop` tells the constellation to exit — which is what
+    /// makes Servo write the cookie jar, auth cache and HSTS list out to
+    /// `config_dir`. The webviews each hold a clone of the shared delegate,
+    /// which is an `Rc` back to this state, so without clearing them the cycle
+    /// keeps the engine alive until the process dies and nothing is saved.
+    pub fn shutdown(&self) {
+        {
+            let mut browser = self.browser.borrow_mut();
+            for workspace in &mut browser.workspaces {
+                for tab in &mut workspace.tabs {
+                    tab.webview = None;
+                }
+            }
+        }
+        self.pending_popups.borrow_mut().clear();
+        self.pending_closes.borrow_mut().clear();
     }
 
     /// Propagate a chrome theme change to every live webview so pages see the
@@ -232,6 +256,56 @@ impl AppState {
             self.window.set_title(&title);
             *self.last_window_title.borrow_mut() = title;
         }
+    }
+}
+
+impl AppState {
+    /// Answer a `<input type=file>` request with the system open panel.
+    ///
+    /// `runModal` blocks until the user is done, which is what the engine
+    /// expects here, and matches how every other macOS app behaves.
+    #[cfg(target_os = "macos")]
+    fn run_file_picker(&self, mut picker: servo::FilePicker) {
+        use std::path::PathBuf;
+
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSOpenPanel;
+
+        /// `NSModalResponseOK`, which objc2-app-kit does not re-export.
+        const RESPONSE_OK: isize = 1;
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            // Off the main thread there is no safe way to show a panel, and an
+            // unanswered picker would hang the page.
+            picker.dismiss();
+            return;
+        };
+        let panel = NSOpenPanel::openPanel(mtm);
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(false);
+        panel.setAllowsMultipleSelection(picker.allow_select_multiple());
+
+        if panel.runModal() != RESPONSE_OK {
+            picker.dismiss();
+            return;
+        }
+        let paths: Vec<PathBuf> = panel
+            .URLs()
+            .iter()
+            .filter_map(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+            .collect();
+        if paths.is_empty() {
+            picker.dismiss();
+            return;
+        }
+        picker.select(&paths);
+        picker.submit();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn run_file_picker(&self, picker: servo::FilePicker) {
+        picker.dismiss();
     }
 }
 
@@ -360,12 +434,18 @@ impl servo::WebViewDelegate for AppState {
     }
 
     fn show_embedder_control(&self, _webview: WebView, control: servo::EmbedderControl) {
-        // Minimal handling for now: accept alerts, cancel the rest via their
-        // safe Drop defaults. Proper dialog UI is a later phase.
-        if let servo::EmbedderControl::SimpleDialog(servo::SimpleDialog::Alert(alert)) = control {
-            log::info!("page alert: {}", alert.message());
-            // Dropping confirms with Ok per embedder-API defaults.
+        match control {
+            // The file picker is the one control the OS draws better than we
+            // can, and it has to be answered synchronously anyway.
+            servo::EmbedderControl::FilePicker(picker) => self.run_file_picker(picker),
+            control => self.controls.borrow_mut().push(control),
         }
+        self.window.request_redraw();
+    }
+
+    fn hide_embedder_control(&self, _webview: WebView, control_id: servo::EmbedderControlId) {
+        self.controls.borrow_mut().hide(control_id);
+        self.window.request_redraw();
     }
 }
 

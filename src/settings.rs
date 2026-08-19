@@ -153,6 +153,10 @@ pub struct Settings {
     pub sidebar_autohide: bool,
     /// Sidebar width in points, remembered across restarts when resized.
     pub sidebar_width: f32,
+    /// Present as plain Firefox rather than as Servo. Servo's own user agent
+    /// already claims Firefox 140, but keeps a `Servo/x.y` token and omits the
+    /// `Gecko/20100101` one, and enough sites match on those to matter.
+    pub user_agent_compat: bool,
     /// Save files without asking where.
     pub downloads_auto: bool,
     /// Strength of the glow strip across the top of the window, 0.0..=1.0.
@@ -195,6 +199,7 @@ impl Default for Settings {
             compact_sidebar: false,
             sidebar_autohide: true,
             sidebar_width: crate::ui::SIDEBAR_DEFAULT_WIDTH,
+            user_agent_compat: true,
             downloads_auto: true,
             top_glow: 1.0,
             content_border: true,
@@ -210,8 +215,14 @@ impl Default for Settings {
     }
 }
 
+/// Where Zervo keeps its own files. Servo is pointed here too, for its cookie
+/// jar, auth cache and HSTS list.
+pub fn data_dir() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("Zervo"))
+}
+
 fn settings_path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("Zervo").join("settings.json"))
+    Some(data_dir()?.join("settings.json"))
 }
 
 /// Pre-rename location, still read once so existing preferences carry over.
