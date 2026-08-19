@@ -37,6 +37,12 @@ pub enum UiAction {
     SelectWorkspace(usize),
     OpenSettings,
     OpenDownloads,
+    OpenHistory,
+    /// Add or remove the active page from favourites.
+    ToggleFavourite,
+    RemoveFavourite(String),
+    ForgetVisit(usize),
+    ClearHistory,
     ToggleSidebar,
     CancelDownload(u64),
     RemoveDownload(u64),
@@ -73,6 +79,8 @@ pub struct ChromeContext<'a> {
     pub browser: &'a mut BrowserState,
     /// Page-initiated dialogs, pickers and context menus awaiting an answer.
     pub controls: &'a mut crate::controls::Controls,
+    /// Favourites and history.
+    pub library: &'a mut crate::library::Library,
     pub settings: &'a mut Settings,
     pub palette: Palette,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
@@ -101,7 +109,9 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     // resizes the webview, which would relayout the page.
     let peek = sidebar_peek(root, chrome);
     if chrome.browser.sidebar_collapsed {
-        draw_collapsed_sidebar_handle(root, chrome, &mut actions);
+        // Navigation moves into a bar across the top, so the sidebar has
+        // nothing to hold but tabs.
+        draw_navbar(root, chrome, &mut actions);
     } else {
         draw_sidebar(root, chrome, &mut actions);
     }
@@ -121,11 +131,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         Some(TabKind::Downloads) => {
             draw_downloads_page(root, chrome, content_rect, &mut actions);
         },
+        Some(TabKind::History) => {
+            draw_history_page(root, chrome, content_rect, &mut actions);
+        },
         _ => {},
     }
     let settings_open = matches!(
         active_kind,
-        Some(TabKind::Settings | TabKind::NewTab | TabKind::Downloads)
+        Some(TabKind::Settings | TabKind::NewTab | TabKind::Downloads | TabKind::History)
     );
 
     let chrome_overlay = draw_sidebar_peek(root, chrome, &mut actions, peek);
@@ -581,7 +594,7 @@ fn draw_sidebar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiA
         // top gradient continues across the sidebar boundary unbroken.
         .frame(Frame::NONE.inner_margin(SIDEBAR_MARGIN))
         .show_separator_line(false)
-        .show_inside(root, |ui| sidebar_body(ui, chrome, actions));
+        .show_inside(root, |ui| sidebar_body(ui, chrome, actions, false));
 
     // Remember a manual resize, so the width outlives the session — and so an
     // autohide reveal comes back the width the user left it. Written once the
@@ -596,7 +609,14 @@ fn draw_sidebar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiA
 
 /// The sidebar's contents, drawn into whatever `ui` it is handed: the docked
 /// panel, or the floating overlay an autohide reveal puts over the content.
-fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
+/// `compact` drops everything the navigation bar is already showing, leaving
+/// the sidebar to do the one thing the bar cannot: tabs and workspaces.
+fn sidebar_body(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    compact: bool,
+) {
     let palette = chrome.palette;
     let drag = ui.interact(ui.max_rect(), ui.id().with("sidebar_drag"), Sense::drag());
     if drag.drag_started() {
@@ -614,32 +634,36 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
         .show_separator_line(false)
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                if icons::icon_button(ui, Icon::Gear, 17.0, &palette, true)
-                    .on_hover_text("Settings (⌘,)")
-                    .clicked()
-                {
-                    actions.push(UiAction::OpenSettings);
-                }
-                let active = chrome.downloads.active_count();
-                if icons::icon_button(ui, Icon::Download, 16.0, &palette, true)
-                    .on_hover_text(if active > 0 {
-                        format!("Downloads ({active} active)")
-                    } else {
-                        "Downloads".to_owned()
-                    })
-                    .clicked()
-                {
-                    actions.push(UiAction::OpenDownloads);
-                }
-                if active > 0 {
-                    // A small accent dot marks downloads in flight.
-                    let rect = ui.min_rect();
-                    ui.painter().circle_filled(
-                        pos2(rect.max.x - 4.0, rect.min.y + 6.0),
-                        3.5,
-                        palette.accent,
-                    );
-                    ui.ctx().request_repaint();
+                // Settings and downloads sit in the navigation bar when it is up,
+                // so the sidebar does not show them twice.
+                if !compact {
+                    if icons::icon_button(ui, Icon::Gear, 17.0, &palette, true)
+                        .on_hover_text("Settings (⌘,)")
+                        .clicked()
+                    {
+                        actions.push(UiAction::OpenSettings);
+                    }
+                    let active = chrome.downloads.active_count();
+                    if icons::icon_button(ui, Icon::Download, 16.0, &palette, true)
+                        .on_hover_text(if active > 0 {
+                            format!("Downloads ({active} active)")
+                        } else {
+                            "Downloads".to_owned()
+                        })
+                        .clicked()
+                    {
+                        actions.push(UiAction::OpenDownloads);
+                    }
+                    if active > 0 {
+                        // A small accent dot marks downloads in flight.
+                        let rect = ui.min_rect();
+                        ui.painter().circle_filled(
+                            pos2(rect.max.x - 4.0, rect.min.y + 6.0),
+                            3.5,
+                            palette.accent,
+                        );
+                        ui.ctx().request_repaint();
+                    }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if icons::icon_button(ui, Icon::Plus, 15.0, &palette, true)
@@ -652,7 +676,9 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
             });
         });
 
-    // ── Top row: nav icons, right of the macOS traffic lights.
+    // ── Top row: nav icons, right of the macOS traffic lights. All of these
+    // are in the navigation bar when the sidebar is collapsed.
+    if !compact {
     ui.horizontal(|ui| {
         #[cfg(target_os = "macos")]
         ui.add_space(58.0);
@@ -703,6 +729,11 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
     // ── Search / address pill.
     draw_address_pill(ui, chrome, actions);
     ui.add_space(12.0);
+    } else {
+        // The traffic lights still sit over the top of the sidebar.
+        #[cfg(target_os = "macos")]
+        ui.add_space(28.0);
+    }
 
     // ── Essentials: pinned tabs as a tile grid.
     if chrome.settings.show_essentials {
@@ -793,6 +824,503 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
                 ui.add_space(12.0);
             }
         });
+}
+
+/// zervo://history — everything visited, newest first, grouped by how long ago
+/// and searchable.
+fn draw_history_page(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    content_rect: Rect,
+    actions: &mut Vec<UiAction>,
+) {
+    const ROW: f32 = 34.0;
+
+    let palette = chrome.palette;
+    root.ctx()
+        .layer_painter(egui::LayerId::background())
+        .rect_filled(content_rect, CornerRadius::same(theme::CONTENT_RADIUS as u8), palette.bg);
+
+    let mut ui = root.new_child(
+        egui::UiBuilder::new()
+            .max_rect(content_rect.shrink(28.0))
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("History").size(24.0).color(palette.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !chrome.library.history.is_empty()
+                && icons::icon_button(ui, Icon::Trash, 15.0, &palette, true)
+                    .on_hover_text("Clear all history")
+                    .clicked()
+            {
+                actions.push(UiAction::ClearHistory);
+            }
+        });
+    });
+    ui.add_space(12.0);
+
+    // ── Search.
+    let field = Rect::from_min_size(
+        ui.cursor().min,
+        vec2(ui.available_width().min(420.0), 32.0),
+    );
+    glass::paint(ui.painter(), field, &palette, Glass::new(9));
+    icons::draw_icon(
+        ui.painter(),
+        Rect::from_center_size(pos2(field.min.x + 16.0, field.center().y), vec2(14.0, 14.0)),
+        Icon::Search,
+        palette.text_muted,
+    );
+    let mut editor = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                pos2(field.min.x + 30.0, field.min.y),
+                field.max - vec2(10.0, 0.0),
+            ))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    editor.add(
+        TextEdit::singleline(&mut chrome.browser.history_query)
+            .frame(Frame::NONE)
+            .font(FontId::proportional(13.5))
+            .text_color(palette.text)
+            .hint_text(RichText::new("Search history").color(palette.text_muted))
+            .desired_width(editor.available_width()),
+    );
+    ui.advance_cursor_after_rect(field);
+    ui.add_space(14.0);
+
+    let now = crate::app::now();
+    let groups = chrome.library.browse(&chrome.browser.history_query, now);
+    if groups.is_empty() {
+        ui.label(
+            RichText::new(if chrome.library.history.is_empty() {
+                "Nothing here yet."
+            } else {
+                "No pages match that search."
+            })
+            .size(13.5)
+            .color(palette.text_muted),
+        );
+        return;
+    }
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(&mut ui, |ui| {
+            for (bucket, rows) in groups {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(bucket.label())
+                        .size(11.5)
+                        .color(palette.text_muted),
+                );
+                ui.add_space(4.0);
+                for (index, visit) in rows {
+                    let (row, response) = ui
+                        .allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                    if response.hovered() {
+                        ui.painter()
+                            .rect_filled(row, CornerRadius::same(8), palette.surface_hover);
+                    }
+                    icons::draw_icon(
+                        ui.painter(),
+                        Rect::from_center_size(
+                            pos2(row.min.x + 16.0, row.center().y),
+                            vec2(14.0, 14.0),
+                        ),
+                        Icon::Globe,
+                        palette.text_muted,
+                    );
+                    let title = if visit.title.is_empty() {
+                        visit.url.as_str()
+                    } else {
+                        visit.title.as_str()
+                    };
+                    ui.painter().text(
+                        pos2(row.min.x + 34.0, row.center().y - 7.0),
+                        Align2::LEFT_CENTER,
+                        ellipsize(title, 64),
+                        FontId::proportional(13.5),
+                        palette.text,
+                    );
+                    ui.painter().text(
+                        pos2(row.min.x + 34.0, row.center().y + 8.0),
+                        Align2::LEFT_CENTER,
+                        ellipsize(&visit.url, 74),
+                        FontId::proportional(11.5),
+                        palette.text_muted,
+                    );
+                    ui.painter().text(
+                        pos2(row.max.x - 34.0, row.center().y),
+                        Align2::RIGHT_CENTER,
+                        visit.local_time().format("%H:%M").to_string(),
+                        FontId::proportional(11.5),
+                        palette.text_muted,
+                    );
+                    let forget = Rect::from_center_size(
+                        pos2(row.max.x - 14.0, row.center().y),
+                        vec2(18.0, 18.0),
+                    );
+                    if response.hovered() {
+                        icons::draw_icon(
+                            ui.painter(),
+                            forget.shrink(4.0),
+                            Icon::Close,
+                            palette.text_muted,
+                        );
+                    }
+                    if ui
+                        .interact(forget, Id::new("zervo_forget").with(index), Sense::click())
+                        .clicked()
+                    {
+                        actions.push(UiAction::ForgetVisit(index));
+                    } else if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        actions.push(UiAction::Navigate(visit.url.clone()));
+                    }
+                }
+            }
+        });
+}
+
+/// The favourites star, sitting just after the forward button. Returns its
+/// rect so the hover card can be anchored to it.
+fn draw_favourite_star(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+) -> Rect {
+    let palette = chrome.palette;
+    let url = chrome
+        .browser
+        .active_tab()
+        .map(|tab| tab.url.clone())
+        .unwrap_or_default();
+    let saved = !url.is_empty() && chrome.library.is_favourite(&url);
+
+    let response = icons::icon_button(ui, Icon::Star, 17.0, &palette, !url.is_empty());
+    let rect = response.rect;
+    if saved {
+        // No filled star in the vendored pack, so say it with colour.
+        icons::draw_icon(
+            ui.painter(),
+            Rect::from_center_size(rect.center(), vec2(17.0, 17.0)),
+            Icon::Star,
+            palette.accent,
+        );
+    }
+    if response
+        .on_hover_text(if saved {
+            "Remove from favourites"
+        } else {
+            "Add to favourites"
+        })
+        .clicked()
+    {
+        actions.push(UiAction::ToggleFavourite);
+    }
+    rect
+}
+
+/// Hovering the star grows it into a card listing the favourites, rather than
+/// spending a whole bar on them. Anchored under the star and dismissed when the
+/// pointer leaves both.
+fn draw_favourites_card(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    star: Rect,
+) {
+    const ROW: f32 = 30.0;
+
+    let ctx = root.ctx().clone();
+    let id = Id::new("zervo_favourites_card");
+    let pointer = ctx.input(|input| input.pointer.latest_pos());
+    let was_open = ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+
+    let rows = chrome.library.favourites.len().clamp(1, 12) as f32;
+    let card = clamp_into(
+        Rect::from_min_size(
+            pos2(star.center().x - 130.0, star.max.y + 8.0),
+            vec2(260.0, rows * ROW + 20.0),
+        ),
+        ctx.content_rect(),
+    );
+
+    // The gap between star and card counts as "still hovering", or the card
+    // closes in the space between them.
+    let bridge = Rect::from_min_max(star.min, pos2(card.max.x.max(star.max.x), card.min.y));
+    let open = pointer.is_some_and(|pos| {
+        star.contains(pos) || (was_open && (card.expand(6.0).contains(pos) || bridge.contains(pos)))
+    });
+    ctx.data_mut(|data| data.insert_temp(id, open));
+
+    let grow = glass::ease_out(ctx.animate_bool_with_time(id.with("grow"), open, 0.13));
+    if grow <= 0.0 {
+        return;
+    }
+
+    // Grow out of the star rather than appear: the star is the card, smaller.
+    let drawn = Rect::from_min_size(
+        star.center().lerp(card.min, grow),
+        (star.size() * (1.0 - grow)) + (card.size() * grow),
+    );
+    let palette = chrome.palette;
+    let favourites: Vec<(String, String)> = chrome
+        .library
+        .favourites
+        .iter()
+        .map(|entry| (entry.url.clone(), entry.title.clone()))
+        .collect();
+
+    egui::Area::new(id.with("area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(drawn.min)
+        .constrain(false)
+        .show(&ctx, |ui| {
+            let painter = ui.painter();
+            painter.rect_filled(drawn, CornerRadius::same(12), palette.bg);
+            for shape in glass::shapes(drawn, &palette, Glass::new(12)) {
+                painter.add(shape);
+            }
+            painter.rect_stroke(
+                drawn,
+                CornerRadius::same(12),
+                Stroke::new(1.0_f32, palette.border),
+                StrokeKind::Inside,
+            );
+            // Only draw the contents once it is close to full size, or the
+            // text squashes while it grows.
+            if grow < 0.85 {
+                ui.advance_cursor_after_rect(drawn);
+                return;
+            }
+            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(drawn.shrink(10.0)));
+            if favourites.is_empty() {
+                body.painter().text(
+                    drawn.shrink(10.0).left_top() + vec2(4.0, 10.0),
+                    Align2::LEFT_TOP,
+                    "Nothing saved yet — the star adds this page.",
+                    FontId::proportional(12.5),
+                    palette.text_muted,
+                );
+            }
+            for (url, title) in &favourites {
+                let (row, response) = body
+                    .allocate_exact_size(vec2(body.available_width(), ROW), Sense::click());
+                if response.hovered() {
+                    body.painter()
+                        .rect_filled(row, CornerRadius::same(7), palette.surface_hover);
+                }
+                icons::draw_icon(
+                    body.painter(),
+                    Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(13.0, 13.0)),
+                    Icon::Globe,
+                    palette.text_muted,
+                );
+                body.painter().text(
+                    pos2(row.min.x + 28.0, row.center().y),
+                    Align2::LEFT_CENTER,
+                    ellipsize(title, 26),
+                    FontId::proportional(13.0),
+                    palette.text,
+                );
+                // A small x on hover, rather than a permanent one on every row.
+                let remove = Rect::from_center_size(
+                    pos2(row.max.x - 12.0, row.center().y),
+                    vec2(16.0, 16.0),
+                );
+                if response.hovered() {
+                    icons::draw_icon(body.painter(), remove.shrink(3.0), Icon::Close, palette.text_muted);
+                }
+                let remove_response =
+                    body.interact(remove, id.with(("remove", url)), Sense::click());
+                if remove_response.clicked() {
+                    actions.push(UiAction::RemoveFavourite(url.clone()));
+                } else if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                    actions.push(UiAction::Navigate(url.clone()));
+                }
+            }
+            ui.advance_cursor_after_rect(drawn);
+        });
+}
+
+/// Shorten to `limit` characters on a character boundary, with an ellipsis.
+fn ellipsize(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    text.chars().take(limit.saturating_sub(1)).collect::<String>() + "…"
+}
+
+/// Keep a rect inside `bounds`.
+fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
+    let mut min = rect.min;
+    min.x = min.x.clamp(bounds.min.x + 8.0, (bounds.max.x - rect.width() - 8.0).max(bounds.min.x + 8.0));
+    min.y = min.y.clamp(bounds.min.y + 8.0, (bounds.max.y - rect.height() - 8.0).max(bounds.min.y + 8.0));
+    Rect::from_min_size(min, rect.size())
+}
+
+// ── Navigation bar (shown when the sidebar is collapsed) ───────────────────
+
+/// Height of the navigation bar. Tall enough for a 36pt pill with breathing
+/// room above and below.
+const NAVBAR_HEIGHT: f32 = 52.0;
+/// Room the macOS traffic lights need before the first button.
+const TRAFFIC_LIGHTS: f32 = 78.0;
+/// Width of the centred address pill.
+pub const ADDRESS_PILL_DEFAULT_WIDTH: f32 = 460.0;
+const ADDRESS_PILL_MIN_WIDTH: f32 = 220.0;
+const ADDRESS_PILL_MAX_WIDTH: f32 = 900.0;
+
+/// With the sidebar collapsed, navigation moves into a bar across the top:
+/// window controls and navigation snapped to the left beside the traffic
+/// lights, the address pill centred on the window, and extensions, downloads
+/// and settings snapped to the right.
+fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
+    let palette = chrome.palette;
+    let window = root.ctx().content_rect();
+    let strip = Rect::from_min_size(window.min, vec2(window.width(), NAVBAR_HEIGHT));
+
+    let (can_go_back, can_go_forward, is_web) = chrome
+        .browser
+        .active_tab()
+        .map(|tab| (tab.can_go_back, tab.can_go_forward, tab.kind == TabKind::Web))
+        .unwrap_or_default();
+
+    // ── Left: sidebar, navigation, favourites. Beside the traffic lights.
+    let left = Rect::from_min_max(
+        pos2(window.left() + TRAFFIC_LIGHTS, strip.min.y),
+        pos2(window.center().x, strip.max.y),
+    );
+    let mut group = root.new_child(
+        egui::UiBuilder::new()
+            .max_rect(left)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    group.spacing_mut().item_spacing.x = 2.0;
+    if icons::icon_button(&mut group, Icon::Sidebar, 17.0, &palette, true)
+        .on_hover_text("Show sidebar")
+        .clicked()
+    {
+        actions.push(UiAction::ToggleSidebar);
+    }
+    group.add_space(6.0);
+    if icons::icon_button(&mut group, Icon::Back, 18.0, &palette, can_go_back).clicked() {
+        actions.push(UiAction::Back);
+    }
+    if icons::icon_button(&mut group, Icon::Forward, 18.0, &palette, can_go_forward).clicked() {
+        actions.push(UiAction::Forward);
+    }
+    if chrome.settings.show_reload_button
+        && icons::icon_button(&mut group, Icon::Reload, 17.0, &palette, is_web)
+            .on_hover_text("Reload (⌘R)")
+            .clicked()
+    {
+        actions.push(UiAction::Reload);
+    }
+    let star = draw_favourite_star(&mut group, chrome, actions);
+
+    // ── Right: extensions, downloads, settings. Snapped to the edge.
+    let right = Rect::from_min_max(
+        pos2(window.center().x, strip.min.y),
+        pos2(window.right() - 14.0, strip.max.y),
+    );
+    let mut group = root.new_child(
+        egui::UiBuilder::new()
+            .max_rect(right)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    group.spacing_mut().item_spacing.x = 2.0;
+    if icons::icon_button(&mut group, Icon::Gear, 17.0, &palette, true)
+        .on_hover_text("Settings (⌘,)")
+        .clicked()
+    {
+        actions.push(UiAction::OpenSettings);
+    }
+    let active = chrome.downloads.active_count();
+    if icons::icon_button(&mut group, Icon::Download, 16.0, &palette, true)
+        .on_hover_text(if active > 0 {
+            format!("Downloads ({active} active)")
+        } else {
+            "Downloads".to_owned()
+        })
+        .clicked()
+    {
+        actions.push(UiAction::OpenDownloads);
+    }
+    if icons::icon_button(&mut group, Icon::History, 16.0, &palette, true)
+        .on_hover_text("History")
+        .clicked()
+    {
+        actions.push(UiAction::OpenHistory);
+    }
+    // Nothing behind this yet: Servo has no extension support, and there is no
+    // point pretending otherwise in the tooltip.
+    let _ = icons::icon_button(&mut group, Icon::Extensions, 16.0, &palette, false)
+        .on_hover_text("Extensions — not supported by the engine yet");
+
+    // ── Centre: the address pill, centred on the window rather than on the
+    // space left between the two groups, so it does not drift as they change.
+    let width = navbar_pill_width(root, chrome, actions, strip);
+    let pill = Rect::from_center_size(
+        pos2(window.center().x, strip.center().y),
+        vec2(width, 36.0),
+    );
+    let mut host = root.new_child(egui::UiBuilder::new().max_rect(pill));
+    draw_address_pill(&mut host, chrome, actions);
+
+    // Reserve the strip so the content card starts below it.
+    root.allocate_rect(strip, Sense::hover());
+
+    // Favourites hover card last, over everything else in the bar.
+    draw_favourites_card(root, chrome, actions, star);
+}
+
+/// The pill's width, draggable by either edge. Dragging one edge moves the
+/// other by the same amount, since the pill stays centred.
+fn navbar_pill_width(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    strip: Rect,
+) -> f32 {
+    let stored = chrome
+        .settings
+        .address_pill_width
+        .clamp(ADDRESS_PILL_MIN_WIDTH, ADDRESS_PILL_MAX_WIDTH);
+    // Never let it grow into the button groups.
+    let room = (strip.width() - 2.0 * (TRAFFIC_LIGHTS + 170.0)).max(ADDRESS_PILL_MIN_WIDTH);
+    let mut width = stored.min(room);
+
+    let centre = strip.center();
+    for (index, side) in [(-1.0_f32), 1.0].iter().enumerate() {
+        let edge = Rect::from_center_size(
+            pos2(centre.x + side * width / 2.0, centre.y),
+            vec2(10.0, 30.0),
+        );
+        let response = root.interact(
+            edge,
+            Id::new("zervo_pill_resize").with(index),
+            Sense::drag(),
+        );
+        if response.hovered() || response.dragged() {
+            root.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+        }
+        if response.dragged() {
+            width = (width + side * response.drag_delta().x * 2.0)
+                .clamp(ADDRESS_PILL_MIN_WIDTH, ADDRESS_PILL_MAX_WIDTH.min(room));
+        }
+    }
+
+    // Written once the drag ends rather than every frame of it.
+    if !root.ctx().egui_is_using_pointer() && (width - stored).abs() > 0.5 {
+        chrome.settings.address_pill_width = width;
+        actions.push(UiAction::PersistSettings);
+    }
+    width
 }
 
 // ── Autohide reveal ────────────────────────────────────────────────────────
@@ -944,7 +1472,9 @@ fn draw_sidebar_peek(
                     .max_rect(inner)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
-            sidebar_body(&mut body, chrome, actions);
+            // A peek only happens while collapsed, which is exactly when the
+            // navigation bar is up.
+            sidebar_body(&mut body, chrome, actions, true);
             // Claim the whole overlay, so the pointer over it resolves to this
             // layer rather than the chrome underneath.
             ui.advance_cursor_after_rect(drawn);
@@ -1014,16 +1544,38 @@ fn draw_address_pill(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<
             .max_rect(pill_rect.shrink2(vec2(12.0, 0.0)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    let search_rect = Rect::from_center_size(
+    // What the leading icon says about the connection. While typing it goes
+    // back to a magnifying glass, since it is describing the box and not a
+    // page any more.
+    let (icon, tint, hint) = if chrome.browser.editing_address {
+        (Icon::Search, palette.text_muted, "")
+    } else {
+        let url = chrome.browser.active_tab().map(|tab| tab.url.as_str());
+        match url.map(|url| url.split(':').next().unwrap_or("")) {
+            Some("https") => (Icon::Lock, palette.text_muted, "Encrypted connection"),
+            Some("http") => (
+                Icon::Warning,
+                theme::mix(palette.text_muted, Color32::from_rgb(220, 138, 40), 0.75),
+                "Not encrypted — anyone on the network can read this",
+            ),
+            Some("file") => (Icon::Folder, palette.text_muted, "A file on this computer"),
+            _ => (Icon::Globe, palette.text_muted, ""),
+        }
+    };
+    let badge = Rect::from_center_size(
         pos2(inner.max_rect().min.x + 8.0, pill_rect.center().y),
         vec2(15.0, 15.0),
     );
-    icons::draw_icon(
-        inner.painter(),
-        search_rect,
-        Icon::Search,
-        palette.text_muted,
-    );
+    icons::draw_icon(inner.painter(), badge, icon, tint);
+    if !hint.is_empty() {
+        inner
+            .interact(
+                badge.expand(4.0),
+                pill_id.with("security"),
+                Sense::hover(),
+            )
+            .on_hover_text(hint);
+    }
     inner.add_space(22.0);
 
     let hint = format!("Search with {}…", chrome.settings.search_engine.label());
@@ -1844,46 +2396,6 @@ fn draw_newtab_quick_links(
             actions.push(UiAction::SelectWorkspace(link.workspace));
         }
     }
-}
-
-/// When the sidebar is collapsed, a small floating control stays reachable so
-/// the chrome can be brought back (and the traffic lights keep their room).
-fn draw_collapsed_sidebar_handle(
-    root: &mut Ui,
-    chrome: &mut ChromeContext,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    let window = root.ctx().content_rect();
-    // Sits to the right of the macOS traffic lights.
-    let origin = pos2(window.min.x + 84.0, window.min.y + 8.0);
-    let rect = Rect::from_min_size(origin, vec2(112.0, 30.0));
-
-    let mut ui = root.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    ui.spacing_mut().item_spacing.x = 2.0;
-    if icons::icon_button(&mut ui, Icon::Sidebar, 17.0, &palette, true)
-        .on_hover_text("Show sidebar")
-        .clicked()
-    {
-        actions.push(UiAction::ToggleSidebar);
-    }
-    let (back, forward) = chrome
-        .browser
-        .active_tab()
-        .map(|tab| (tab.can_go_back, tab.can_go_forward))
-        .unwrap_or_default();
-    if icons::icon_button(&mut ui, Icon::Back, 17.0, &palette, back).clicked() {
-        actions.push(UiAction::Back);
-    }
-    if icons::icon_button(&mut ui, Icon::Forward, 17.0, &palette, forward).clicked() {
-        actions.push(UiAction::Forward);
-    }
-    // Reserve the strip so the content card starts below the handle.
-    root.allocate_rect(rect, Sense::hover());
 }
 
 /// zervo://downloads — the download manager.

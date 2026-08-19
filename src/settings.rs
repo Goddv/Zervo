@@ -153,6 +153,8 @@ pub struct Settings {
     pub sidebar_autohide: bool,
     /// Sidebar width in points, remembered across restarts when resized.
     pub sidebar_width: f32,
+    /// Width of the centred address pill in the navigation bar, in points.
+    pub address_pill_width: f32,
     /// Present as plain Firefox rather than as Servo. Servo's own user agent
     /// already claims Firefox 140, but keeps a `Servo/x.y` token and omits the
     /// `Gecko/20100101` one, and enough sites match on those to matter.
@@ -199,6 +201,7 @@ impl Default for Settings {
             compact_sidebar: false,
             sidebar_autohide: true,
             sidebar_width: crate::ui::SIDEBAR_DEFAULT_WIDTH,
+            address_pill_width: crate::ui::ADDRESS_PILL_DEFAULT_WIDTH,
             user_agent_compat: true,
             downloads_auto: true,
             top_glow: 1.0,

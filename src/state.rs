@@ -15,6 +15,8 @@ pub enum TabKind {
     /// The internal new-tab page (zervo://newtab) — no webview until the user
     /// navigates, which converts it to a web tab in place.
     NewTab,
+    /// The internal history page (zervo://history).
+    History,
     /// The internal downloads page (zervo://downloads).
     Downloads,
 }
@@ -57,6 +59,20 @@ impl Tab {
             pinned: false,
             title: "Settings".to_owned(),
             url: "zervo://settings".to_owned(),
+            webview: None,
+            loading: false,
+            can_go_back: false,
+            can_go_forward: false,
+        }
+    }
+
+    pub fn new_history(id: TabId) -> Self {
+        Self {
+            id,
+            kind: TabKind::History,
+            pinned: false,
+            title: "History".to_owned(),
+            url: "zervo://history".to_owned(),
             webview: None,
             loading: false,
             can_go_back: false,
@@ -133,6 +149,8 @@ pub struct BrowserState {
     /// True while the address bar has focus and the user is editing it, so we
     /// don't clobber their typing with engine-driven URL updates.
     pub editing_address: bool,
+    /// Search box on the history page.
+    pub history_query: String,
     /// One-shot request for the address bar to grab keyboard focus (⌘L).
     pub focus_address: bool,
     /// Text in the zervo://newtab page's centered search box.
@@ -155,6 +173,7 @@ impl BrowserState {
             active_tab: None,
             address_bar: initial_url.to_owned(),
             editing_address: false,
+            history_query: String::new(),
             focus_address: false,
             newtab_query: String::new(),
             settings_section: SettingsSection::Appearance,
@@ -199,6 +218,7 @@ impl BrowserState {
         let workspace = self.active_workspace;
         let tab = match kind {
             TabKind::Downloads => Tab::new_downloads(id),
+            TabKind::History => Tab::new_history(id),
             _ => Tab::new_settings(id),
         };
         self.workspaces[workspace].tabs.push(tab);
@@ -207,6 +227,10 @@ impl BrowserState {
 
     pub fn find_or_create_settings_tab(&mut self) -> TabId {
         self.find_or_create_internal(TabKind::Settings)
+    }
+
+    pub fn find_or_create_history_tab(&mut self) -> TabId {
+        self.find_or_create_internal(TabKind::History)
     }
 
     pub fn find_or_create_downloads_tab(&mut self) -> TabId {

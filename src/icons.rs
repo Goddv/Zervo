@@ -50,11 +50,22 @@ pub enum Icon {
     ExternalLink,
     Warning,
     Sidebar,
+    Star,
+    Lock,
+    History,
+    Extensions,
 }
 
 impl Icon {
     pub fn glyph(self) -> &'static str {
         match self {
+            Icon::Star => glyph::STAR,
+            Icon::Lock => glyph::LOCK,
+            Icon::History => glyph::CLOCK,
+            // Phosphor's puzzle-piece is not in the vendored subset, so this
+            // is the nearest glyph we actually have. Swap the codepoint in
+            // phosphor.rs if the pack is ever extended.
+            Icon::Extensions => glyph::SLIDERS,
             Icon::Back => glyph::ARROWLEFT,
             Icon::Forward => glyph::ARROWRIGHT,
             Icon::Reload => glyph::RELOAD,

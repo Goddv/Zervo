@@ -17,6 +17,7 @@ use url::Url;
 use winit::window::Window;
 
 use crate::controls::Controls;
+use crate::library::Library;
 use crate::keyboard::CMD_OR_CONTROL;
 use crate::state::{BrowserState, TabId};
 
@@ -37,6 +38,14 @@ pub enum DownloadEvent {
         request_id: servo::RequestId,
         ok: bool,
     },
+}
+
+/// Unix seconds, for history timestamps.
+pub fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 fn engine_theme(dark: bool) -> servo::Theme {
@@ -71,6 +80,8 @@ pub struct AppState {
     pub quit_requested: Cell<bool>,
     /// Page-initiated UI (dialogs, pickers, context menus) awaiting an answer.
     pub controls: RefCell<Controls>,
+    /// Favourites and history.
+    pub library: RefCell<Library>,
     /// The input method interface Servo currently wants shown, if any. Only a
     /// dismissal of one we asked for should be reported back, or changing focus
     /// blurs the element that just gained it.
@@ -131,6 +142,7 @@ impl AppState {
     /// which is an `Rc` back to this state, so without clearing them the cycle
     /// keeps the engine alive until the process dies and nothing is saved.
     pub fn shutdown(&self) {
+        self.library.borrow_mut().save();
         {
             let mut browser = self.browser.borrow_mut();
             for workspace in &mut browser.workspaces {
@@ -402,6 +414,20 @@ impl servo::WebViewDelegate for AppState {
 
     fn notify_new_frame_ready(&self, _webview: WebView) {
         self.needs_repaint.set(true);
+        self.window.request_redraw();
+    }
+
+    /// Servo reports the URL for same-document navigation too, which is the
+    /// only signal for a `pushState` route change — and the reason the address
+    /// bar used to go stale on sites that use them.
+    fn notify_url_changed(&self, webview: WebView, url: Url) {
+        let title = webview.page_title().unwrap_or_default();
+        self.library.borrow_mut().record(url.as_str(), &title, now());
+        let mut browser = self.browser.borrow_mut();
+        if let Some(tab) = browser.tab_for_webview_mut(&webview) {
+            tab.url = url.to_string();
+        }
+        drop(browser);
         self.window.request_redraw();
     }
 

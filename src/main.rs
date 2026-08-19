@@ -12,6 +12,7 @@ mod downloads;
 mod glass;
 mod icons;
 mod keyboard;
+mod library;
 mod phosphor;
 mod settings;
 mod state;
@@ -95,6 +96,9 @@ struct RunningApp {
     overlay_rect_points: Option<egui::Rect>,
     /// A page-initiated dialog or menu is up.
     controls_open: bool,
+    /// Throttles history writes: every visit marks the library dirty, and
+    /// rewriting the file on each one would be a lot of churn for a browse.
+    library_saved_at: std::time::Instant,
     /// Deadline for a deferred egui repaint (e.g. caret blink) — served via
     /// ControlFlow::WaitUntil instead of a max-FPS redraw loop.
     pending_repaint_at: Option<std::time::Instant>,
@@ -212,6 +216,7 @@ impl ApplicationHandler<WakerEvent> for App {
             favicons_dirty: Cell::new(false),
             quit_requested: Cell::new(false),
             controls: RefCell::new(controls::Controls::default()),
+            library: RefCell::new(library::Library::load()),
             visible_input_method: Cell::new(None),
             content_origin: Cell::new((0.0, 0.0)),
             #[cfg(feature = "engine-downloads")]
@@ -246,6 +251,7 @@ impl ApplicationHandler<WakerEvent> for App {
             content_rect_points: egui::Rect::ZERO,
             overlay_rect_points: None,
             controls_open: false,
+            library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
             downloads: downloads::DownloadManager::default(),
             #[cfg(target_os = "macos")]
@@ -649,9 +655,11 @@ impl RunningApp {
         self.egui_glow.run(&state.window, |root| {
             let mut browser = state.browser.borrow_mut();
             let mut controls = state.controls.borrow_mut();
+            let mut library = state.library.borrow_mut();
             let mut chrome = ui::ChromeContext {
                 browser: &mut browser,
                 controls: &mut controls,
+                library: &mut library,
                 settings: &mut settings,
                 palette,
                 favicons: &favicons,
@@ -660,6 +668,7 @@ impl RunningApp {
             let output = ui::draw(root, &mut chrome);
             drop(browser);
             drop(controls);
+            drop(library);
 
             let content_rect = output.content_rect;
             let scale = root.pixels_per_point();
@@ -738,6 +747,13 @@ impl RunningApp {
                     .map_or(deadline, |d| d.min(deadline)),
             );
         }
+        if state.library.borrow().needs_save()
+            && self.library_saved_at.elapsed() > std::time::Duration::from_secs(10)
+        {
+            state.library.borrow_mut().save();
+            self.library_saved_at = std::time::Instant::now();
+        }
+
         if self.egui_glow.egui_ctx.requested_repaint_last_pass() {
             state.window.request_redraw();
         } else if self.egui_glow.egui_ctx.has_requested_repaint() {
@@ -861,6 +877,34 @@ impl RunningApp {
             UiAction::ToggleSidebar => {
                 let collapsed = state.browser.borrow().sidebar_collapsed;
                 state.browser.borrow_mut().sidebar_collapsed = !collapsed;
+                state.window.request_redraw();
+            },
+            UiAction::OpenHistory => {
+                let tab_id = state.browser.borrow_mut().find_or_create_history_tab();
+                state.activate_tab(tab_id);
+            },
+            UiAction::ToggleFavourite => {
+                let (url, title) = state
+                    .browser
+                    .borrow()
+                    .active_tab()
+                    .map(|tab| (tab.url.clone(), tab.title.clone()))
+                    .unwrap_or_default();
+                if !url.is_empty() {
+                    state.library.borrow_mut().toggle_favourite(&url, &title);
+                }
+                state.window.request_redraw();
+            },
+            UiAction::RemoveFavourite(url) => {
+                state.library.borrow_mut().remove_favourite(&url);
+                state.window.request_redraw();
+            },
+            UiAction::ForgetVisit(index) => {
+                state.library.borrow_mut().forget(index);
+                state.window.request_redraw();
+            },
+            UiAction::ClearHistory => {
+                state.library.borrow_mut().clear_history();
                 state.window.request_redraw();
             },
             UiAction::OpenDownloads => {
