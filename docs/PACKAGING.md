@@ -94,3 +94,36 @@ Servo update, check the list against `gstreamer_plugin_lists/` in the servo
 crate.
 
 Expect the bundle to grow by roughly 100 MB.
+
+## Linux
+
+```bash
+./scripts/package-linux.sh --deb          # on Ubuntu/Debian
+./scripts/package-linux.sh --rpm          # on Fedora
+```
+
+Build each package on the distribution it targets. A binary linked against
+Ubuntu's libraries will not reliably run on Fedora, and `rpmbuild` derives the
+package's requirements from the binary, which means those requirements have to
+be Fedora's sonames. The CI workflow does this by building the `.deb` on an
+Ubuntu runner and the `.rpm` inside a `fedora` container.
+
+Neither package carries a hand-written dependency list: `dpkg-shlibdeps` and
+`rpmbuild` each work them out from the binary. The build dependencies are
+Servo's own lists, copied from `python/servo/platform/linux_packages/`.
+
+GStreamer is an ordinary system package on Linux, so `--features media` needs no
+bundling — unlike macOS, where the framework has to be copied into the app. The
+package depends on the system GStreamer instead.
+
+Nothing here is signed, which on Linux is not the obstacle it is on macOS: both
+`dpkg -i` and `dnf install` will install an unsigned local package, with at most
+a warning.
+
+### What is missing on Linux
+
+- **File uploads** shell out to `zenity`. Install it if `<input type=file>` does
+  nothing. The proper fix is the XDG desktop portal over D-Bus.
+- **No vibrancy.** The translucent chrome is an AppKit feature; the Linux build
+  draws the same chrome without the frosted backdrop behind it.
+- **Wayland vs X11** has had no testing at all.
