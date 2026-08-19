@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.3.0 — 19 August 2026
+
+The release where it starts behaving like a browser rather than a viewer.
+
+### Pages can ask you things now
+
+`show_embedder_control` wrote `alert()` to the log and dropped everything else on
+the floor. Dropping one of these controls takes its default, which is "the user
+cancelled", so a whole category of ordinary web behaviour quietly did nothing at
+all. That one function was the reason:
+
+- `<select>` dropdowns never opened
+- file uploads were impossible
+- `confirm()` was always false and `prompt()` always null
+- `<input type=color>` did nothing
+- right-click did nothing, anywhere
+- there was no IME, so no way to type Chinese, Japanese or Korean
+
+All of those work now. Dialogs come up over the page labelled with the origin
+that raised them, because the text in them is written by the site and shouldn't
+read like Zervo asking. `<select>` handles optgroups and multi-select. The file
+picker is the real macOS open panel rather than something homegrown, since that's
+one thing the OS does better than we would. The context menu is built from the
+items Servo hands over, so back/forward/reload, copy link, open in new tab and
+the rest all work off one code path. Input methods follow servoshell's approach,
+including the fiddly part where dismissing an IME because focus moved must not be
+reported to the page, or it blurs the element that just got focus.
+
+### It remembers you
+
+Cookies, logins, localStorage and the HSTS list are kept between launches. Two
+separate things were stopping that, and fixing either one alone would have
+changed nothing.
+
+Servo writes its cookie jar into a config directory and skips writing entirely
+when it hasn't been given one, which it hadn't. And it only writes at all when
+the engine is told to shut down, which happens when the Servo handle is dropped —
+except every webview holds a reference to the shared delegate, which is a
+reference back to the thing that owns the engine, so nothing was ever dropped.
+Both ends fixed.
+
+One caveat worth knowing: that flush only happens on a clean quit. Servo has no
+incremental save and no flush API, so a force quit still loses the session.
+
+⌘Q also exists now. There's no menu bar to carry the standard Quit item, so
+before this there was no way to quit that ran any of the shutdown at all.
+
+### Downloads, in the builds you actually download
+
+Servo has no download support, so this needs a patched engine, and until now that
+meant building one yourself. Released builds are now compiled against a
+[fork](https://github.com/Goddv/servo/tree/zervo-downloads) carrying the patch,
+pinned to a revision. A plain `git clone` still builds against the published
+crate with no setup, because CI appends the patch line rather than it being
+committed.
+
+### Sites stop turning you away
+
+Servo's user agent already claims Firefox 140, but it keeps a `Servo/0.5.0` token
+and leaves out `Gecko/20100101`, and enough sites match on exactly those to serve
+a "browser not supported" page. Zervo now presents the plain Firefox string. It's
+a setting if you'd rather be honest about it.
+
+### Still missing
+
+`<video>` and `<audio>` don't play. That needs GStreamer, which on macOS means a
+system framework install and bundling a pile of libraries into the .app, so it's
+its own milestone rather than a change. [docs/PARITY.md](docs/PARITY.md) has the
+detail, along with everything else still between this and a browser you could use
+daily.
+
+### Commits
+
+```
+9f9d8a8  ui: let a popup survive its own opening click
+51823c9  ui: wire up input methods
+a07646e  ci: build releases against the patched engine
+58bf8a8  ui: answer what the page asks for
+636ac09  engine: keep cookies, and present as plain Firefox
+8b55b80  docs: write down what is missing before this is a usable browser
+184bba1  README: show the screenshots properly
+```
+
 ## 0.2.0 — 19 August 2026
 
 A round of fixes to the chrome. The autohide sidebar was the big one: it looked

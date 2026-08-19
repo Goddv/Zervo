@@ -202,6 +202,10 @@ fn panel<R>(
                     .rect_filled(scrim, CornerRadius::ZERO, dim(palette));
             }
             let painter = ui.painter();
+            // Opaque backing first. These float over live page content and the
+            // glass material is only about 95% opaque, which is fine over the
+            // chrome but lets page text ghost through a menu.
+            painter.rect_filled(rect, CornerRadius::same(radius), palette.bg);
             for shape in glass::shapes(rect, palette, Glass::new(radius)) {
                 painter.add(shape);
             }
