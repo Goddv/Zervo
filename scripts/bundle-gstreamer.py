@@ -3,8 +3,12 @@
 
 A bundle that only runs on machines with GStreamer already installed is no use,
 so every non-system dylib the binary needs — plus the plugins, which are loaded
-by name at runtime and so never appear in `otool` output — is copied into
-Contents/Frameworks and every reference to it rewritten to point there.
+by name at runtime and so never appear in `otool` output — is copied next to the
+binary and every reference to it rewritten to point there.
+
+The destination is `Contents/MacOS/lib`, which is not where a macOS bundle would
+normally put libraries, but Servo looks for its plugins in `<executable>/lib` and
+that path is compiled in.
 
 Ported from Servo's own packaging (python/servo/gstreamer.py, MPL-2.0), which is
 where the plugin lists and the rpath resolution rules come from.
@@ -76,11 +80,22 @@ def resolve_rpath(dependency, rpath):
 
 def rewrite_to_relative(binary, dependencies, relative_path):
     """Point `binary` at its dependencies inside the bundle instead of at
-    wherever GStreamer happens to be installed on this machine."""
+    wherever GStreamer happens to be installed on this machine.
+
+    Two differences from Servo's version. It rewrites `@rpath/...` references
+    too — Servo can leave those alone because the framework's own layout is
+    preserved under its rpath, but everything is flattened into one directory
+    here, so `@rpath/lib/libglib-2.0.0.dylib` would resolve to nothing.
+
+    And it rewrites to `@rpath/<name>` rather than an `@executable_path` path,
+    leaving one LC_RPATH to say where that is. Rewritten names must not be
+    longer than the originals: the load commands have to fit in the space the
+    linker left, and `install_name_tool` refuses outright when they do not.
+    """
     for dependency in dependencies:
-        if is_system_library(dependency) or dependency.startswith("@rpath/"):
+        if is_system_library(dependency):
             continue
-        new_path = os.path.join("@executable_path", relative_path, os.path.basename(dependency))
+        new_path = os.path.join("@rpath", os.path.basename(dependency))
         result = subprocess.run(
             ["install_name_tool", "-change", dependency, new_path, binary],
             capture_output=True,
@@ -101,17 +116,31 @@ def main(app):
     if not os.path.exists(binary):
         raise SystemExit(f"no binary at {binary}")
 
-    libraries = os.path.join(app, "Contents", "Frameworks")
+    # Servo hardcodes `<directory of the executable>/lib` on macOS.
+    libraries = os.path.join(app, "Contents", "MacOS", "lib")
     gstreamer_libs = os.path.join(GSTREAMER_ROOT, "lib")
-    # How the binary will refer to the copied dylibs, relative to itself.
-    relative_path = os.path.relpath(libraries, os.path.dirname(binary)) + "/"
+    relative_path = os.path.relpath(libraries, os.path.dirname(binary))
 
     if os.path.exists(libraries):
         shutil.rmtree(libraries)
     os.makedirs(libraries)
 
+    # Give the binary an rpath into the bundle. Servo's carries one already;
+    # ours does not, and without it any reference we fail to rewrite dangles
+    # with "no LC_RPATH's found" before the app even starts.
+    subprocess.run(
+        [
+            "install_name_tool",
+            "-add_rpath",
+            os.path.join("@executable_path", relative_path),
+            binary,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
     # The plugins are dlopened by name, so otool never mentions them. They have
-    # to be named explicitly or playback fails at runtime with no missing
+    # to be listed explicitly or playback fails at runtime with no missing
     # symbol to point at why.
     pending = non_system_dependencies(binary)
     pending.update(
