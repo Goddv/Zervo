@@ -84,6 +84,8 @@ struct RunningApp {
     webview_relative_mouse: Cell<Point2D<f32, DevicePixel>>,
     /// The content rect left over after the chrome panels, in egui points.
     content_rect_points: egui::Rect,
+    /// Revealed autohide sidebar, floating over the content card.
+    overlay_rect_points: Option<egui::Rect>,
     /// Deadline for a deferred egui repaint (e.g. caret blink) — served via
     /// ControlFlow::WaitUntil instead of a max-FPS redraw loop.
     pending_repaint_at: Option<std::time::Instant>,
@@ -215,6 +217,7 @@ impl ApplicationHandler<WakerEvent> for App {
             cursor: PhysicalPosition::default(),
             webview_relative_mouse: Cell::new(Point2D::zero()),
             content_rect_points: egui::Rect::ZERO,
+            overlay_rect_points: None,
             pending_repaint_at: None,
             downloads: downloads::DownloadManager::default(),
             #[cfg(target_os = "macos")]
@@ -306,8 +309,14 @@ impl RunningApp {
         // over the web content, in which case pointer events bypass the chrome.
         let scale = state.window.scale_factor() as f32;
         let cursor_points = egui::pos2(self.cursor.x as f32 / scale, self.cursor.y as f32 / scale);
-        // While the settings page covers the content area, egui owns it.
-        let over_content = self.content_rect_points.contains(cursor_points) && !self.settings_open;
+        // While the settings page covers the content area, egui owns it — as
+        // it does the strip a revealed autohide sidebar floats over, or its
+        // clicks and scrolls would reach the page underneath as well.
+        let over_content = self.content_rect_points.contains(cursor_points)
+            && !self.settings_open
+            && !self
+                .overlay_rect_points
+                .is_some_and(|rect| rect.contains(cursor_points));
 
         let mut consumed = false;
         match &event {
@@ -627,6 +636,7 @@ impl RunningApp {
         let mut ambient = false;
         if let Some(output) = ui_output {
             self.content_rect_points = output.content_rect;
+            self.overlay_rect_points = output.chrome_overlay;
             self.settings_open = output.settings_open;
             ambient = output.ambient;
             for action in output.actions {
@@ -815,6 +825,9 @@ impl RunningApp {
             },
             UiAction::DragWindow => {
                 let _ = state.window.drag_window();
+            },
+            UiAction::PersistSettings => {
+                self.settings.save();
             },
             UiAction::SettingsChanged => {
                 self.settings.save();

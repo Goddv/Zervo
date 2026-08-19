@@ -47,6 +47,8 @@ pub enum UiAction {
     DragWindow,
     /// A setting changed: persist and re-apply (theme, etc.).
     SettingsChanged,
+    /// A setting changed that needs nothing re-applied — just write it out.
+    PersistSettings,
 }
 
 pub struct UiOutput {
@@ -56,6 +58,9 @@ pub struct UiOutput {
     pub content_rect: egui::Rect,
     /// When true an internal page covers the content area — skip the blit.
     pub settings_open: bool,
+    /// Window-space rect of the autohide sidebar while it is revealed.
+    /// Pointer events over it must not be forwarded to the webview.
+    pub chrome_overlay: Option<egui::Rect>,
     /// True while an ambient animation is on screen (aurora new-tab page):
     /// the caller schedules ~30fps timed wakes instead of the idle cadence.
     pub ambient: bool,
@@ -85,13 +90,12 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         chrome.settings.chrome_opacity,
     );
 
-    // A collapsed sidebar can be revealed by pushing the pointer against the
-    // left edge, when autohide is on.
-    let reveal = chrome.settings.sidebar_autohide
-        && root
-            .input(|input| input.pointer.latest_pos())
-            .is_some_and(|pos| pos.x <= root.ctx().content_rect().left() + 14.0);
-    if chrome.browser.sidebar_collapsed && !reveal {
+    // Autohide reveal: decided before the sidebar is drawn, but painted last
+    // as a floating overlay. The collapsed handle stays allocated underneath
+    // either way, so revealing never reflows the content card — and so never
+    // resizes the webview, which would relayout the page.
+    let peek = sidebar_peek(root, chrome);
+    if chrome.browser.sidebar_collapsed {
         draw_collapsed_sidebar_handle(root, chrome, &mut actions);
     } else {
         draw_sidebar(root, chrome, &mut actions);
@@ -119,10 +123,13 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         Some(TabKind::Settings | TabKind::NewTab | TabKind::Downloads)
     );
 
+    let chrome_overlay = draw_sidebar_peek(root, chrome, &mut actions, peek);
+
     UiOutput {
         actions,
         content_rect,
         settings_open,
+        chrome_overlay,
         ambient,
     }
 }
@@ -230,10 +237,24 @@ fn chrome_color_at(root: &Ui, y: f32, palette: &Palette, top_glow: f32) -> Color
 fn paint_chrome_base(root: &Ui, palette: &Palette, top_glow: f32, opacity: f32) {
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     let window = root.ctx().content_rect();
+    paint_chrome_fill(&painter, window, window.top(), palette, top_glow, opacity);
+}
+
+/// Fill `rect` with the chrome's colour, including the glow band across the
+/// top of the window. `window_top` anchors the band, so a rect that starts
+/// below the window's top edge still lines up with the rest of the chrome.
+fn paint_chrome_fill(
+    painter: &egui::Painter,
+    rect: Rect,
+    window_top: f32,
+    palette: &Palette,
+    top_glow: f32,
+    opacity: f32,
+) {
     let opacity = opacity.clamp(0.2, 1.0);
     let bg = palette.bg.gamma_multiply(opacity);
     if top_glow <= 0.0 {
-        painter.rect_filled(window, CornerRadius::ZERO, bg);
+        painter.rect_filled(rect, CornerRadius::ZERO, bg);
         return;
     }
 
@@ -241,20 +262,20 @@ fn paint_chrome_base(root: &Ui, palette: &Palette, top_glow: f32, opacity: f32) 
     // Overlapping them would composite two translucent layers on top of each
     // other inside the band, making it measurably more opaque than the chrome
     // below and leaving a hard horizontal seam where the band ends.
-    let band = Rect::from_min_size(
-        window.min,
-        vec2(window.width(), CHROME_GRADIENT_HEIGHT.min(window.height())),
-    );
-    let rest = Rect::from_min_max(pos2(window.min.x, band.max.y), window.max);
+    let band_bottom = (window_top + CHROME_GRADIENT_HEIGHT).min(rect.max.y);
+    let band = Rect::from_min_max(rect.min, pos2(rect.max.x, band_bottom));
+    let rest = Rect::from_min_max(pos2(rect.min.x, band_bottom), rect.max);
     if rest.is_positive() {
         painter.rect_filled(rest, CornerRadius::ZERO, bg);
     }
-    eased_gradient(
-        &painter,
-        band,
-        glow_strip_top(palette, top_glow).gamma_multiply(opacity),
-        bg,
-    );
+    if band.is_positive() {
+        eased_gradient(
+            painter,
+            band,
+            glow_strip_top(palette, top_glow).gamma_multiply(opacity),
+            bg,
+        );
+    }
 }
 
 /// Compute the inset card rect. (Nothing is painted here — see the note.)
@@ -516,218 +537,419 @@ pub fn finish_content_frame(
     }
 }
 
+/// Width of the sidebar, in points.
+pub const SIDEBAR_DEFAULT_WIDTH: f32 = 248.0;
+const SIDEBAR_MIN_WIDTH: f32 = 200.0;
+const SIDEBAR_MAX_WIDTH: f32 = 380.0;
+const SIDEBAR_ID: &str = "zervo_sidebar";
+const SIDEBAR_MARGIN: Margin = Margin {
+    left: 12,
+    right: 10,
+    top: 8,
+    bottom: 8,
+};
+
 fn draw_sidebar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
-    let palette = chrome.palette;
-    Panel::left("zervo_sidebar")
+    let stored = chrome
+        .settings
+        .sidebar_width
+        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+    Panel::left(SIDEBAR_ID)
         .resizable(true)
-        .default_size(248.0)
-        .size_range(200.0..=380.0)
+        .default_size(stored)
+        .size_range(SIDEBAR_MIN_WIDTH..=SIDEBAR_MAX_WIDTH)
         // Transparent: the window-wide chrome base paints behind it, so the
         // top gradient continues across the sidebar boundary unbroken.
+        .frame(Frame::NONE.inner_margin(SIDEBAR_MARGIN))
+        .show_separator_line(false)
+        .show_inside(root, |ui| sidebar_body(ui, chrome, actions));
+
+    // Remember a manual resize, so the width outlives the session — and so an
+    // autohide reveal comes back the width the user left it. Written once the
+    // drag ends rather than every frame of it, which would be a disk write per
+    // frame.
+    let width = sidebar_width(root.ctx(), chrome.settings);
+    if !root.ctx().egui_is_using_pointer() && (width - stored).abs() > 0.5 {
+        chrome.settings.sidebar_width = width;
+        actions.push(UiAction::PersistSettings);
+    }
+}
+
+/// The sidebar's contents, drawn into whatever `ui` it is handed: the docked
+/// panel, or the floating overlay an autohide reveal puts over the content.
+fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
+    let palette = chrome.palette;
+    let drag = ui.interact(ui.max_rect(), ui.id().with("sidebar_drag"), Sense::drag());
+    if drag.drag_started() {
+        actions.push(UiAction::DragWindow);
+    }
+
+    // Bottom utility bar first, so the scroll area gets the rest.
+    Panel::bottom("zervo_sidebar_bottom")
         .frame(Frame::NONE.inner_margin(Margin {
-            left: 12,
-            right: 10,
-            top: 8,
-            bottom: 8,
+            left: 0,
+            right: 0,
+            top: 6,
+            bottom: 0,
         }))
         .show_separator_line(false)
-        .show_inside(root, |ui| {
-            let drag = ui.interact(ui.max_rect(), ui.id().with("sidebar_drag"), Sense::drag());
-            if drag.drag_started() {
-                actions.push(UiAction::DragWindow);
-            }
-
-            // Bottom utility bar first, so the scroll area gets the rest.
-            Panel::bottom("zervo_sidebar_bottom")
-                .frame(Frame::NONE.inner_margin(Margin {
-                    left: 0,
-                    right: 0,
-                    top: 6,
-                    bottom: 0,
-                }))
-                .show_separator_line(false)
-                .show_inside(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if icons::icon_button(ui, Icon::Gear, 17.0, &palette, true)
-                            .on_hover_text("Settings (⌘,)")
-                            .clicked()
-                        {
-                            actions.push(UiAction::OpenSettings);
-                        }
-                        let active = chrome.downloads.active_count();
-                        if icons::icon_button(ui, Icon::Download, 16.0, &palette, true)
-                            .on_hover_text(if active > 0 {
-                                format!("Downloads ({active} active)")
-                            } else {
-                                "Downloads".to_owned()
-                            })
-                            .clicked()
-                        {
-                            actions.push(UiAction::OpenDownloads);
-                        }
-                        if active > 0 {
-                            // A small accent dot marks downloads in flight.
-                            let rect = ui.min_rect();
-                            ui.painter().circle_filled(
-                                pos2(rect.max.x - 4.0, rect.min.y + 6.0),
-                                3.5,
-                                palette.accent,
-                            );
-                            ui.ctx().request_repaint();
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if icons::icon_button(ui, Icon::Plus, 15.0, &palette, true)
-                                .on_hover_text("New workspace")
-                                .clicked()
-                            {
-                                actions.push(UiAction::NewWorkspace);
-                            }
-                        });
-                    });
-                });
-
-            // ── Top row: nav icons, right of the macOS traffic lights.
+        .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                #[cfg(target_os = "macos")]
-                ui.add_space(58.0);
-
-                let (can_go_back, can_go_forward, is_settings) = chrome
-                    .browser
-                    .active_tab()
-                    .map(|tab| {
-                        (
-                            tab.can_go_back,
-                            tab.can_go_forward,
-                            tab.kind != TabKind::Web,
-                        )
-                    })
-                    .unwrap_or_default();
-
-                if icons::icon_button(ui, Icon::Sidebar, 17.0, &palette, true)
-                    .on_hover_text(if chrome.browser.sidebar_collapsed {
-                        "Show sidebar"
+                if icons::icon_button(ui, Icon::Gear, 17.0, &palette, true)
+                    .on_hover_text("Settings (⌘,)")
+                    .clicked()
+                {
+                    actions.push(UiAction::OpenSettings);
+                }
+                let active = chrome.downloads.active_count();
+                if icons::icon_button(ui, Icon::Download, 16.0, &palette, true)
+                    .on_hover_text(if active > 0 {
+                        format!("Downloads ({active} active)")
                     } else {
-                        "Hide sidebar"
+                        "Downloads".to_owned()
                     })
                     .clicked()
                 {
-                    actions.push(UiAction::ToggleSidebar);
+                    actions.push(UiAction::OpenDownloads);
                 }
-                ui.add_space(2.0);
-
-                if icons::icon_button(ui, Icon::Back, 18.0, &palette, can_go_back).clicked() {
-                    actions.push(UiAction::Back);
+                if active > 0 {
+                    // A small accent dot marks downloads in flight.
+                    let rect = ui.min_rect();
+                    ui.painter().circle_filled(
+                        pos2(rect.max.x - 4.0, rect.min.y + 6.0),
+                        3.5,
+                        palette.accent,
+                    );
+                    ui.ctx().request_repaint();
                 }
-                if chrome.settings.show_forward_button
-                    && icons::icon_button(ui, Icon::Forward, 18.0, &palette, can_go_forward)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icons::icon_button(ui, Icon::Plus, 15.0, &palette, true)
+                        .on_hover_text("New workspace")
                         .clicked()
-                {
-                    actions.push(UiAction::Forward);
-                }
-                if chrome.settings.show_reload_button
-                    && icons::icon_button(ui, Icon::Reload, 17.0, &palette, !is_settings)
-                        .on_hover_text("Reload (⌘R)")
-                        .clicked()
-                {
-                    actions.push(UiAction::Reload);
-                }
-            });
-            ui.add_space(10.0);
-
-            // ── Search / address pill.
-            draw_address_pill(ui, chrome, actions);
-            ui.add_space(12.0);
-
-            // ── Essentials: pinned tabs as a tile grid.
-            if chrome.settings.show_essentials {
-                draw_essentials_grid(ui, chrome, actions);
-            }
-
-            // ── Workspaces and tab rows.
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let active_workspace = chrome.browser.active_workspace;
-                    let active_tab = chrome.browser.active_tab;
-                    let always_close = chrome.settings.always_show_tab_close;
-
-                    for (workspace_index, workspace) in chrome.browser.workspaces.iter().enumerate()
                     {
-                        workspace_header(
-                            ui,
-                            workspace_index,
-                            &workspace.name,
-                            workspace.tabs.iter().filter(|tab| !tab.pinned).count(),
-                            chrome.settings.show_tab_counts,
-                            workspace_index == active_workspace,
-                            &palette,
-                            actions,
-                        );
-
-                        for tab in workspace.tabs.iter().filter(|tab| !tab.pinned) {
-                            let selected = active_tab == Some(tab.id);
-                            let (clicked, close_clicked) = tab_row(
-                                ui,
-                                TabRowStyle {
-                                    tab_id: tab.id,
-                                    title: &tab.title,
-                                    url: &tab.url,
-                                    selected,
-                                    loading: tab.loading,
-                                    is_settings: tab.kind == TabKind::Settings,
-                                    always_show_close: always_close,
-                                    compact: chrome.settings.compact_sidebar,
-                                },
-                                &palette,
-                                chrome.favicons.get(&tab.id),
-                                actions,
-                            );
-                            if close_clicked {
-                                actions.push(UiAction::CloseTab(tab.id));
-                            } else if clicked {
-                                actions.push(UiAction::SelectTab(tab.id));
-                                if workspace_index != active_workspace {
-                                    actions.push(UiAction::SelectWorkspace(workspace_index));
-                                }
-                            }
-                        }
-
-                        // Ghost "new tab" row with a plus icon, like the reference.
-                        let desired = vec2(ui.available_width(), 32.0);
-                        let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
-                        let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                            ui.id().with(("new_tab_row", workspace_index)),
-                            response.hovered(),
-                            0.12,
-                        ));
-                        if hover_t > 0.0 {
-                            ui.painter().rect_filled(
-                                rect,
-                                CornerRadius::same(8),
-                                palette.surface_hover.gamma_multiply(hover_t * 0.8),
-                            );
-                        }
-                        let plus_rect = Rect::from_center_size(
-                            pos2(rect.min.x + 18.0, rect.center().y),
-                            vec2(12.0, 12.0),
-                        );
-                        icons::draw_icon(ui.painter(), plus_rect, Icon::Plus, palette.text_muted);
-                        ui.painter().text(
-                            pos2(rect.min.x + 32.0, rect.center().y),
-                            Align2::LEFT_CENTER,
-                            "New Tab",
-                            FontId::proportional(13.5),
-                            palette.text_muted,
-                        );
-                        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                            actions.push(UiAction::NewTab {
-                                workspace: workspace_index,
-                            });
-                        }
-                        ui.add_space(12.0);
+                        actions.push(UiAction::NewWorkspace);
                     }
                 });
+            });
         });
+
+    // ── Top row: nav icons, right of the macOS traffic lights.
+    ui.horizontal(|ui| {
+        #[cfg(target_os = "macos")]
+        ui.add_space(58.0);
+
+        let (can_go_back, can_go_forward, is_settings) = chrome
+            .browser
+            .active_tab()
+            .map(|tab| {
+                (
+                    tab.can_go_back,
+                    tab.can_go_forward,
+                    tab.kind != TabKind::Web,
+                )
+            })
+            .unwrap_or_default();
+
+        if icons::icon_button(ui, Icon::Sidebar, 17.0, &palette, true)
+            .on_hover_text(if chrome.browser.sidebar_collapsed {
+                "Show sidebar"
+            } else {
+                "Hide sidebar"
+            })
+            .clicked()
+        {
+            actions.push(UiAction::ToggleSidebar);
+        }
+        ui.add_space(2.0);
+
+        if icons::icon_button(ui, Icon::Back, 18.0, &palette, can_go_back).clicked() {
+            actions.push(UiAction::Back);
+        }
+        if chrome.settings.show_forward_button
+            && icons::icon_button(ui, Icon::Forward, 18.0, &palette, can_go_forward)
+                .clicked()
+        {
+            actions.push(UiAction::Forward);
+        }
+        if chrome.settings.show_reload_button
+            && icons::icon_button(ui, Icon::Reload, 17.0, &palette, !is_settings)
+                .on_hover_text("Reload (⌘R)")
+                .clicked()
+        {
+            actions.push(UiAction::Reload);
+        }
+    });
+    ui.add_space(10.0);
+
+    // ── Search / address pill.
+    draw_address_pill(ui, chrome, actions);
+    ui.add_space(12.0);
+
+    // ── Essentials: pinned tabs as a tile grid.
+    if chrome.settings.show_essentials {
+        draw_essentials_grid(ui, chrome, actions);
+    }
+
+    // ── Workspaces and tab rows.
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let active_workspace = chrome.browser.active_workspace;
+            let active_tab = chrome.browser.active_tab;
+            let always_close = chrome.settings.always_show_tab_close;
+
+            for (workspace_index, workspace) in chrome.browser.workspaces.iter().enumerate()
+            {
+                workspace_header(
+                    ui,
+                    workspace_index,
+                    &workspace.name,
+                    workspace.tabs.iter().filter(|tab| !tab.pinned).count(),
+                    chrome.settings.show_tab_counts,
+                    workspace_index == active_workspace,
+                    &palette,
+                    actions,
+                );
+
+                for tab in workspace.tabs.iter().filter(|tab| !tab.pinned) {
+                    let selected = active_tab == Some(tab.id);
+                    let (clicked, close_clicked) = tab_row(
+                        ui,
+                        TabRowStyle {
+                            tab_id: tab.id,
+                            title: &tab.title,
+                            url: &tab.url,
+                            selected,
+                            loading: tab.loading,
+                            is_settings: tab.kind == TabKind::Settings,
+                            always_show_close: always_close,
+                            compact: chrome.settings.compact_sidebar,
+                        },
+                        &palette,
+                        chrome.favicons.get(&tab.id),
+                        actions,
+                    );
+                    if close_clicked {
+                        actions.push(UiAction::CloseTab(tab.id));
+                    } else if clicked {
+                        actions.push(UiAction::SelectTab(tab.id));
+                        if workspace_index != active_workspace {
+                            actions.push(UiAction::SelectWorkspace(workspace_index));
+                        }
+                    }
+                }
+
+                // Ghost "new tab" row with a plus icon, like the reference.
+                let desired = vec2(ui.available_width(), 32.0);
+                let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
+                let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
+                    ui.id().with(("new_tab_row", workspace_index)),
+                    response.hovered(),
+                    0.12,
+                ));
+                if hover_t > 0.0 {
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(8),
+                        palette.surface_hover.gamma_multiply(hover_t * 0.8),
+                    );
+                }
+                let plus_rect = Rect::from_center_size(
+                    pos2(rect.min.x + 18.0, rect.center().y),
+                    vec2(12.0, 12.0),
+                );
+                icons::draw_icon(ui.painter(), plus_rect, Icon::Plus, palette.text_muted);
+                ui.painter().text(
+                    pos2(rect.min.x + 32.0, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    "New Tab",
+                    FontId::proportional(13.5),
+                    palette.text_muted,
+                );
+                if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                    actions.push(UiAction::NewTab {
+                        workspace: workspace_index,
+                    });
+                }
+                ui.add_space(12.0);
+            }
+        });
+}
+
+// ── Autohide reveal ────────────────────────────────────────────────────────
+
+/// How far into the window's left edge the pointer must reach to reveal a
+/// collapsed sidebar.
+const PEEK_TRIGGER: f32 = 14.0;
+/// Slack past the revealed panel before it counts as leaving.
+const PEEK_GRACE: f32 = 12.0;
+/// How long a reveal lingers after the pointer leaves it.
+const PEEK_LINGER: f64 = 0.25;
+/// Slide-in duration.
+const PEEK_SLIDE: f32 = 0.14;
+
+#[derive(Clone, Copy, Default)]
+struct PeekState {
+    open: bool,
+    linger_until: f64,
+}
+
+/// The sidebar's width: what the user last dragged it to this session,
+/// otherwise what they left it at in a previous one, otherwise the default.
+fn sidebar_width(ctx: &egui::Context, settings: &Settings) -> f32 {
+    egui::PanelState::load(ctx, Id::new(SIDEBAR_ID))
+        .map(|state| state.rect.width())
+        .unwrap_or(settings.sidebar_width)
+        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+}
+
+/// Decide whether a collapsed sidebar is revealed, and how wide.
+///
+/// Reaching the trigger strip opens it, but what *keeps* it open is the
+/// pointer being anywhere over the revealed panel. Testing only the strip —
+/// which is what this used to do — meant moving towards a button in the
+/// sidebar dismissed the very thing being reached for, so nothing in a
+/// revealed sidebar could ever be clicked.
+fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
+    let ctx = root.ctx();
+    let id = Id::new("zervo_sidebar_peek");
+    if !(chrome.browser.sidebar_collapsed && chrome.settings.sidebar_autohide) {
+        ctx.data_mut(|data| data.remove::<PeekState>(id));
+        return None;
+    }
+
+    let window = ctx.content_rect();
+    let rect = Rect::from_min_size(
+        window.min,
+        vec2(sidebar_width(ctx, chrome.settings), window.height()),
+    );
+    let mut state = ctx
+        .data(|data| data.get_temp::<PeekState>(id))
+        .unwrap_or_default();
+    // `latest_pos` goes None when the pointer leaves the window, which is
+    // exactly when a reveal should start closing.
+    let pointer = ctx.input(|input| input.pointer.latest_pos());
+    let now = ctx.input(|input| input.time);
+
+    let in_trigger = pointer.is_some_and(|pos| {
+        (window.left()..=window.left() + PEEK_TRIGGER).contains(&pos.x)
+            && window.y_range().contains(pos.y)
+    });
+    // Still on screen while it slides away, so moving back onto one that is
+    // half gone catches it rather than watching it go.
+    let visible = state.open || now < state.linger_until + PEEK_SLIDE as f64;
+    let hot = Rect::from_min_max(rect.min, rect.max + vec2(PEEK_GRACE, 0.0));
+    let in_panel = visible && pointer.is_some_and(|pos| hot.contains(pos));
+    // Never pull it away mid-gesture: a held button, a drag, or an open menu
+    // keeps it up even if the pointer strays outside.
+    let busy = state.open
+        && (ctx.egui_is_using_pointer() || egui::Popup::is_any_open(ctx));
+    // ⌘L focuses the address pill, which lives in the sidebar — so reveal it,
+    // or the shortcut does nothing and the pending focus fires later, at
+    // whatever moment the pointer next happens to brush the edge.
+    let wanted = in_trigger
+        || in_panel
+        || busy
+        || chrome.browser.editing_address
+        || chrome.browser.focus_address;
+
+    if wanted {
+        state.linger_until = now + PEEK_LINGER;
+    }
+    state.open = wanted || now < state.linger_until;
+    if state.open && !wanted {
+        // Nothing else will wake us to close it.
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+            (state.linger_until - now).max(0.0),
+        ));
+    }
+    ctx.data_mut(|data| data.insert_temp(id, state));
+    Some((rect, state.open))
+}
+
+/// Paint a revealed sidebar as a floating overlay above the content.
+///
+/// Deliberately not a panel: a panel takes layout space, so revealing would
+/// shrink the content card and resize the webview — a full page relayout —
+/// every time the pointer brushed the window edge.
+fn draw_sidebar_peek(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    peek: Option<(Rect, bool)>,
+) -> Option<Rect> {
+    let ctx = root.ctx().clone();
+    let slide = Id::new("zervo_sidebar_peek_slide");
+    let Some((rect, open)) = peek else {
+        // Snap shut, or the next reveal starts half open.
+        ctx.animate_bool_with_time(slide, false, 0.0);
+        return None;
+    };
+    let t = glass::ease_out(ctx.animate_bool_with_time(slide, open, PEEK_SLIDE));
+    if t <= 0.0 {
+        return None;
+    }
+
+    let drawn = rect.translate(vec2((t - 1.0) * rect.width(), 0.0));
+    egui::Area::new(Id::new("zervo_sidebar_peek_area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(drawn.min)
+        .constrain(false)
+        .show(&ctx, |ui| {
+            ui.set_clip_rect(ctx.content_rect());
+            // Opaque, unlike the chrome: this floats over the page, and any
+            // translucency would let the text under it read through the tabs.
+            paint_chrome_fill(
+                ui.painter(),
+                drawn,
+                ctx.content_rect().top(),
+                &chrome.palette,
+                chrome.settings.top_glow,
+                1.0,
+            );
+            paint_edge_shadow(
+                ui.painter(),
+                Rect::from_min_max(
+                    pos2(drawn.max.x, drawn.min.y),
+                    pos2(drawn.max.x + 12.0, drawn.max.y),
+                ),
+                chrome.palette.shadow,
+            );
+
+            let inner = Rect::from_min_max(
+                drawn.min + vec2(SIDEBAR_MARGIN.left as f32, SIDEBAR_MARGIN.top as f32),
+                drawn.max - vec2(SIDEBAR_MARGIN.right as f32, SIDEBAR_MARGIN.bottom as f32),
+            );
+            let mut body = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(inner)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            sidebar_body(&mut body, chrome, actions);
+            // Claim the whole overlay, so the pointer over it resolves to this
+            // layer rather than the chrome underneath.
+            ui.advance_cursor_after_rect(drawn);
+        });
+    Some(drawn)
+}
+
+/// A horizontal fade, for the outer edge of a floating panel.
+fn paint_edge_shadow(painter: &egui::Painter, rect: Rect, colour: Color32) {
+    const STEPS: usize = 12;
+    let mut mesh = Mesh::default();
+    for step in 0..=STEPS {
+        let t = step as f32 / STEPS as f32;
+        let shade = colour.gamma_multiply((1.0 - t).powi(2) * 0.9);
+        let x = rect.min.x + rect.width() * t;
+        mesh.colored_vertex(pos2(x, rect.min.y), shade);
+        mesh.colored_vertex(pos2(x, rect.max.y), shade);
+    }
+    for step in 0..STEPS as u32 {
+        let base = step * 2;
+        mesh.add_triangle(base, base + 1, base + 3);
+        mesh.add_triangle(base, base + 3, base + 2);
+    }
+    painter.add(Shape::mesh(mesh));
 }
 
 fn draw_address_pill(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
@@ -2332,6 +2554,10 @@ fn settings_customize(
                 "Always show tab close buttons",
             ),
             (&mut chrome.settings.compact_sidebar, "Compact rows"),
+            (
+                &mut chrome.settings.sidebar_autohide,
+                "Reveal a hidden sidebar on hover",
+            ),
         ] {
             if widgets::toggle(ui, value, label, palette) {
                 actions.push(UiAction::SettingsChanged);

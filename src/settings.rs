@@ -151,6 +151,8 @@ pub struct Settings {
     pub compact_sidebar: bool,
     /// Reveal a collapsed sidebar when the pointer nears the window edge.
     pub sidebar_autohide: bool,
+    /// Sidebar width in points, remembered across restarts when resized.
+    pub sidebar_width: f32,
     /// Save files without asking where.
     pub downloads_auto: bool,
     /// Strength of the glow strip across the top of the window, 0.0..=1.0.
@@ -192,6 +194,7 @@ impl Default for Settings {
             show_tab_counts: true,
             compact_sidebar: false,
             sidebar_autohide: true,
+            sidebar_width: crate::ui::SIDEBAR_DEFAULT_WIDTH,
             downloads_auto: true,
             top_glow: 1.0,
             content_border: true,
