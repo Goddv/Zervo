@@ -43,6 +43,10 @@ pub enum UiAction {
     RemoveFavourite(String),
     ForgetVisit(usize),
     ClearHistory,
+    AddWidget(crate::dashboard::WidgetKind),
+    RemoveWidget(usize),
+    MoveWidget { from: usize, to: usize },
+    MediaAction(servo::MediaSessionActionType),
     SavePassword,
     RemovePassword(String, String),
     ExportPasswords,
@@ -87,6 +91,8 @@ pub struct ChromeContext<'a> {
     pub library: &'a mut crate::library::Library,
     /// Saved logins.
     pub vault: &'a mut crate::passwords::Vault,
+    /// What the page is playing.
+    pub media: &'a crate::dashboard::Media,
     pub settings: &'a mut Settings,
     pub palette: Palette,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
@@ -1172,7 +1178,7 @@ fn draw_favourites_card(
 }
 
 /// Shorten to `limit` characters on a character boundary, with an ellipsis.
-fn ellipsize(text: &str, limit: usize) -> String {
+pub fn ellipsize(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_owned();
     }
@@ -1319,6 +1325,37 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     let mut host = root.new_child(egui::UiBuilder::new().max_rect(pill));
     draw_address_pill(&mut host, chrome, actions, NAVBAR_PILL_HEIGHT);
 
+    // ── The shelf the extra height uncovers.
+    if strip.height() > NAVBAR_ROW + 8.0 {
+        let shelf = Rect::from_min_max(
+            pos2(window.left() + theme::CONTENT_MARGIN, row.max.y),
+            pos2(window.right() - theme::CONTENT_MARGIN, strip.max.y - 6.0),
+        );
+        // A recess rather than another card: the widgets are the cards, and
+        // two levels of card inside each other reads as clutter.
+        root.painter().rect_filled(
+            shelf,
+            CornerRadius::same(theme::CONTENT_RADIUS as u8),
+            palette.shadow.gamma_multiply(0.10),
+        );
+        for change in crate::dashboard::draw(
+            root,
+            &palette,
+            chrome.media,
+            &chrome.settings.navbar_widgets,
+            shelf,
+        ) {
+            actions.push(match change {
+                crate::dashboard::Change::Add(kind) => UiAction::AddWidget(kind),
+                crate::dashboard::Change::Remove(index) => UiAction::RemoveWidget(index),
+                crate::dashboard::Change::Move { from, to } => {
+                    UiAction::MoveWidget { from, to }
+                },
+                crate::dashboard::Change::Media(action) => UiAction::MediaAction(action),
+            });
+        }
+    }
+
     navbar_resize(root, chrome, actions, strip);
 
     // Reserve the strip so the content card starts below it.
@@ -1347,20 +1384,18 @@ fn navbar_resize(
         pos2(strip.max.x, strip.max.y + 1.0),
     );
     let response = root.interact(grip, Id::new("zervo_navbar_resize"), Sense::drag());
+    let emphasis = glass::ease_out(root.ctx().animate_bool_with_time(
+        Id::new("zervo_navbar_grabber"),
+        response.hovered() || response.dragged(),
+        0.12,
+    ));
     if response.hovered() || response.dragged() {
         root.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
-        // A short bar in the middle, so the edge reads as draggable rather
-        // than as a stray line.
-        let handle = Rect::from_center_size(
-            pos2(strip.center().x, strip.max.y - 2.0),
-            vec2(34.0, 3.0),
-        );
-        root.painter().rect_filled(
-            handle,
-            CornerRadius::same(2),
-            chrome.palette.text_muted.gamma_multiply(0.7),
-        );
     }
+    // Drawn whether or not it is hovered: an affordance nobody can see is not
+    // an affordance, and there is nothing else to say the widgets are down
+    // there.
+    crate::dashboard::draw_grabber(root.painter(), &chrome.palette, strip, emphasis);
 
     let mut height = stored;
     if response.dragged() {

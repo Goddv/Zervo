@@ -17,6 +17,7 @@ use url::Url;
 use winit::window::Window;
 
 use crate::controls::Controls;
+use crate::dashboard::Media;
 use crate::library::Library;
 use crate::passwords::Vault;
 use crate::keyboard::CMD_OR_CONTROL;
@@ -83,6 +84,8 @@ pub struct AppState {
     pub controls: RefCell<Controls>,
     /// Favourites and history.
     pub library: RefCell<Library>,
+    /// What the page is playing, for the media widgets.
+    pub media: RefCell<Media>,
     /// Saved logins. The passwords themselves live in the OS credential store.
     pub vault: RefCell<Vault>,
     /// The input method interface Servo currently wants shown, if any. Only a
@@ -628,6 +631,28 @@ impl servo::WebViewDelegate for AppState {
                 log::info!("no saved login for {host}; not authenticating");
             },
         }
+    }
+
+    /// Media session state, which is what makes the player widgets real rather
+    /// than decorative.
+    fn notify_media_session_event(&self, _webview: WebView, event: servo::MediaSessionEvent) {
+        use servo::{MediaSessionEvent, MediaSessionPlaybackState};
+        let mut media = self.media.borrow_mut();
+        match event {
+            MediaSessionEvent::SetMetadata(metadata) => {
+                media.title = metadata.title;
+                media.artist = metadata.artist;
+            },
+            MediaSessionEvent::PlaybackStateChange(state) => {
+                media.playing = matches!(state, MediaSessionPlaybackState::Playing);
+            },
+            MediaSessionEvent::SetPositionState(position) => {
+                media.duration = position.duration;
+                media.position = position.position;
+            },
+        }
+        drop(media);
+        self.window.request_redraw();
     }
 
     fn show_console_message(

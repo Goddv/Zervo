@@ -8,6 +8,7 @@
 
 mod app;
 mod controls;
+mod dashboard;
 mod downloads;
 mod glass;
 mod icons;
@@ -218,6 +219,7 @@ impl ApplicationHandler<WakerEvent> for App {
             quit_requested: Cell::new(false),
             controls: RefCell::new(controls::Controls::default()),
             library: RefCell::new(library::Library::load()),
+            media: RefCell::new(dashboard::Media::default()),
             vault: RefCell::new(passwords::Vault::load()),
             visible_input_method: Cell::new(None),
             content_origin: Cell::new((0.0, 0.0)),
@@ -659,11 +661,13 @@ impl RunningApp {
             let mut controls = state.controls.borrow_mut();
             let mut library = state.library.borrow_mut();
             let mut vault = state.vault.borrow_mut();
+            let media = state.media.borrow().clone();
             let mut chrome = ui::ChromeContext {
                 browser: &mut browser,
                 controls: &mut controls,
                 library: &mut library,
                 vault: &mut vault,
+                media: &media,
                 settings: &mut settings,
                 palette,
                 favicons: &favicons,
@@ -931,6 +935,32 @@ impl RunningApp {
                     state.browser.borrow_mut().password_notice = notice;
                 }
                 state.window.request_redraw();
+            },
+            UiAction::AddWidget(kind) => {
+                self.settings.navbar_widgets.push(kind);
+                self.settings.save();
+                state.window.request_redraw();
+            },
+            UiAction::RemoveWidget(index) => {
+                if index < self.settings.navbar_widgets.len() {
+                    self.settings.navbar_widgets.remove(index);
+                    self.settings.save();
+                }
+                state.window.request_redraw();
+            },
+            UiAction::MoveWidget { from, to } => {
+                let widgets = &mut self.settings.navbar_widgets;
+                if from < widgets.len() && to < widgets.len() {
+                    let moved = widgets.remove(from);
+                    widgets.insert(to, moved);
+                    self.settings.save();
+                }
+                state.window.request_redraw();
+            },
+            UiAction::MediaAction(action) => {
+                if let Some(webview) = state.active_webview() {
+                    webview.notify_media_session_action_event(action);
+                }
             },
             UiAction::OpenHistory => {
                 let tab_id = state.browser.borrow_mut().find_or_create_history_tab();

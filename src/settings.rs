@@ -155,6 +155,8 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// Width of the centred address pill in the navigation bar, in points.
     pub address_pill_width: f32,
+    /// Widgets placed in the navigation bar's shelf, in order.
+    pub navbar_widgets: Vec<crate::dashboard::WidgetKind>,
     /// Height of the navigation bar, in points. Anything above the row the
     /// controls need is free space, kept for widgets that will live there.
     pub navbar_height: f32,
@@ -206,6 +208,7 @@ impl Default for Settings {
             sidebar_width: crate::ui::SIDEBAR_DEFAULT_WIDTH,
             address_pill_width: crate::ui::ADDRESS_PILL_DEFAULT_WIDTH,
             navbar_height: crate::ui::NAVBAR_DEFAULT_HEIGHT,
+            navbar_widgets: crate::dashboard::WidgetKind::ALL.to_vec(),
             user_agent_compat: true,
             downloads_auto: true,
             top_glow: 1.0,
