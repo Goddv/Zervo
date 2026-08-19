@@ -18,6 +18,7 @@ use winit::window::Window;
 
 use crate::controls::Controls;
 use crate::library::Library;
+use crate::passwords::Vault;
 use crate::keyboard::CMD_OR_CONTROL;
 use crate::state::{BrowserState, TabId};
 
@@ -82,6 +83,8 @@ pub struct AppState {
     pub controls: RefCell<Controls>,
     /// Favourites and history.
     pub library: RefCell<Library>,
+    /// Saved logins. The passwords themselves live in the OS credential store.
+    pub vault: RefCell<Vault>,
     /// The input method interface Servo currently wants shown, if any. Only a
     /// dismissal of one we asked for should be reported back, or changing focus
     /// blurs the element that just gained it.
@@ -302,6 +305,41 @@ impl AppState {
         );
     }
 
+    /// Ask for one file with the system panel. Used by the settings page for
+    /// importing, where there is no engine request to answer.
+    #[cfg(target_os = "macos")]
+    pub fn pick_file(&self) -> Option<std::path::PathBuf> {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSOpenPanel;
+
+        const RESPONSE_OK: isize = 1;
+        let mtm = MainThreadMarker::new()?;
+        let panel = NSOpenPanel::openPanel(mtm);
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(false);
+        panel.setAllowsMultipleSelection(false);
+        if panel.runModal() != RESPONSE_OK {
+            return None;
+        }
+        panel
+            .URLs()
+            .iter()
+            .filter_map(|url| url.path())
+            .map(|path| std::path::PathBuf::from(path.to_string()))
+            .next()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn pick_file(&self) -> Option<std::path::PathBuf> {
+        let output = std::process::Command::new("zenity")
+            .arg("--file-selection")
+            .output()
+            .ok()?;
+        output.status.success().then(|| {
+            std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+        })
+    }
+
     /// Answer a `<input type=file>` request with the system open panel.
     ///
     /// `runModal` blocks until the user is done, which is what the engine
@@ -431,7 +469,13 @@ impl servo::WebViewDelegate for AppState {
         self.window.request_redraw();
     }
 
-    fn notify_page_title_changed(&self, _webview: WebView, _title: Option<String>) {
+    fn notify_page_title_changed(&self, webview: WebView, title: Option<String>) {
+        // The title always arrives after the URL, so the history entry is
+        // already there waiting for it.
+        if let Some(title) = title.filter(|title| !title.is_empty()) {
+            let url = webview.url().map(|url| url.to_string()).unwrap_or_default();
+            self.library.borrow_mut().record(&url, &title, now());
+        }
         self.window.request_redraw();
     }
 
@@ -565,6 +609,27 @@ impl servo::WebViewDelegate for AppState {
     /// Page console output. Zervo has no devtools, so the terminal is the only
     /// place it can go, and having it go nowhere at all makes debugging a page
     /// in Zervo much harder than it needs to be.
+    /// HTTP authentication. This is the one place the engine asks the embedder
+    /// for credentials, so it is the one place a saved login can be used.
+    fn request_authentication(
+        &self,
+        _webview: WebView,
+        request: servo::AuthenticationRequest,
+    ) {
+        let host = request.url().host_str().unwrap_or_default().to_owned();
+        match self.vault.borrow().for_host(&host) {
+            Some((login, password)) => {
+                log::info!("using the saved login for {host}");
+                request.authenticate(login.username, password);
+            },
+            None => {
+                // Dropping it cancels, which is the safe answer: there is no
+                // dialog for this yet, and guessing is worse than failing.
+                log::info!("no saved login for {host}; not authenticating");
+            },
+        }
+    }
+
     fn show_console_message(
         &self,
         _webview: WebView,

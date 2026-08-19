@@ -60,8 +60,14 @@ Each of these is a delegate method or a `WebView` call away.
   `clear_session_cookies` and `clear_site_data`, and nothing in Settings calls
   them. Now that cookies persist, there is no way to get rid of them.
 - **Dropped files.** Dragging a file onto the window should open it.
+- **Extensions.** The button in the navigation bar is deliberately dead: the
+  engine has no extension support at all.
 - **`screen.availWidth`/`availHeight`** report the whole display rather than
   subtracting the menu bar and Dock.
+- **Filling passwords into web forms.** There is no embedder hook for a
+  submitted form and no way to write into a page's fields, so saved logins can
+  only be used for HTTP authentication. If Servo grows a credential API, that is
+  where filling would attach.
 - **Session restore.** Pure chrome work, no engine involvement: workspaces and
   tabs written out and read back at launch.
 

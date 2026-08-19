@@ -43,6 +43,10 @@ pub enum UiAction {
     RemoveFavourite(String),
     ForgetVisit(usize),
     ClearHistory,
+    SavePassword,
+    RemovePassword(String, String),
+    ExportPasswords,
+    ImportPasswords,
     ToggleSidebar,
     CancelDownload(u64),
     RemoveDownload(u64),
@@ -81,6 +85,8 @@ pub struct ChromeContext<'a> {
     pub controls: &'a mut crate::controls::Controls,
     /// Favourites and history.
     pub library: &'a mut crate::library::Library,
+    /// Saved logins.
+    pub vault: &'a mut crate::passwords::Vault,
     pub settings: &'a mut Settings,
     pub palette: Palette,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
@@ -2772,6 +2778,9 @@ fn draw_settings_page(
                         crate::state::SettingsSection::Customize => {
                             settings_customize(ui, chrome, &palette, actions)
                         },
+                        crate::state::SettingsSection::Passwords => {
+                            settings_passwords(ui, chrome, actions)
+                        },
                         crate::state::SettingsSection::About => settings_about(ui, &palette),
                     }
                     ui.add_space(18.0);
@@ -3093,6 +3102,125 @@ fn settings_customize(
             if widgets::toggle(ui, value, label, palette) {
                 actions.push(UiAction::SettingsChanged);
             }
+        }
+    });
+}
+
+/// Saved logins.
+///
+/// Deliberately plain about what this can and cannot do: Servo gives the
+/// embedder no way to see a submitted form or write into a page, so there is no
+/// autofill to offer and pretending otherwise would be worse than saying so.
+fn settings_passwords(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+) {
+    let palette = chrome.palette;
+
+    settings_section(ui, &palette, "Saved logins", |ui| {
+        ui.label(
+            RichText::new(
+                "Passwords are kept in your system keychain, never in Zervo's own files. \
+                 Zervo cannot fill them into web forms — the engine provides no way to \
+                 do that — but it does use them when a site asks for HTTP authentication.",
+            )
+            .size(12.0)
+            .color(palette.text_muted),
+        );
+        ui.add_space(10.0);
+
+        if chrome.vault.is_empty() {
+            ui.label(
+                RichText::new("Nothing saved yet.")
+                    .size(13.0)
+                    .color(palette.text_muted),
+            );
+        }
+        let logins: Vec<(String, String)> = chrome
+            .vault
+            .logins()
+            .iter()
+            .map(|login| (login.site.clone(), login.username.clone()))
+            .collect();
+        for (site, username) in logins {
+            let (row, response) =
+                ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+            if response.hovered() {
+                ui.painter()
+                    .rect_filled(row, CornerRadius::same(7), palette.surface_hover);
+            }
+            ui.painter().text(
+                pos2(row.min.x + 6.0, row.center().y),
+                Align2::LEFT_CENTER,
+                &site,
+                FontId::proportional(13.0),
+                palette.text,
+            );
+            ui.painter().text(
+                pos2(row.min.x + 6.0 + 170.0, row.center().y),
+                Align2::LEFT_CENTER,
+                &username,
+                FontId::proportional(12.5),
+                palette.text_muted,
+            );
+            let remove =
+                Rect::from_center_size(pos2(row.max.x - 14.0, row.center().y), vec2(18.0, 18.0));
+            icons::draw_icon(ui.painter(), remove.shrink(4.0), Icon::Trash, palette.text_muted);
+            if ui
+                .interact(remove, Id::new("zervo_pw_remove").with((&site, &username)), Sense::click())
+                .on_hover_text("Forget this login")
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .clicked()
+            {
+                actions.push(UiAction::RemovePassword(site.clone(), username.clone()));
+            }
+        }
+    });
+
+    ui.add_space(14.0);
+    settings_section(ui, &palette, "Add a login", |ui| {
+        let field = |ui: &mut Ui, label: &str, value: &mut String, secret: bool| {
+            ui.horizontal(|ui| {
+                ui.allocate_ui(vec2(90.0, 26.0), |ui| {
+                    ui.label(RichText::new(label).size(12.5).color(palette.text_muted));
+                });
+                ui.add(
+                    TextEdit::singleline(value)
+                        .password(secret)
+                        .font(FontId::proportional(13.0))
+                        .desired_width(ui.available_width().min(260.0)),
+                );
+            });
+        };
+        let draft = &mut chrome.browser.password_draft;
+        field(ui, "Site", &mut draft.0, false);
+        field(ui, "Username", &mut draft.1, false);
+        field(ui, "Password", &mut draft.2, true);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Save login").clicked() {
+                actions.push(UiAction::SavePassword);
+            }
+            ui.add_space(6.0);
+            if ui.button("Import…").clicked() {
+                actions.push(UiAction::ImportPasswords);
+            }
+            if ui
+                .button("Export…")
+                .on_hover_text("Writes every password to a plain, unencrypted file")
+                .clicked()
+            {
+                actions.push(UiAction::ExportPasswords);
+            }
+        });
+        if !chrome.browser.password_notice.is_empty() {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(chrome.browser.password_notice.clone())
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
         }
     });
 }

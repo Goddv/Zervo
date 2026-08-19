@@ -115,14 +115,16 @@ pub enum SettingsSection {
     Appearance,
     General,
     Customize,
+    Passwords,
     About,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 4] = [
+    pub const ALL: [SettingsSection; 5] = [
         SettingsSection::Appearance,
         SettingsSection::General,
         SettingsSection::Customize,
+        SettingsSection::Passwords,
         SettingsSection::About,
     ];
 
@@ -131,6 +133,7 @@ impl SettingsSection {
             SettingsSection::Appearance => "Appearance",
             SettingsSection::General => "General",
             SettingsSection::Customize => "Customize",
+            SettingsSection::Passwords => "Passwords",
             SettingsSection::About => "About",
         }
     }
@@ -151,6 +154,10 @@ pub struct BrowserState {
     pub editing_address: bool,
     /// Search box on the history page.
     pub history_query: String,
+    /// The half-typed login on the passwords page: site, username, password.
+    pub password_draft: (String, String, String),
+    /// What the passwords page last did, shown under the form.
+    pub password_notice: String,
     /// One-shot request for the address bar to grab keyboard focus (⌘L).
     pub focus_address: bool,
     /// Text in the zervo://newtab page's centered search box.
@@ -174,6 +181,8 @@ impl BrowserState {
             address_bar: initial_url.to_owned(),
             editing_address: false,
             history_query: String::new(),
+            password_draft: (String::new(), String::new(), String::new()),
+            password_notice: String::new(),
             focus_address: false,
             newtab_query: String::new(),
             settings_section: SettingsSection::Appearance,

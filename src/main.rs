@@ -13,6 +13,7 @@ mod glass;
 mod icons;
 mod keyboard;
 mod library;
+mod passwords;
 mod phosphor;
 mod settings;
 mod state;
@@ -217,6 +218,7 @@ impl ApplicationHandler<WakerEvent> for App {
             quit_requested: Cell::new(false),
             controls: RefCell::new(controls::Controls::default()),
             library: RefCell::new(library::Library::load()),
+            vault: RefCell::new(passwords::Vault::load()),
             visible_input_method: Cell::new(None),
             content_origin: Cell::new((0.0, 0.0)),
             #[cfg(feature = "engine-downloads")]
@@ -656,10 +658,12 @@ impl RunningApp {
             let mut browser = state.browser.borrow_mut();
             let mut controls = state.controls.borrow_mut();
             let mut library = state.library.borrow_mut();
+            let mut vault = state.vault.borrow_mut();
             let mut chrome = ui::ChromeContext {
                 browser: &mut browser,
                 controls: &mut controls,
                 library: &mut library,
+                vault: &mut vault,
                 settings: &mut settings,
                 palette,
                 favicons: &favicons,
@@ -669,6 +673,7 @@ impl RunningApp {
             drop(browser);
             drop(controls);
             drop(library);
+            drop(vault);
 
             let content_rect = output.content_rect;
             let scale = root.pixels_per_point();
@@ -877,6 +882,54 @@ impl RunningApp {
             UiAction::ToggleSidebar => {
                 let collapsed = state.browser.borrow().sidebar_collapsed;
                 state.browser.borrow_mut().sidebar_collapsed = !collapsed;
+                state.window.request_redraw();
+            },
+            UiAction::SavePassword => {
+                let (site, username, password) = {
+                    let browser = state.browser.borrow();
+                    browser.password_draft.clone()
+                };
+                let outcome = state.vault.borrow_mut().set(&site, &username, &password);
+                let mut browser = state.browser.borrow_mut();
+                browser.password_notice = match outcome {
+                    Ok(()) => {
+                        browser.password_draft = Default::default();
+                        format!("Saved the login for {site}.")
+                    },
+                    Err(why) => why,
+                };
+                state.window.request_redraw();
+            },
+            UiAction::RemovePassword(site, username) => {
+                state.vault.borrow_mut().remove(&site, &username);
+                state.window.request_redraw();
+            },
+            UiAction::ExportPasswords => {
+                let path = dirs::download_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("zervo-passwords.json");
+                let outcome = state.vault.borrow().export(&path);
+                state.browser.borrow_mut().password_notice = match outcome {
+                    Ok(count) => format!(
+                        "Exported {count} login(s) to {} — the file is not encrypted.",
+                        path.display()
+                    ),
+                    Err(why) => why,
+                };
+                state.window.request_redraw();
+            },
+            UiAction::ImportPasswords => {
+                let picked = state.pick_file();
+                let notice = match picked {
+                    Some(path) => match state.vault.borrow_mut().import(&path) {
+                        Ok(count) => format!("Imported {count} login(s)."),
+                        Err(why) => why,
+                    },
+                    None => String::new(),
+                };
+                if !notice.is_empty() {
+                    state.browser.borrow_mut().password_notice = notice;
+                }
                 state.window.request_redraw();
             },
             UiAction::OpenHistory => {
