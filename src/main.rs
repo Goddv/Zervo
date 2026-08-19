@@ -212,6 +212,8 @@ impl ApplicationHandler<WakerEvent> for App {
             favicons_dirty: Cell::new(false),
             quit_requested: Cell::new(false),
             controls: RefCell::new(controls::Controls::default()),
+            visible_input_method: Cell::new(None),
+            content_origin: Cell::new((0.0, 0.0)),
             #[cfg(feature = "engine-downloads")]
             download_events: RefCell::new(Vec::new()),
             last_window_title: RefCell::new(String::new()),
@@ -365,7 +367,7 @@ impl RunningApp {
                     }
                 });
             },
-            WindowEvent::KeyboardInput { .. }
+            WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..)
                 if !self
                     .egui_glow
                     .egui_ctx
@@ -403,6 +405,39 @@ impl RunningApp {
                         webview.notify_input_event(InputEvent::MouseLeftViewport(
                             MouseLeftViewportEvent::default(),
                         ));
+                    }
+                }
+            },
+            WindowEvent::Ime(ime) => {
+                use servo::{CompositionEvent, CompositionState, ImeEvent};
+                use winit::event::Ime;
+
+                if let Some(webview) = state.active_webview() {
+                    let composition = |state, data| {
+                        InputEvent::Ime(ImeEvent::Composition(CompositionEvent { state, data }))
+                    };
+                    match ime {
+                        Ime::Enabled => {
+                            webview.notify_input_event(composition(
+                                CompositionState::Start,
+                                String::new(),
+                            ));
+                        },
+                        Ime::Preedit(text, _) => {
+                            webview.notify_input_event(composition(CompositionState::Update, text));
+                        },
+                        Ime::Commit(text) => {
+                            webview.notify_input_event(composition(CompositionState::End, text));
+                        },
+                        // Either the user dismissed the input method, or we
+                        // withdrew it ourselves because focus moved. Only the
+                        // first should reach the page: reporting the second
+                        // blurs the element that has just been focused.
+                        Ime::Disabled => {
+                            if state.visible_input_method.take().is_some() {
+                                webview.notify_input_event(InputEvent::Ime(ImeEvent::Dismissed));
+                            }
+                        },
                     }
                 }
             },
@@ -683,6 +718,9 @@ impl RunningApp {
         let mut ambient = false;
         if let Some(output) = ui_output {
             self.content_rect_points = output.content_rect;
+            state
+                .content_origin
+                .set((output.content_rect.min.x, output.content_rect.min.y));
             self.overlay_rect_points = output.chrome_overlay;
             self.controls_open = output.controls_open;
             self.settings_open = output.settings_open;

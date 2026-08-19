@@ -71,6 +71,13 @@ pub struct AppState {
     pub quit_requested: Cell<bool>,
     /// Page-initiated UI (dialogs, pickers, context menus) awaiting an answer.
     pub controls: RefCell<Controls>,
+    /// The input method interface Servo currently wants shown, if any. Only a
+    /// dismissal of one we asked for should be reported back, or changing focus
+    /// blurs the element that just gained it.
+    pub visible_input_method: Cell<Option<servo::EmbedderControlId>>,
+    /// Top-left of the content card in window points, so positions the engine
+    /// reports relative to the webview can be placed on screen.
+    pub content_origin: Cell<(f32, f32)>,
     /// Download events from the engine, drained by the UI each redraw.
     #[cfg(feature = "engine-downloads")]
     pub download_events: RefCell<Vec<DownloadEvent>>,
@@ -260,6 +267,29 @@ impl AppState {
 }
 
 impl AppState {
+    /// Ask the OS for an input method, positioned over the element that wants
+    /// it so the candidate window follows the caret. Follows what servoshell,
+    /// Servo's own winit embedder, does.
+    fn show_input_method(&self, control: servo::InputMethodControl) {
+        use winit::dpi::{LogicalPosition, LogicalSize};
+
+        self.visible_input_method.set(Some(control.id()));
+        let position = control.position();
+        let scale = self.window.scale_factor() as f32;
+        let (left, top) = self.content_origin.get();
+        self.window.set_ime_allowed(true);
+        self.window.set_ime_cursor_area(
+            LogicalPosition::new(
+                left + position.min.x as f32 / scale,
+                top + position.min.y as f32 / scale,
+            ),
+            LogicalSize::new(
+                (position.max.x - position.min.x) as f32 / scale,
+                (position.max.y - position.min.y) as f32 / scale,
+            ),
+        );
+    }
+
     /// Answer a `<input type=file>` request with the system open panel.
     ///
     /// `runModal` blocks until the user is done, which is what the engine
@@ -438,12 +468,19 @@ impl servo::WebViewDelegate for AppState {
             // The file picker is the one control the OS draws better than we
             // can, and it has to be answered synchronously anyway.
             servo::EmbedderControl::FilePicker(picker) => self.run_file_picker(picker),
+            // Nothing to draw for an input method: it asks the OS for one, and
+            // the composition comes back as winit `Ime` events.
+            servo::EmbedderControl::InputMethod(control) => self.show_input_method(control),
             control => self.controls.borrow_mut().push(control),
         }
         self.window.request_redraw();
     }
 
     fn hide_embedder_control(&self, _webview: WebView, control_id: servo::EmbedderControlId) {
+        if self.visible_input_method.get() == Some(control_id) {
+            self.visible_input_method.set(None);
+            self.window.set_ime_allowed(false);
+        }
         self.controls.borrow_mut().hide(control_id);
         self.window.request_redraw();
     }
