@@ -6,6 +6,14 @@
 //! under the chrome. Tabs are one live `WebView` each, switched via
 //! show/focus + hide/blur.
 
+// A release build on Windows is a GUI application: without this it is a
+// console one, and launching the browser leaves a terminal window sitting
+// behind it. Debug builds keep the console, which is where the logs go.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod app;
 mod controls;
 mod dashboard;
