@@ -615,6 +615,7 @@ impl RunningApp {
                 !output.settings_open,
                 settings.top_glow,
                 settings.content_border,
+                settings.chrome_opacity,
             );
 
             ui_output = Some(output);

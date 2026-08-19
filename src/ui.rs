@@ -269,26 +269,13 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette) -> Rect {
     snap_rect(outer.shrink(theme::CONTENT_MARGIN), root.pixels_per_point())
 }
 
-/// A soft shadow hugging a rounded rect, built as a single gradient mesh.
+/// The rounded-rect outline as (point, outward normal).
 ///
-/// Concentric strokes are the obvious approach and the wrong one: each stroke
-/// has a hard edge, so a handful of them read as visible bands rather than a
-/// shadow. Interpolating vertex colours across a ring mesh gives a continuous
-/// falloff instead.
-fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: &Palette) {
-    /// How far the shadow reaches beyond the card, in points.
-    const SPREAD: f32 = 9.0;
-    /// Radial steps. The alpha curve is sampled at each, so this is what
-    /// decides smoothness; the cost is one thin quad ring per step.
-    const STEPS: usize = 10;
-    /// Points sampled along each corner arc.
-    const ARC_SEGMENTS: usize = 10;
-
-    // Outline of the rounded rect as (point, outward normal). Sampling the
-    // four corner arcs and joining them also yields the straight edges: an
-    // arc's endpoints sit exactly at the edge tangent points, and their
-    // normals are the edge normals.
-    let mut outline: Vec<(egui::Pos2, egui::Vec2)> = Vec::new();
+/// Sampling the four corner arcs and joining them also yields the straight
+/// edges: an arc's endpoints sit exactly at the edge tangent points, and their
+/// normals are the edge normals.
+fn card_outline(rect: Rect, radius: f32, arc_segments: usize) -> Vec<(egui::Pos2, egui::Vec2)> {
+    let mut outline = Vec::with_capacity(4 * (arc_segments + 1));
     let corners = [
         (pos2(rect.max.x - radius, rect.max.y - radius), 0.0_f32),
         (pos2(rect.min.x + radius, rect.max.y - radius), 0.5),
@@ -296,38 +283,85 @@ fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: 
         (pos2(rect.max.x - radius, rect.min.y + radius), 1.5),
     ];
     for (centre, quarter) in corners {
-        for segment in 0..=ARC_SEGMENTS {
+        for segment in 0..=arc_segments {
             let angle =
-                (quarter + segment as f32 / ARC_SEGMENTS as f32 * 0.5) * std::f32::consts::PI;
+                (quarter + segment as f32 / arc_segments as f32 * 0.5) * std::f32::consts::PI;
             let normal = vec2(angle.cos(), angle.sin());
             outline.push((centre + normal * radius, normal));
         }
     }
+    outline
+}
 
-    let base = palette.shadow.gamma_multiply(0.9);
+/// Extrude `outline` outwards as a ring mesh, colouring each radial step with
+/// `colour_at(t)` where `t` runs 0 (at the outline) to 1 (at `spread`).
+fn paint_outline_ring(
+    painter: &egui::Painter,
+    outline: &[(egui::Pos2, egui::Vec2)],
+    spread: f32,
+    steps: usize,
+    colour_at: impl Fn(f32) -> Color32,
+) {
     let mut mesh = Mesh::default();
-    for step in 0..=STEPS {
-        let t = step as f32 / STEPS as f32;
-        // Quadratic falloff: dense near the card, thinning outwards, which is
-        // close to how a real penumbra reads.
-        let alpha = (1.0 - t).powi(2);
-        let colour = base.gamma_multiply(alpha);
-        for (point, normal) in &outline {
-            mesh.colored_vertex(*point + *normal * (SPREAD * t), colour);
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let colour = colour_at(t);
+        for (point, normal) in outline {
+            mesh.colored_vertex(*point + *normal * (spread * t), colour);
         }
     }
-
     let ring = outline.len() as u32;
-    for step in 0..STEPS as u32 {
+    for step in 0..steps as u32 {
         for index in 0..ring {
             let next = (index + 1) % ring;
-            let inner = step * ring;
-            let outer = (step + 1) * ring;
+            let (inner, outer) = (step * ring, (step + 1) * ring);
             mesh.add_triangle(inner + index, inner + next, outer + next);
             mesh.add_triangle(inner + index, outer + next, outer + index);
         }
     }
     painter.add(Shape::mesh(mesh));
+}
+
+/// A soft shadow hugging a rounded rect.
+///
+/// Concentric strokes are the obvious approach and the wrong one: each stroke
+/// has a hard edge, so a handful of them read as visible bands rather than a
+/// shadow. Interpolating vertex colours across a ring mesh gives a continuous
+/// falloff instead.
+fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: &Palette) {
+    let outline = card_outline(rect, radius, 10);
+    let base = palette.shadow.gamma_multiply(0.9);
+    // Quadratic falloff, close to how a real penumbra reads.
+    paint_outline_ring(painter, &outline, 9.0, 10, |t| {
+        base.gamma_multiply((1.0 - t).powi(2))
+    });
+}
+
+/// Hide the seam between the opaque corner masks and translucent chrome.
+///
+/// The masks have to be opaque — they cover the square corners of the page
+/// blit, and anything less would let the page show through. But when the
+/// chrome is translucent, that leaves the card's *square* bounding box faintly
+/// visible as a patch of fully opaque chrome. Ramping the chrome to opaque
+/// along the card's rounded edge and fading back out moves that transition
+/// onto the rounded silhouette, where it belongs, and softens it.
+fn paint_card_opacity_blend(
+    painter: &egui::Painter,
+    rect: Rect,
+    radius: f32,
+    chrome: Color32,
+    chrome_opacity: f32,
+) {
+    if chrome_opacity >= 1.0 {
+        return; // Opaque chrome has no seam to hide.
+    }
+    let outline = card_outline(rect, radius, 10);
+    // Reach past the corner wedge — the furthest the square box sits from the
+    // arc is radius * (sqrt(2) - 1).
+    let spread = radius * 0.42 + 6.0;
+    paint_outline_ring(painter, &outline, spread, 8, |t| {
+        chrome.gamma_multiply((1.0 - t).powi(2))
+    });
 }
 
 /// Draw the rounded-corner masks and border over the (square) webview blit.
@@ -342,6 +376,7 @@ pub fn finish_content_frame(
     mask_corners: bool,
     top_glow: f32,
     border: bool,
+    chrome_opacity: f32,
 ) {
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     // The oversized fans must only bleed inward over the blit — clip them so
@@ -458,6 +493,14 @@ pub fn finish_content_frame(
     // Drop shadow, drawn AFTER the corner masks: filling it beforehand works
     // on internal pages but not on web pages, where the blit wipes the square
     // content rect and leaves unshadowed patches in the corners.
+    // Opacity blend first, so the shadow lies on top of it.
+    paint_card_opacity_blend(
+        &painter,
+        content_rect,
+        radius,
+        chrome_color_at(root, content_rect.center().y, palette, top_glow),
+        chrome_opacity,
+    );
     paint_card_shadow(&painter, content_rect, radius, palette);
 
     // Flat: a single accent-tinted edge all the way around the card — no
