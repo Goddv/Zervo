@@ -46,6 +46,7 @@ pub enum UiAction {
     AddWidget(crate::dashboard::WidgetKind),
     RemoveWidget(usize),
     MoveWidget { from: usize, to: usize },
+    ResizeWidget(usize, crate::dashboard::Size),
     MediaAction(servo::MediaSessionActionType),
     SavePassword,
     RemovePassword(String, String),
@@ -1186,7 +1187,7 @@ pub fn ellipsize(text: &str, limit: usize) -> String {
 }
 
 /// Keep a rect inside `bounds`.
-fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
+pub fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
     let mut min = rect.min;
     min.x = min.x.clamp(bounds.min.x + 8.0, (bounds.max.x - rect.width() - 8.0).max(bounds.min.x + 8.0));
     min.y = min.y.clamp(bounds.min.y + 8.0, (bounds.max.y - rect.height() - 8.0).max(bounds.min.y + 8.0));
@@ -1351,6 +1352,9 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                 crate::dashboard::Change::Move { from, to } => {
                     UiAction::MoveWidget { from, to }
                 },
+                crate::dashboard::Change::Resize(index, size) => {
+                    UiAction::ResizeWidget(index, size)
+                },
                 crate::dashboard::Change::Media(action) => UiAction::MediaAction(action),
             });
         }
@@ -1401,7 +1405,7 @@ fn navbar_resize(
     // heights worth resting at, so a release near either lands on it — the
     // shelf ends up uncovered rather than cut off mid-card. Anywhere else is
     // left alone, in case someone wants it there.
-    let uncovered = NAVBAR_ROW + crate::dashboard::SHELF_OPEN_HEIGHT + 6.0;
+    let uncovered = NAVBAR_ROW + crate::dashboard::open_height(&chrome.settings.navbar_widgets) + 6.0;
     let mut height = stored;
     if response.dragged() {
         height = (height + response.drag_delta().y).clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT);

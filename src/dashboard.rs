@@ -1,8 +1,9 @@
-//! The widget strip that a taller navigation bar uncovers.
+//! The widget shelf that a taller navigation bar uncovers.
 //!
-//! Widgets are laid out left to right, dragged to reorder, and added from a
-//! menu at the end of the row. Which ones are placed, and in what order, is
-//! remembered in the settings.
+//! Widgets sit on a grid. A widget is some number of cells wide and some
+//! number tall, or spans the shelf entirely in either direction, and is packed
+//! into the first place it fits. Sizes and order are remembered in the
+//! settings.
 //!
 //! The media widgets are not mock-ups: Servo reports media session metadata,
 //! playback state and position, and takes play/pause/track actions back, so
@@ -52,82 +53,225 @@ impl WidgetKind {
         }
     }
 
-    /// Fixed widths keep reordering predictable: a widget does not change size
-    /// depending on where it lands.
-    fn width(self) -> f32 {
+    /// What it is placed at before anyone resizes it.
+    pub fn default_size(self) -> Size {
         match self {
-            WidgetKind::Clock => 128.0,
-            WidgetKind::NowPlaying => 260.0,
-            WidgetKind::Transport => 150.0,
+            WidgetKind::Clock => Size::cells(2, 1),
+            WidgetKind::NowPlaying => Size::cells(4, 1),
+            WidgetKind::Transport => Size::cells(3, 1),
         }
     }
 }
 
-/// What the strip wants done, handed back rather than applied here so the
+/// One dimension of a widget: a number of cells, or the whole shelf.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Span {
+    Cells(u8),
+    Full,
+}
+
+impl Span {
+    fn label(self) -> String {
+        match self {
+            Span::Cells(n) => n.to_string(),
+            Span::Full => "full".to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct Size {
+    pub w: Span,
+    pub h: Span,
+}
+
+impl Size {
+    pub const fn cells(w: u8, h: u8) -> Self {
+        Size {
+            w: Span::Cells(w),
+            h: Span::Cells(h),
+        }
+    }
+
+    pub fn label(self) -> String {
+        format!("{}×{}", self.w.label(), self.h.label())
+    }
+
+    /// The sizes offered in the menu. Not every combination — a list nobody
+    /// can scan is worse than a short one, and the grid takes any pair.
+    pub const CHOICES: [Size; 9] = [
+        Size::cells(1, 1),
+        Size::cells(2, 1),
+        Size::cells(3, 1),
+        Size::cells(4, 1),
+        Size::cells(2, 2),
+        Size::cells(4, 2),
+        Size {
+            w: Span::Full,
+            h: Span::Cells(1),
+        },
+        Size {
+            w: Span::Full,
+            h: Span::Cells(2),
+        },
+        Size {
+            w: Span::Cells(2),
+            h: Span::Full,
+        },
+    ];
+}
+
+/// A widget placed on the shelf.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct Placed {
+    pub kind: WidgetKind,
+    pub size: Size,
+}
+
+impl Placed {
+    pub fn new(kind: WidgetKind) -> Self {
+        Placed {
+            kind,
+            size: kind.default_size(),
+        }
+    }
+
+    pub fn defaults() -> Vec<Placed> {
+        WidgetKind::ALL.iter().copied().map(Placed::new).collect()
+    }
+}
+
+/// What the shelf wants done, handed back rather than applied here so the
 /// settings stay the one place that owns the arrangement.
 pub enum Change {
     Add(WidgetKind),
     Remove(usize),
+    Resize(usize, Size),
     Move { from: usize, to: usize },
     Media(servo::MediaSessionActionType),
 }
 
+/// One grid cell, and the space between cells.
+const CELL: f32 = 52.0;
 const GAP: f32 = 10.0;
 const PAD: f32 = 6.0;
-/// Widgets are a fixed height, never stretched to whatever the shelf happens
-/// to be. Dragging reveals more of a card that keeps its size, the way a card
-/// slides out of a stack; a card that grows and shrinks with the drag reads as
-/// a rubber sheet instead.
-const WIDGET_HEIGHT: f32 = 52.0;
 
-/// The bar height at which the shelf shows a whole widget.
-pub const SHELF_OPEN_HEIGHT: f32 = WIDGET_HEIGHT + PAD * 2.0;
+fn extent(cells: u8) -> f32 {
+    cells as f32 * CELL + cells.saturating_sub(1) as f32 * GAP
+}
 
-/// Draw the strip into `area`. Returns whatever the user asked for.
+/// How many rows the arrangement needs. A `Full` height resolves to this, so a
+/// full-height widget is as tall as the tallest thing beside it.
+fn rows_needed(placed: &[Placed]) -> u8 {
+    placed
+        .iter()
+        .map(|widget| match widget.size.h {
+            Span::Cells(n) => n.max(1),
+            Span::Full => 1,
+        })
+        .max()
+        .unwrap_or(1)
+        .clamp(1, 4)
+}
+
+/// The bar height at which the shelf shows every row of this arrangement.
+pub fn open_height(placed: &[Placed]) -> f32 {
+    extent(rows_needed(placed)) + PAD * 2.0
+}
+
+/// Pack widgets into the grid: first place each one fits, scanning row by row.
+fn layout(placed: &[Placed], area: Rect) -> Vec<Rect> {
+    let rows = rows_needed(placed);
+    let inner = area.shrink(PAD);
+    let columns = (((inner.width() + GAP) / (CELL + GAP)).floor() as u8).max(1);
+
+    let mut taken = vec![false; columns as usize * rows as usize];
+    let mut rects = Vec::with_capacity(placed.len());
+
+    for widget in placed {
+        let width = match widget.size.w {
+            Span::Cells(n) => n.clamp(1, columns),
+            Span::Full => columns,
+        };
+        let height = match widget.size.h {
+            Span::Cells(n) => n.clamp(1, rows),
+            Span::Full => rows,
+        };
+
+        let mut found = None;
+        'search: for row in 0..=rows.saturating_sub(height) {
+            for column in 0..=columns.saturating_sub(width) {
+                let free = (0..height).all(|dy| {
+                    (0..width).all(|dx| {
+                        !taken[(row + dy) as usize * columns as usize + (column + dx) as usize]
+                    })
+                });
+                if free {
+                    found = Some((column, row));
+                    break 'search;
+                }
+            }
+        }
+        // Nowhere left: park it below, where the clip hides it. It still
+        // exists and still has its place in the settings.
+        let (column, row) = found.unwrap_or((0, rows));
+        for dy in 0..height {
+            for dx in 0..width {
+                if let Some(slot) =
+                    taken.get_mut((row + dy) as usize * columns as usize + (column + dx) as usize)
+                {
+                    *slot = true;
+                }
+            }
+        }
+        rects.push(Rect::from_min_size(
+            pos2(
+                inner.min.x + column as f32 * (CELL + GAP),
+                inner.min.y + row as f32 * (CELL + GAP),
+            ),
+            vec2(extent(width), extent(height)),
+        ));
+    }
+    rects
+}
+
+/// Draw the shelf into `area`. Returns whatever the user asked for.
 pub fn draw(
     root: &mut Ui,
     palette: &Palette,
     media: &Media,
-    placed: &[WidgetKind],
+    placed: &[Placed],
     area: Rect,
 ) -> Vec<Change> {
     let mut changes = Vec::new();
-    if area.height() < 24.0 {
+    if area.height() < 20.0 {
         return changes;
     }
 
     let ctx = root.ctx().clone();
     // Everything is clipped to the shelf, so a half-open one shows the top of
-    // a whole card rather than a squashed one — it is sliding out from under
-    // the controls, not being compressed by them.
+    // whole cards rather than squashed ones — it uncovers the strip rather
+    // than compressing it.
     let mut root = root.new_child(egui::UiBuilder::new().max_rect(area));
     root.set_clip_rect(area);
     let root = &mut root;
+
     let drag_id = Id::new("zervo_widget_drag");
+    let sizes_id = Id::new("zervo_widget_sizes");
     let dragging = ctx.data(|data| data.get_temp::<usize>(drag_id));
-
-    // Slots first, so a dragged widget knows where it would land.
-    let mut slots = Vec::new();
-    let mut x = area.min.x + PAD;
-    for kind in placed {
-        let rect = Rect::from_min_size(
-            pos2(x, area.min.y + PAD),
-            vec2(kind.width(), WIDGET_HEIGHT),
-        );
-        slots.push(rect);
-        x += kind.width() + GAP;
-    }
-
+    let slots = layout(placed, area);
     let pointer = ctx.input(|input| input.pointer.latest_pos());
-    // Where a drag would drop: the slot whose centre the pointer is nearest.
-    let target = pointer.map(|pos| {
+
+    // Where a drag would drop: the slot under the pointer, else the first one
+    // it has passed.
+    let target = pointer.and_then(|pos| {
         slots
             .iter()
-            .position(|slot| pos.x < slot.center().x)
-            .unwrap_or(slots.len().saturating_sub(1))
+            .position(|slot| slot.contains(pos))
+            .or_else(|| slots.iter().position(|slot| pos.x < slot.center().x))
     });
 
-    for (index, (kind, slot)) in placed.iter().zip(slots.iter()).enumerate() {
+    for (index, (widget, slot)) in placed.iter().zip(slots.iter()).enumerate() {
         let response = root.interact(*slot, drag_id.with(index), Sense::click_and_drag());
         let held = dragging == Some(index);
 
@@ -150,8 +294,6 @@ pub fn draw(
             });
         }
 
-        // A held widget follows the pointer; the gap it left stays open so it
-        // is obvious where it will land.
         let drawn = if held {
             slot.translate(vec2(
                 pointer.map(|pos| pos.x - slot.center().x).unwrap_or(0.0),
@@ -160,7 +302,6 @@ pub fn draw(
         } else {
             *slot
         };
-
         if held {
             root.painter().rect_stroke(
                 *slot,
@@ -170,9 +311,9 @@ pub fn draw(
             );
         }
 
-        draw_widget(root, palette, media, *kind, drawn, held, &mut changes);
+        draw_widget(root, palette, media, widget.kind, drawn, held, &mut changes);
 
-        // Remove on hover, in the corner, so it is never in the way.
+        // Remove and resize appear on hover, so they are never in the way.
         if response.hovered() && !held {
             let close = Rect::from_center_size(
                 pos2(drawn.max.x - 11.0, drawn.min.y + 11.0),
@@ -185,15 +326,47 @@ pub fn draw(
             {
                 changes.push(Change::Remove(index));
             }
+
+            let resize = Rect::from_center_size(
+                pos2(drawn.max.x - 11.0, drawn.max.y - 11.0),
+                vec2(16.0, 16.0),
+            );
+            icons::draw_icon(
+                root.painter(),
+                resize.shrink(3.0),
+                Icon::Sliders,
+                palette.text_muted,
+            );
+            if root
+                .interact(resize, drag_id.with(("size", index)), Sense::click())
+                .on_hover_text(format!("Size — {}", widget.size.label()))
+                .clicked()
+            {
+                ctx.data_mut(|data| data.insert_temp(sizes_id, index));
+            }
         }
     }
 
-    // ── The add tile, at the end of the row.
+    // ── The size menu, for whichever widget asked for one.
+    if let Some(index) = ctx.data(|data| data.get_temp::<usize>(sizes_id))
+        && let Some(slot) = slots.get(index)
+        && let Some(size) = draw_size_menu(root, palette, *slot, placed[index].size)
+    {
+        ctx.data_mut(|data| data.remove::<usize>(sizes_id));
+        changes.push(Change::Resize(index, size));
+    }
+
+    // ── The add tile, after the last widget.
+    let inner = area.shrink(PAD);
+    let after = slots.iter().map(|slot| slot.max.x).fold(inner.min.x, f32::max);
     let add = Rect::from_min_size(
-        pos2(x, area.min.y + PAD),
-        vec2(38.0, WIDGET_HEIGHT),
+        pos2(
+            if slots.is_empty() { inner.min.x } else { after + GAP },
+            inner.min.y,
+        ),
+        vec2(38.0, CELL),
     );
-    if add.max.x <= area.max.x - PAD {
+    if add.max.x <= inner.max.x {
         let response = root.interact(add, Id::new("zervo_widget_add"), Sense::click());
         let open_id = Id::new("zervo_widget_menu");
         let open = ctx.data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
@@ -226,18 +399,30 @@ pub fn draw(
     changes
 }
 
-fn draw_add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<WidgetKind> {
-    const ROW: f32 = 30.0;
-    let rect = Rect::from_min_size(
-        pos2(anchor.min.x, anchor.max.y + 6.0),
-        vec2(170.0, WidgetKind::ALL.len() as f32 * ROW + 12.0),
+/// A floating list, used for both menus.
+fn menu<T: Copy>(
+    root: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    anchor: Rect,
+    width: f32,
+    rows: &[(String, T, bool)],
+) -> Option<T> {
+    const ROW: f32 = 28.0;
+    let ctx = root.ctx().clone();
+    let rect = crate::ui::clamp_into(
+        Rect::from_min_size(
+            pos2(anchor.min.x, anchor.max.y + 6.0),
+            vec2(width, rows.len() as f32 * ROW + 12.0),
+        ),
+        ctx.content_rect(),
     );
     let mut chosen = None;
-    egui::Area::new(Id::new("zervo_widget_menu_area"))
+    egui::Area::new(Id::new(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)
-        .show(&root.ctx().clone(), |ui| {
+        .show(&ctx, |ui| {
             let painter = ui.painter();
             painter.rect_filled(rect, CornerRadius::same(10), palette.bg);
             for shape in glass::shapes(rect, palette, Glass::new(10)) {
@@ -249,13 +434,12 @@ fn draw_add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<Widge
                 Stroke::new(1.0_f32, palette.border),
                 StrokeKind::Inside,
             );
-            for (index, kind) in WidgetKind::ALL.iter().enumerate() {
+            for (index, (label, value, current)) in rows.iter().enumerate() {
                 let row = Rect::from_min_size(
                     pos2(rect.min.x + 6.0, rect.min.y + 6.0 + index as f32 * ROW),
                     vec2(rect.width() - 12.0, ROW),
                 );
-                let response =
-                    ui.interact(row, Id::new("zervo_widget_pick").with(index), Sense::click());
+                let response = ui.interact(row, Id::new(id).with(index), Sense::click());
                 if response.hovered() {
                     ui.painter()
                         .rect_filled(row, CornerRadius::same(7), palette.surface_hover);
@@ -263,17 +447,33 @@ fn draw_add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<Widge
                 ui.painter().text(
                     pos2(row.min.x + 8.0, row.center().y),
                     Align2::LEFT_CENTER,
-                    kind.label(),
+                    label,
                     FontId::proportional(13.0),
-                    palette.text,
+                    if *current { palette.accent } else { palette.text },
                 );
                 if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                    chosen = Some(*kind);
+                    chosen = Some(*value);
                 }
             }
             ui.advance_cursor_after_rect(rect);
         });
     chosen
+}
+
+fn draw_add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<WidgetKind> {
+    let rows: Vec<(String, WidgetKind, bool)> = WidgetKind::ALL
+        .iter()
+        .map(|kind| (kind.label().to_owned(), *kind, false))
+        .collect();
+    menu(root, palette, "zervo_widget_menu_area", anchor, 170.0, &rows)
+}
+
+fn draw_size_menu(root: &mut Ui, palette: &Palette, anchor: Rect, current: Size) -> Option<Size> {
+    let rows: Vec<(String, Size, bool)> = Size::CHOICES
+        .iter()
+        .map(|size| (size.label(), *size, *size == current))
+        .collect();
+    menu(root, palette, "zervo_widget_size_area", anchor, 120.0, &rows)
 }
 
 fn draw_widget(
@@ -297,24 +497,35 @@ fn draw_widget(
         painter.add(shape);
     }
 
+    // A one-cell widget has no room for two lines, so they show less rather
+    // than overflowing.
+    let roomy = rect.height() > CELL * 1.4;
+
     match kind {
         WidgetKind::Clock => {
             let now = chrono::Local::now();
             painter.text(
-                pos2(rect.center().x, rect.center().y - 8.0),
+                pos2(
+                    rect.center().x,
+                    rect.center().y - if roomy { 12.0 } else { 7.0 },
+                ),
                 Align2::CENTER_CENTER,
                 now.format("%H:%M").to_string(),
-                FontId::proportional(22.0),
+                FontId::proportional(if roomy { 30.0 } else { 21.0 }),
                 palette.text,
             );
             painter.text(
-                pos2(rect.center().x, rect.center().y + 12.0),
+                pos2(
+                    rect.center().x,
+                    rect.center().y + if roomy { 16.0 } else { 12.0 },
+                ),
                 Align2::CENTER_CENTER,
                 now.format("%a %-d %b").to_string(),
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
-            root.ctx().request_repaint_after(std::time::Duration::from_secs(20));
+            root.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(20));
         },
         WidgetKind::NowPlaying => {
             if media.is_idle() {
@@ -327,17 +538,19 @@ fn draw_widget(
                 );
                 return;
             }
+            // Text fits the card it was given rather than a fixed guess.
+            let chars = ((rect.width() - 24.0) / 7.0) as usize;
             painter.text(
-                pos2(rect.min.x + 12.0, rect.min.y + 14.0),
+                pos2(rect.min.x + 12.0, rect.min.y + 16.0),
                 Align2::LEFT_CENTER,
-                crate::ui::ellipsize(&media.title, 28),
+                crate::ui::ellipsize(&media.title, chars),
                 FontId::proportional(13.0),
                 palette.text,
             );
             painter.text(
-                pos2(rect.min.x + 12.0, rect.min.y + 31.0),
+                pos2(rect.min.x + 12.0, rect.min.y + 33.0),
                 Align2::LEFT_CENTER,
-                crate::ui::ellipsize(&media.artist, 30),
+                crate::ui::ellipsize(&media.artist, chars),
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
@@ -381,11 +594,8 @@ fn draw_widget(
                     Sense::click(),
                 );
                 if response.hovered() {
-                    root.painter().rect_filled(
-                        hit,
-                        CornerRadius::same(8),
-                        palette.surface_hover,
-                    );
+                    root.painter()
+                        .rect_filled(hit, CornerRadius::same(8), palette.surface_hover);
                 }
                 icons::draw_icon(
                     root.painter(),
@@ -397,9 +607,7 @@ fn draw_widget(
                         palette.text
                     },
                 );
-                if !media.is_idle()
-                    && response.on_hover_cursor(CursorIcon::PointingHand).clicked()
-                {
+                if !media.is_idle() && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                     changes.push(Change::Media(action));
                 }
             }
@@ -419,8 +627,6 @@ pub fn draw_grabber(painter: &egui::Painter, palette: &Palette, edge: Rect, emph
     painter.rect_filled(
         handle,
         CornerRadius::same(2),
-        palette
-            .text_muted
-            .gamma_multiply(0.25 + 0.45 * emphasis),
+        palette.text_muted.gamma_multiply(0.25 + 0.45 * emphasis),
     );
 }

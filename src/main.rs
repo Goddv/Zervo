@@ -937,7 +937,9 @@ impl RunningApp {
                 state.window.request_redraw();
             },
             UiAction::AddWidget(kind) => {
-                self.settings.navbar_widgets.push(kind);
+                self.settings
+                    .navbar_widgets
+                    .push(dashboard::Placed::new(kind));
                 self.settings.save();
                 state.window.request_redraw();
             },
@@ -953,6 +955,13 @@ impl RunningApp {
                 if from < widgets.len() && to < widgets.len() {
                     let moved = widgets.remove(from);
                     widgets.insert(to, moved);
+                    self.settings.save();
+                }
+                state.window.request_redraw();
+            },
+            UiAction::ResizeWidget(index, size) => {
+                if let Some(widget) = self.settings.navbar_widgets.get_mut(index) {
+                    widget.size = size;
                     self.settings.save();
                 }
                 state.window.request_redraw();
