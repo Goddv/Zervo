@@ -937,9 +937,10 @@ impl RunningApp {
                 state.window.request_redraw();
             },
             UiAction::AddWidget(kind) => {
-                self.settings
-                    .navbar_widgets
-                    .push(dashboard::Placed::new(kind));
+                let mut widget = dashboard::Placed::new(kind);
+                (widget.col, widget.row) =
+                    dashboard::free_cell(&self.settings.navbar_widgets, widget.size);
+                self.settings.navbar_widgets.push(widget);
                 self.settings.save();
                 state.window.request_redraw();
             },
@@ -954,6 +955,14 @@ impl RunningApp {
                 let widgets = &mut self.settings.navbar_widgets;
                 if a < widgets.len() && b < widgets.len() && a != b {
                     widgets.swap(a, b);
+                    self.settings.save();
+                }
+                state.window.request_redraw();
+            },
+            UiAction::PlaceWidget { index, col, row } => {
+                if let Some(widget) = self.settings.navbar_widgets.get_mut(index) {
+                    widget.col = col;
+                    widget.row = row;
                     self.settings.save();
                 }
                 state.window.request_redraw();
@@ -984,6 +993,11 @@ impl RunningApp {
                 if !url.is_empty() {
                     state.library.borrow_mut().toggle_favourite(&url, &title);
                 }
+                state.window.request_redraw();
+            },
+            UiAction::RenameFavourite(url, title) => {
+                state.library.borrow_mut().rename_favourite(&url, &title);
+                state.browser.borrow_mut().favourite_edit = None;
                 state.window.request_redraw();
             },
             UiAction::RemoveFavourite(url) => {

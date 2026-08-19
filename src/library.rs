@@ -205,6 +205,13 @@ impl Library {
         true
     }
 
+    pub fn rename_favourite(&mut self, url: &str, title: &str) {
+        if let Some(entry) = self.favourites.iter_mut().find(|entry| entry.url == url) {
+            entry.title = title.to_owned();
+            self.dirty = true;
+        }
+    }
+
     pub fn remove_favourite(&mut self, url: &str) {
         self.favourites.retain(|entry| entry.url != url);
         self.dirty = true;

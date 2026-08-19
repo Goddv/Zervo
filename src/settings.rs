@@ -153,6 +153,9 @@ pub struct Settings {
     pub sidebar_autohide: bool,
     /// Sidebar width in points, remembered across restarts when resized.
     pub sidebar_width: f32,
+    /// Show favourites as tiles rather than a list — shorter, and it copes
+    /// with a lot of them.
+    pub favourites_grid: bool,
     /// Width of the centred address pill in the navigation bar, in points.
     pub address_pill_width: f32,
     /// Widgets placed in the navigation bar's shelf, in order.
@@ -206,6 +209,7 @@ impl Default for Settings {
             compact_sidebar: false,
             sidebar_autohide: true,
             sidebar_width: crate::ui::SIDEBAR_DEFAULT_WIDTH,
+            favourites_grid: false,
             address_pill_width: crate::ui::ADDRESS_PILL_DEFAULT_WIDTH,
             navbar_height: crate::ui::NAVBAR_DEFAULT_HEIGHT,
             navbar_widgets: crate::dashboard::Placed::defaults(),

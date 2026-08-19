@@ -41,11 +41,13 @@ pub enum UiAction {
     /// Add or remove the active page from favourites.
     ToggleFavourite,
     RemoveFavourite(String),
+    RenameFavourite(String, String),
     ForgetVisit(usize),
     ClearHistory,
     AddWidget(crate::dashboard::WidgetKind),
     RemoveWidget(usize),
     SwapWidgets(usize, usize),
+    PlaceWidget { index: usize, col: u8, row: u8 },
     ResizeWidget(usize, crate::dashboard::Size),
     MediaAction(servo::MediaSessionActionType),
     SavePassword,
@@ -1055,34 +1057,50 @@ fn draw_favourite_star(
     rect
 }
 
-/// Hovering the star grows it into a card listing the favourites, rather than
-/// spending a whole bar on them. Anchored under the star and dismissed when the
-/// pointer leaves both.
+/// Hovering the star opens a card of the favourites, rather than spending a
+/// whole bar on them.
+///
+/// It grows from just under the star, never over it: an animating card that
+/// overlaps its own trigger swallows the click that opened it, which is why
+/// the star stopped responding once this existed. For the same reason the card
+/// only takes input once it has finished growing.
 fn draw_favourites_card(
     root: &mut Ui,
     chrome: &mut ChromeContext,
     actions: &mut Vec<UiAction>,
     star: Rect,
 ) {
-    const ROW: f32 = 30.0;
+    const ROW: f32 = 32.0;
+    const TILE: f32 = 62.0;
 
     let ctx = root.ctx().clone();
     let id = Id::new("zervo_favourites_card");
     let pointer = ctx.input(|input| input.pointer.latest_pos());
     let was_open = ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
 
-    let rows = chrome.library.favourites.len().clamp(1, 12) as f32;
+    let grid = chrome.settings.favourites_grid;
+    let count = chrome.library.favourites.len().max(1);
+    let (width, height) = if grid {
+        let columns = 4;
+        let rows = count.div_ceil(columns).clamp(1, 4) as f32;
+        (columns as f32 * TILE + 20.0, rows * TILE + 46.0)
+    } else {
+        (280.0, count.clamp(1, 10) as f32 * ROW + 46.0)
+    };
     let card = clamp_into(
         Rect::from_min_size(
-            pos2(star.center().x - 130.0, star.max.y + 8.0),
-            vec2(260.0, rows * ROW + 20.0),
+            pos2(star.center().x - width / 2.0, star.max.y + 6.0),
+            vec2(width, height),
         ),
         ctx.content_rect(),
     );
 
-    // The gap between star and card counts as "still hovering", or the card
+    // The gap between star and card counts as still hovering, or the card
     // closes in the space between them.
-    let bridge = Rect::from_min_max(star.min, pos2(card.max.x.max(star.max.x), card.min.y));
+    let bridge = Rect::from_min_max(
+        pos2(star.min.x.min(card.min.x), star.max.y),
+        pos2(star.max.x.max(card.min.x + 40.0), card.min.y + 2.0),
+    );
     let open = pointer.is_some_and(|pos| {
         star.contains(pos) || (was_open && (card.expand(6.0).contains(pos) || bridge.contains(pos)))
     });
@@ -1092,12 +1110,13 @@ fn draw_favourites_card(
     if grow <= 0.0 {
         return;
     }
-
-    // Grow out of the star rather than appear: the star is the card, smaller.
+    // Grows downward out of the star's underside, so it never covers it.
     let drawn = Rect::from_min_size(
-        star.center().lerp(card.min, grow),
-        (star.size() * (1.0 - grow)) + (card.size() * grow),
+        card.min,
+        vec2(card.width(), (card.height() * grow).max(1.0)),
     );
+    let settled = grow > 0.98;
+
     let palette = chrome.palette;
     let favourites: Vec<(String, String)> = chrome
         .library
@@ -1105,77 +1124,243 @@ fn draw_favourites_card(
         .iter()
         .map(|entry| (entry.url.clone(), entry.title.clone()))
         .collect();
+    let editing = chrome.browser.favourite_edit.clone();
+
+    let mut toggle_layout = false;
+    let mut edit: Option<Option<(String, String)>> = None;
 
     egui::Area::new(id.with("area"))
         .order(egui::Order::Foreground)
         .fixed_pos(drawn.min)
         .constrain(false)
+        // Not interactive until it has arrived: a growing card under the
+        // pointer steals clicks meant for what is behind it.
+        .interactable(settled)
         .show(&ctx, |ui| {
+            ui.set_clip_rect(drawn);
             let painter = ui.painter();
-            painter.rect_filled(drawn, CornerRadius::same(12), palette.bg);
-            for shape in glass::shapes(drawn, &palette, Glass::new(12)) {
+            painter.rect_filled(card, CornerRadius::same(12), palette.bg);
+            for shape in glass::shapes(card, &palette, Glass::new(12)) {
                 painter.add(shape);
             }
             painter.rect_stroke(
-                drawn,
+                card,
                 CornerRadius::same(12),
                 Stroke::new(1.0_f32, palette.border),
                 StrokeKind::Inside,
             );
-            // Only draw the contents once it is close to full size, or the
-            // text squashes while it grows.
-            if grow < 0.85 {
+            if !settled {
                 ui.advance_cursor_after_rect(drawn);
                 return;
             }
-            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(drawn.shrink(10.0)));
+
+            // ── Header: what this is, and how to show it.
+            let header = Rect::from_min_size(card.min + vec2(12.0, 8.0), vec2(card.width() - 24.0, 20.0));
+            ui.painter().text(
+                header.left_center(),
+                Align2::LEFT_CENTER,
+                "Favourites",
+                FontId::proportional(11.5),
+                palette.text_muted,
+            );
+            let switch = Rect::from_center_size(
+                pos2(header.max.x - 9.0, header.center().y),
+                vec2(18.0, 18.0),
+            );
+            icons::draw_icon(
+                ui.painter(),
+                switch.shrink(3.0),
+                if grid { Icon::Sidebar } else { Icon::Browser },
+                palette.text_muted,
+            );
+            if ui
+                .interact(switch, id.with("layout"), Sense::click())
+                .on_hover_text(if grid { "Show as a list" } else { "Show as tiles" })
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .clicked()
+            {
+                toggle_layout = true;
+            }
+
+            let body = Rect::from_min_max(
+                pos2(card.min.x + 10.0, card.min.y + 34.0),
+                card.max - vec2(10.0, 8.0),
+            );
             if favourites.is_empty() {
-                body.painter().text(
-                    drawn.shrink(10.0).left_top() + vec2(4.0, 10.0),
+                ui.painter().text(
+                    body.left_top() + vec2(4.0, 12.0),
                     Align2::LEFT_TOP,
                     "Nothing saved yet — the star adds this page.",
-                    FontId::proportional(12.5),
+                    FontId::proportional(12.0),
                     palette.text_muted,
                 );
+                ui.advance_cursor_after_rect(drawn);
+                return;
             }
-            for (url, title) in &favourites {
-                let (row, response) = body
-                    .allocate_exact_size(vec2(body.available_width(), ROW), Sense::click());
-                if response.hovered() {
-                    body.painter()
-                        .rect_filled(row, CornerRadius::same(7), palette.surface_hover);
+
+            if grid {
+                for (index, (url, title)) in favourites.iter().enumerate() {
+                    let column = index % 4;
+                    let row = index / 4;
+                    let tile = Rect::from_min_size(
+                        body.min + vec2(column as f32 * TILE, row as f32 * TILE),
+                        vec2(TILE - 6.0, TILE - 6.0),
+                    );
+                    if tile.max.y > body.max.y {
+                        break;
+                    }
+                    let response = ui.interact(tile, id.with(("tile", index)), Sense::click());
+                    if response.hovered() {
+                        ui.painter()
+                            .rect_filled(tile, CornerRadius::same(9), palette.surface_hover);
+                    }
+                    // No favicon store yet, so the initial stands in for one.
+                    let badge = Rect::from_center_size(
+                        pos2(tile.center().x, tile.min.y + 20.0),
+                        vec2(26.0, 26.0),
+                    );
+                    ui.painter()
+                        .rect_filled(badge, CornerRadius::same(7), palette.accent.gamma_multiply(0.22));
+                    ui.painter().text(
+                        badge.center(),
+                        Align2::CENTER_CENTER,
+                        initial(title, url),
+                        FontId::proportional(13.0),
+                        palette.accent,
+                    );
+                    ui.painter().text(
+                        pos2(tile.center().x, tile.max.y - 12.0),
+                        Align2::CENTER_CENTER,
+                        ellipsize(display_name(title, url), 9),
+                        FontId::proportional(10.5),
+                        palette.text,
+                    );
+                    if response.hovered() {
+                        let close = Rect::from_center_size(
+                            pos2(tile.max.x - 8.0, tile.min.y + 8.0),
+                            vec2(14.0, 14.0),
+                        );
+                        icons::draw_icon(ui.painter(), close.shrink(2.0), Icon::Close, palette.text_muted);
+                        if ui.interact(close, id.with(("gx", index)), Sense::click()).clicked() {
+                            actions.push(UiAction::RemoveFavourite(url.clone()));
+                        }
+                    }
+                    if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        actions.push(UiAction::Navigate(url.clone()));
+                    }
                 }
-                icons::draw_icon(
-                    body.painter(),
-                    Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(13.0, 13.0)),
-                    Icon::Globe,
-                    palette.text_muted,
-                );
-                body.painter().text(
-                    pos2(row.min.x + 28.0, row.center().y),
-                    Align2::LEFT_CENTER,
-                    ellipsize(title, 26),
-                    FontId::proportional(13.0),
-                    palette.text,
-                );
-                // A small x on hover, rather than a permanent one on every row.
-                let remove = Rect::from_center_size(
-                    pos2(row.max.x - 12.0, row.center().y),
-                    vec2(16.0, 16.0),
-                );
-                if response.hovered() {
-                    icons::draw_icon(body.painter(), remove.shrink(3.0), Icon::Close, palette.text_muted);
-                }
-                let remove_response =
-                    body.interact(remove, id.with(("remove", url)), Sense::click());
-                if remove_response.clicked() {
-                    actions.push(UiAction::RemoveFavourite(url.clone()));
-                } else if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                    actions.push(UiAction::Navigate(url.clone()));
+            } else {
+                for (index, (url, title)) in favourites.iter().enumerate() {
+                    let row = Rect::from_min_size(
+                        pos2(body.min.x, body.min.y + index as f32 * ROW),
+                        vec2(body.width(), ROW - 2.0),
+                    );
+                    if row.max.y > body.max.y {
+                        break;
+                    }
+                    let being_edited = editing.as_ref().is_some_and(|(at, _)| at == url);
+                    let response = ui.interact(row, id.with(("row", index)), Sense::click());
+                    if response.hovered() && !being_edited {
+                        ui.painter()
+                            .rect_filled(row, CornerRadius::same(8), palette.surface_hover);
+                    }
+                    icons::draw_icon(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(13.0, 13.0)),
+                        Icon::Globe,
+                        palette.text_muted,
+                    );
+
+                    if being_edited {
+                        let field = Rect::from_min_max(
+                            pos2(row.min.x + 28.0, row.min.y + 2.0),
+                            pos2(row.max.x - 8.0, row.max.y - 2.0),
+                        );
+                        let mut draft = editing.as_ref().map(|(_, name)| name.clone()).unwrap_or_default();
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+                        let editor = child.add_sized(
+                            field.size(),
+                            TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
+                        );
+                        editor.request_focus();
+                        edit = Some(Some((url.clone(), draft.clone())));
+                        if editor.lost_focus() {
+                            if child.input(|input| input.key_pressed(Key::Enter)) {
+                                actions.push(UiAction::RenameFavourite(url.clone(), draft));
+                            }
+                            edit = Some(None);
+                        }
+                        continue;
+                    }
+
+                    ui.painter().text(
+                        pos2(row.min.x + 28.0, row.center().y),
+                        Align2::LEFT_CENTER,
+                        ellipsize(display_name(title, url), 24),
+                        FontId::proportional(13.0),
+                        palette.text,
+                    );
+                    if response.hovered() {
+                        let rename = Rect::from_center_size(
+                            pos2(row.max.x - 30.0, row.center().y),
+                            vec2(18.0, 18.0),
+                        );
+                        icons::draw_icon(ui.painter(), rename.shrink(3.0), Icon::Sliders, palette.text_muted);
+                        if ui
+                            .interact(rename, id.with(("edit", index)), Sense::click())
+                            .on_hover_text("Rename")
+                            .clicked()
+                        {
+                            edit = Some(Some((url.clone(), title.clone())));
+                        }
+                        let close = Rect::from_center_size(
+                            pos2(row.max.x - 10.0, row.center().y),
+                            vec2(18.0, 18.0),
+                        );
+                        icons::draw_icon(ui.painter(), close.shrink(3.0), Icon::Close, palette.text_muted);
+                        if ui
+                            .interact(close, id.with(("x", index)), Sense::click())
+                            .on_hover_text("Remove")
+                            .clicked()
+                        {
+                            actions.push(UiAction::RemoveFavourite(url.clone()));
+                        }
+                    }
+                    if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        actions.push(UiAction::Navigate(url.clone()));
+                    }
                 }
             }
             ui.advance_cursor_after_rect(drawn);
         });
+
+    if toggle_layout {
+        chrome.settings.favourites_grid = !grid;
+        actions.push(UiAction::PersistSettings);
+    }
+    if let Some(next) = edit {
+        chrome.browser.favourite_edit = next;
+    }
+}
+
+/// A saved page's name, falling back to its host when it has no title.
+fn display_name<'a>(title: &'a str, url: &'a str) -> &'a str {
+    if !title.is_empty() {
+        return title;
+    }
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(url)
+}
+
+/// Stands in for a favicon, which is not stored anywhere yet.
+fn initial(title: &str, url: &str) -> String {
+    display_name(title, url)
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_owned())
 }
 
 /// Shorten to `limit` characters on a character boundary, with an ellipsis.
@@ -1350,6 +1535,9 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                 crate::dashboard::Change::Add(kind) => UiAction::AddWidget(kind),
                 crate::dashboard::Change::Remove(index) => UiAction::RemoveWidget(index),
                 crate::dashboard::Change::Swap { a, b } => UiAction::SwapWidgets(a, b),
+                crate::dashboard::Change::Place { index, col, row } => {
+                    UiAction::PlaceWidget { index, col, row }
+                },
                 crate::dashboard::Change::Resize(index, size) => {
                     UiAction::ResizeWidget(index, size)
                 },

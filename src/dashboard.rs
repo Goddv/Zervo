@@ -126,6 +126,13 @@ impl Size {
 pub struct Placed {
     pub kind: WidgetKind,
     pub size: Size,
+    /// Where it sits on the grid. Explicit rather than packed, so a widget can
+    /// be put at the bottom of the shelf without having to fill the rows above
+    /// it first.
+    #[serde(default)]
+    pub col: u8,
+    #[serde(default)]
+    pub row: u8,
 }
 
 impl Placed {
@@ -133,11 +140,19 @@ impl Placed {
         Placed {
             kind,
             size: kind.default_size(),
+            col: 0,
+            row: 0,
         }
     }
 
     pub fn defaults() -> Vec<Placed> {
-        WidgetKind::ALL.iter().copied().map(Placed::new).collect()
+        let mut placed: Vec<Placed> = Vec::new();
+        for kind in WidgetKind::ALL {
+            let mut widget = Placed::new(kind);
+            (widget.col, widget.row) = free_cell(&placed, widget.size);
+            placed.push(widget);
+        }
+        placed
     }
 }
 
@@ -148,6 +163,7 @@ pub enum Change {
     Remove(usize),
     Resize(usize, Size),
     Swap { a: usize, b: usize },
+    Place { index: usize, col: u8, row: u8 },
     Media(servo::MediaSessionActionType),
 }
 
@@ -165,13 +181,65 @@ fn extent(cells: u8) -> f32 {
 fn rows_needed(placed: &[Placed]) -> u8 {
     placed
         .iter()
-        .map(|widget| match widget.size.h {
-            Span::Cells(n) => n.max(1),
-            Span::Full => 1,
+        .map(|widget| {
+            widget.row
+                + match widget.size.h {
+                    Span::Cells(n) => n.max(1),
+                    Span::Full => 1,
+                }
         })
         .max()
         .unwrap_or(1)
         .clamp(1, 4)
+}
+
+/// Cells a widget of `size` occupies at a position, for collision checks.
+fn footprint(widget: &Placed, columns: u8, rows: u8) -> (u8, u8, u8, u8) {
+    let width = match widget.size.w {
+        Span::Cells(n) => n.clamp(1, columns),
+        Span::Full => columns,
+    };
+    let height = match widget.size.h {
+        Span::Cells(n) => n.clamp(1, rows),
+        Span::Full => rows,
+    };
+    (
+        widget.col.min(columns.saturating_sub(width)),
+        widget.row.min(rows.saturating_sub(height)),
+        width,
+        height,
+    )
+}
+
+/// The first cell a new widget fits in, so adding one does not drop it on top
+/// of something else.
+pub fn free_cell(placed: &[Placed], size: Size) -> (u8, u8) {
+    const COLUMNS: u8 = 12;
+    let rows = 4;
+    let width = match size.w {
+        Span::Cells(n) => n.clamp(1, COLUMNS),
+        Span::Full => COLUMNS,
+    };
+    let height = match size.h {
+        Span::Cells(n) => n.clamp(1, rows),
+        Span::Full => 1,
+    };
+    for row in 0..=rows.saturating_sub(height) {
+        'next: for col in 0..=COLUMNS.saturating_sub(width) {
+            for other in placed {
+                let (ocol, orow, owidth, oheight) = footprint(other, COLUMNS, rows);
+                let overlaps = col < ocol + owidth
+                    && ocol < col + width
+                    && row < orow + oheight
+                    && orow < row + height;
+                if overlaps {
+                    continue 'next;
+                }
+            }
+            return (col, row);
+        }
+    }
+    (0, 0)
 }
 
 /// The bar height at which the shelf shows every row of this arrangement.
@@ -179,60 +247,53 @@ pub fn open_height(placed: &[Placed]) -> f32 {
     extent(rows_needed(placed)) + PAD * 2.0
 }
 
-/// Pack widgets into the grid: first place each one fits, scanning row by row.
+/// Where each widget sits, from its own coordinates. Nothing is packed: a
+/// widget stays where it was put.
+fn visible_rows(area: Rect) -> u8 {
+    let inner = area.shrink(PAD);
+    (((inner.height() + GAP) / (CELL + GAP)).floor() as u8).clamp(1, 4)
+}
+
+fn grid_rows(placed: &[Placed], area: Rect) -> u8 {
+    rows_needed(placed).max(visible_rows(area))
+}
+
 fn layout(placed: &[Placed], area: Rect) -> Vec<Rect> {
-    let rows = rows_needed(placed);
+    let rows = grid_rows(placed, area);
     let inner = area.shrink(PAD);
     let columns = (((inner.width() + GAP) / (CELL + GAP)).floor() as u8).max(1);
 
-    let mut taken = vec![false; columns as usize * rows as usize];
-    let mut rects = Vec::with_capacity(placed.len());
+    placed
+        .iter()
+        .map(|widget| {
+            let (col, row, width, height) = footprint(widget, columns, rows);
+            Rect::from_min_size(
+                pos2(
+                    inner.min.x + col as f32 * (CELL + GAP),
+                    inner.min.y + row as f32 * (CELL + GAP),
+                ),
+                vec2(extent(width), extent(height)),
+            )
+        })
+        .collect()
+}
 
-    for widget in placed {
-        let width = match widget.size.w {
-            Span::Cells(n) => n.clamp(1, columns),
-            Span::Full => columns,
-        };
-        let height = match widget.size.h {
-            Span::Cells(n) => n.clamp(1, rows),
-            Span::Full => rows,
-        };
-
-        let mut found = None;
-        'search: for row in 0..=rows.saturating_sub(height) {
-            for column in 0..=columns.saturating_sub(width) {
-                let free = (0..height).all(|dy| {
-                    (0..width).all(|dx| {
-                        !taken[(row + dy) as usize * columns as usize + (column + dx) as usize]
-                    })
-                });
-                if free {
-                    found = Some((column, row));
-                    break 'search;
-                }
-            }
-        }
-        // Nowhere left: park it below, where the clip hides it. It still
-        // exists and still has its place in the settings.
-        let (column, row) = found.unwrap_or((0, rows));
-        for dy in 0..height {
-            for dx in 0..width {
-                if let Some(slot) =
-                    taken.get_mut((row + dy) as usize * columns as usize + (column + dx) as usize)
-                {
-                    *slot = true;
-                }
-            }
-        }
-        rects.push(Rect::from_min_size(
-            pos2(
-                inner.min.x + column as f32 * (CELL + GAP),
-                inner.min.y + row as f32 * (CELL + GAP),
-            ),
-            vec2(extent(width), extent(height)),
-        ));
-    }
-    rects
+/// The cell the pointer is over, clamped so the widget stays on the grid.
+fn cell_at(area: Rect, pos: egui::Pos2, size: Size, columns: u8, rows: u8) -> (u8, u8) {
+    let inner = area.shrink(PAD);
+    let width = match size.w {
+        Span::Cells(n) => n.clamp(1, columns),
+        Span::Full => columns,
+    };
+    let height = match size.h {
+        Span::Cells(n) => n.clamp(1, rows),
+        Span::Full => rows,
+    };
+    let col = (((pos.x - inner.min.x) / (CELL + GAP)).round() as i32)
+        .clamp(0, columns.saturating_sub(width) as i32) as u8;
+    let row = (((pos.y - inner.min.y) / (CELL + GAP)).round() as i32)
+        .clamp(0, rows.saturating_sub(height) as i32) as u8;
+    (col, row)
 }
 
 /// Draw the shelf into `area`. Returns whatever the user asked for.
@@ -265,30 +326,76 @@ pub fn draw(
     // The widget under the pointer is the one that would be swapped with.
     // Nothing under the pointer means nothing happens, which is easier to
     // predict than a drop that lands somewhere by proximity.
-    let target = match (dragging, pointer) {
-        (Some(held), Some(pos)) => slots
-            .iter()
-            .position(|slot| slot.contains(pos))
-            .filter(|over| *over != held),
+    let inner = area.shrink(PAD);
+    let columns = (((inner.width() + GAP) / (CELL + GAP)).floor() as u8).max(1);
+    let rows = grid_rows(placed, area);
+
+    // Where a held widget would land: the cell under the pointer, snapped.
+    // Free placement, so it can go anywhere on the shelf — including a row
+    // with nothing above it.
+    let snap = match (dragging, pointer) {
+        (Some(held), Some(pos)) => placed.get(held).map(|widget| {
+            let (col, row) = cell_at(area, pos - vec2(CELL, CELL) / 2.0, widget.size, columns, rows);
+            let (_, _, width, height) = footprint(
+                &Placed { col, row, ..*widget },
+                columns,
+                rows,
+            );
+            (
+                col,
+                row,
+                Rect::from_min_size(
+                    pos2(
+                        inner.min.x + col as f32 * (CELL + GAP),
+                        inner.min.y + row as f32 * (CELL + GAP),
+                    ),
+                    vec2(extent(width), extent(height)),
+                ),
+            )
+        }),
         _ => None,
     };
 
-    // Both slots involved in a swap, outlined so the exchange is visible
-    // before it happens.
-    if let (Some(held), Some(over)) = (dragging, target) {
-        for slot in [slots.get(held), slots.get(over)].into_iter().flatten() {
-            root.painter().rect_filled(
-                *slot,
-                CornerRadius::same(10),
-                palette.accent.gamma_multiply(0.08),
+    // Anything already sitting where it would land gets traded with.
+    let target = match (dragging, snap) {
+        (Some(held), Some((col, row, _))) => {
+            let (_, _, width, height) = footprint(
+                &Placed {
+                    col,
+                    row,
+                    ..placed[held]
+                },
+                columns,
+                rows,
             );
-            root.painter().rect_stroke(
-                *slot,
-                CornerRadius::same(10),
-                Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
-                StrokeKind::Inside,
-            );
-        }
+            placed.iter().enumerate().position(|(index, other)| {
+                if index == held {
+                    return false;
+                }
+                let (ocol, orow, owidth, oheight) = footprint(other, columns, rows);
+                col < ocol + owidth
+                    && ocol < col + width
+                    && row < orow + oheight
+                    && orow < row + height
+            })
+        },
+        _ => None,
+    };
+
+    // The surface the widget would take, outlined with a thin line. Shown
+    // wherever it would land, whether or not anything is there.
+    if let Some((_, _, destination)) = snap {
+        root.painter().rect_filled(
+            destination,
+            CornerRadius::same(10),
+            palette.accent.gamma_multiply(0.08),
+        );
+        root.painter().rect_stroke(
+            destination,
+            CornerRadius::same(10),
+            Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
+            StrokeKind::Inside,
+        );
     }
 
     let mut held_later = None;
@@ -301,8 +408,12 @@ pub fn draw(
         }
         if held && response.drag_stopped() {
             ctx.data_mut(|data| data.remove::<usize>(drag_id));
-            if let Some(over) = target {
-                changes.push(Change::Swap { a: index, b: over });
+            match (target, snap) {
+                (Some(over), _) => changes.push(Change::Swap { a: index, b: over }),
+                (None, Some((col, row, _))) => {
+                    changes.push(Change::Place { index, col, row })
+                },
+                _ => {},
             }
         }
         if response.hovered() || held {
@@ -313,13 +424,12 @@ pub fn draw(
             });
         }
 
-        let drawn = if held {
-            slot.translate(vec2(
-                pointer.map(|pos| pos.x - slot.center().x).unwrap_or(0.0),
-                0.0,
-            ))
-        } else {
-            *slot
+        let drawn = match (held, pointer) {
+            (true, Some(pos)) => Rect::from_min_size(
+                pos - vec2(CELL, CELL) / 2.0,
+                slot.size(),
+            ),
+            _ => *slot,
         };
         if held {
             held_later = Some((widget.kind, drawn));

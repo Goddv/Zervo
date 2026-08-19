@@ -152,6 +152,8 @@ pub struct BrowserState {
     /// True while the address bar has focus and the user is editing it, so we
     /// don't clobber their typing with engine-driven URL updates.
     pub editing_address: bool,
+    /// The favourite being renamed, and the name so far.
+    pub favourite_edit: Option<(String, String)>,
     /// Search box on the history page.
     pub history_query: String,
     /// The half-typed login on the passwords page: site, username, password.
@@ -180,6 +182,7 @@ impl BrowserState {
             active_tab: None,
             address_bar: initial_url.to_owned(),
             editing_address: false,
+            favourite_edit: None,
             history_query: String::new(),
             password_draft: (String::new(), String::new(), String::new()),
             password_notice: String::new(),
