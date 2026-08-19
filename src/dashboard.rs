@@ -171,6 +171,15 @@ pub enum Change {
 const CELL: f32 = 52.0;
 const GAP: f32 = 10.0;
 const PAD: f32 = 6.0;
+/// The most rows the shelf will ever offer.
+pub const MAX_ROWS: u8 = 4;
+
+/// The shelf height that shows `rows` whole rows. The bar's limits are derived
+/// from this rather than guessed, so the tallest bar always fits a whole number
+/// of rows instead of ending part-way through one.
+pub const fn height_for_rows(rows: u8) -> f32 {
+    rows as f32 * CELL + (rows as f32 - 1.0) * GAP + PAD * 2.0
+}
 
 fn extent(cells: u8) -> f32 {
     cells as f32 * CELL + cells.saturating_sub(1) as f32 * GAP
@@ -190,7 +199,7 @@ fn rows_needed(placed: &[Placed]) -> u8 {
         })
         .max()
         .unwrap_or(1)
-        .clamp(1, 4)
+        .clamp(1, MAX_ROWS)
 }
 
 /// Cells a widget of `size` occupies at a position, for collision checks.
@@ -215,7 +224,7 @@ fn footprint(widget: &Placed, columns: u8, rows: u8) -> (u8, u8, u8, u8) {
 /// of something else.
 pub fn free_cell(placed: &[Placed], size: Size) -> (u8, u8) {
     const COLUMNS: u8 = 12;
-    let rows = 4;
+    let rows = MAX_ROWS;
     let width = match size.w {
         Span::Cells(n) => n.clamp(1, COLUMNS),
         Span::Full => COLUMNS,
@@ -251,7 +260,7 @@ pub fn open_height(placed: &[Placed]) -> f32 {
 /// widget stays where it was put.
 fn visible_rows(area: Rect) -> u8 {
     let inner = area.shrink(PAD);
-    (((inner.height() + GAP) / (CELL + GAP)).floor() as u8).clamp(1, 4)
+    (((inner.height() + GAP) / (CELL + GAP)).floor() as u8).clamp(1, MAX_ROWS)
 }
 
 fn grid_rows(placed: &[Placed], area: Rect) -> u8 {

@@ -1389,10 +1389,13 @@ const NAVBAR_ROW: f32 = 40.0;
 /// Default bar height: exactly the row, so nothing is wasted until someone
 /// asks for the space by dragging.
 pub const NAVBAR_DEFAULT_HEIGHT: f32 = NAVBAR_ROW;
-/// Dragged taller, the extra space sits below the controls. Nothing lives
-/// there yet; it is where a player and other widgets will go, which is why the
-/// bar is resizable at all.
-const NAVBAR_MAX_HEIGHT: f32 = 220.0;
+/// The gap between the shelf and the content card below it.
+const SHELF_BOTTOM: f32 = 6.0;
+/// Tall enough for every row the shelf will offer. Derived rather than picked:
+/// at 220 the shelf came to 162pt of usable height and a row costs 62, so it
+/// stopped at two rows however hard it was dragged.
+const NAVBAR_MAX_HEIGHT: f32 =
+    NAVBAR_ROW + crate::dashboard::height_for_rows(crate::dashboard::MAX_ROWS) + SHELF_BOTTOM;
 /// Room the macOS traffic lights need before the first button.
 const TRAFFIC_LIGHTS: f32 = 78.0;
 /// Sized against the buttons rather than the row, so the pill has about as
@@ -1515,7 +1518,7 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     if strip.height() > NAVBAR_ROW + 10.0 {
         let shelf = Rect::from_min_max(
             pos2(window.left() + theme::CONTENT_MARGIN, row.max.y),
-            pos2(window.right() - theme::CONTENT_MARGIN, strip.max.y - 6.0),
+            pos2(window.right() - theme::CONTENT_MARGIN, strip.max.y - SHELF_BOTTOM),
         );
         // A recess rather than another card: the widgets are the cards, and
         // two levels of card inside each other reads as clutter.
@@ -1591,7 +1594,8 @@ fn navbar_resize(
     // heights worth resting at, so a release near either lands on it — the
     // shelf ends up uncovered rather than cut off mid-card. Anywhere else is
     // left alone, in case someone wants it there.
-    let uncovered = NAVBAR_ROW + crate::dashboard::open_height(&chrome.settings.navbar_widgets) + 6.0;
+    let uncovered =
+        NAVBAR_ROW + crate::dashboard::open_height(&chrome.settings.navbar_widgets) + SHELF_BOTTOM;
     let mut height = stored;
     if response.dragged() {
         height = (height + response.drag_delta().y).clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT);
