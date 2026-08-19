@@ -1006,13 +1006,13 @@ fn draw_favourite_star(
         .unwrap_or_default();
     let saved = !url.is_empty() && chrome.library.is_favourite(&url);
 
-    let response = icons::icon_button(ui, Icon::Star, 17.0, &palette, !url.is_empty());
+    let response = icons::icon_button(ui, Icon::Star, NAVBAR_ICON, &palette, !url.is_empty());
     let rect = response.rect;
     if saved {
         // No filled star in the vendored pack, so say it with colour.
         icons::draw_icon(
             ui.painter(),
-            Rect::from_center_size(rect.center(), vec2(17.0, 17.0)),
+            Rect::from_center_size(rect.center(), vec2(NAVBAR_ICON, NAVBAR_ICON)),
             Icon::Star,
             palette.accent,
         );
@@ -1173,9 +1173,22 @@ fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
 
 /// Height of the navigation bar. Tall enough for a 36pt pill with breathing
 /// room above and below.
-const NAVBAR_HEIGHT: f32 = 52.0;
+/// The row the controls themselves need: a 36pt pill with 2pt of air above and
+/// below it. The bar is never shorter than this.
+const NAVBAR_ROW: f32 = 40.0;
+/// Default bar height: exactly the row, so nothing is wasted until someone
+/// asks for the space by dragging.
+pub const NAVBAR_DEFAULT_HEIGHT: f32 = NAVBAR_ROW;
+/// Dragged taller, the extra space sits below the controls. Nothing lives
+/// there yet; it is where a player and other widgets will go, which is why the
+/// bar is resizable at all.
+const NAVBAR_MAX_HEIGHT: f32 = 220.0;
 /// Room the macOS traffic lights need before the first button.
 const TRAFFIC_LIGHTS: f32 = 78.0;
+/// One size for every button in the bar. `icon_button` derives the whole
+/// button from the glyph size, so mixing sizes gives visibly different hit
+/// areas and hover shapes sitting on the same line.
+const NAVBAR_ICON: f32 = 17.0;
 /// Width of the centred address pill.
 pub const ADDRESS_PILL_DEFAULT_WIDTH: f32 = 460.0;
 const ADDRESS_PILL_MIN_WIDTH: f32 = 220.0;
@@ -1188,7 +1201,14 @@ const ADDRESS_PILL_MAX_WIDTH: f32 = 900.0;
 fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     let palette = chrome.palette;
     let window = root.ctx().content_rect();
-    let strip = Rect::from_min_size(window.min, vec2(window.width(), NAVBAR_HEIGHT));
+    let height = chrome
+        .settings
+        .navbar_height
+        .clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT);
+    let strip = Rect::from_min_size(window.min, vec2(window.width(), height));
+    // The controls keep to a fixed row at the top, so dragging the bar taller
+    // opens space underneath them rather than spreading them out.
+    let row = Rect::from_min_size(strip.min, vec2(strip.width(), NAVBAR_ROW));
 
     let (can_go_back, can_go_forward, is_web) = chrome
         .browser
@@ -1198,8 +1218,8 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
 
     // ── Left: sidebar, navigation, favourites. Beside the traffic lights.
     let left = Rect::from_min_max(
-        pos2(window.left() + TRAFFIC_LIGHTS, strip.min.y),
-        pos2(window.center().x, strip.max.y),
+        pos2(window.left() + TRAFFIC_LIGHTS, row.min.y),
+        pos2(window.center().x, row.max.y),
     );
     let mut group = root.new_child(
         egui::UiBuilder::new()
@@ -1207,21 +1227,21 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     group.spacing_mut().item_spacing.x = 2.0;
-    if icons::icon_button(&mut group, Icon::Sidebar, 17.0, &palette, true)
+    if icons::icon_button(&mut group, Icon::Sidebar, NAVBAR_ICON, &palette, true)
         .on_hover_text("Show sidebar")
         .clicked()
     {
         actions.push(UiAction::ToggleSidebar);
     }
     group.add_space(6.0);
-    if icons::icon_button(&mut group, Icon::Back, 18.0, &palette, can_go_back).clicked() {
+    if icons::icon_button(&mut group, Icon::Back, NAVBAR_ICON, &palette, can_go_back).clicked() {
         actions.push(UiAction::Back);
     }
-    if icons::icon_button(&mut group, Icon::Forward, 18.0, &palette, can_go_forward).clicked() {
+    if icons::icon_button(&mut group, Icon::Forward, NAVBAR_ICON, &palette, can_go_forward).clicked() {
         actions.push(UiAction::Forward);
     }
     if chrome.settings.show_reload_button
-        && icons::icon_button(&mut group, Icon::Reload, 17.0, &palette, is_web)
+        && icons::icon_button(&mut group, Icon::Reload, NAVBAR_ICON, &palette, is_web)
             .on_hover_text("Reload (⌘R)")
             .clicked()
     {
@@ -1231,8 +1251,8 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
 
     // ── Right: extensions, downloads, settings. Snapped to the edge.
     let right = Rect::from_min_max(
-        pos2(window.center().x, strip.min.y),
-        pos2(window.right() - 14.0, strip.max.y),
+        pos2(window.center().x, row.min.y),
+        pos2(window.right() - 10.0, row.max.y),
     );
     let mut group = root.new_child(
         egui::UiBuilder::new()
@@ -1240,14 +1260,14 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
     group.spacing_mut().item_spacing.x = 2.0;
-    if icons::icon_button(&mut group, Icon::Gear, 17.0, &palette, true)
+    if icons::icon_button(&mut group, Icon::Gear, NAVBAR_ICON, &palette, true)
         .on_hover_text("Settings (⌘,)")
         .clicked()
     {
         actions.push(UiAction::OpenSettings);
     }
     let active = chrome.downloads.active_count();
-    if icons::icon_button(&mut group, Icon::Download, 16.0, &palette, true)
+    if icons::icon_button(&mut group, Icon::Download, NAVBAR_ICON, &palette, true)
         .on_hover_text(if active > 0 {
             format!("Downloads ({active} active)")
         } else {
@@ -1257,7 +1277,7 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     {
         actions.push(UiAction::OpenDownloads);
     }
-    if icons::icon_button(&mut group, Icon::History, 16.0, &palette, true)
+    if icons::icon_button(&mut group, Icon::History, NAVBAR_ICON, &palette, true)
         .on_hover_text("History")
         .clicked()
     {
@@ -1265,24 +1285,69 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     }
     // Nothing behind this yet: Servo has no extension support, and there is no
     // point pretending otherwise in the tooltip.
-    let _ = icons::icon_button(&mut group, Icon::Extensions, 16.0, &palette, false)
+    let _ = icons::icon_button(&mut group, Icon::Extensions, NAVBAR_ICON, &palette, false)
         .on_hover_text("Extensions — not supported by the engine yet");
 
     // ── Centre: the address pill, centred on the window rather than on the
     // space left between the two groups, so it does not drift as they change.
-    let width = navbar_pill_width(root, chrome, actions, strip);
-    let pill = Rect::from_center_size(
-        pos2(window.center().x, strip.center().y),
-        vec2(width, 36.0),
-    );
+    let width = navbar_pill_width(root, chrome, actions, row);
+    let pill = Rect::from_center_size(pos2(window.center().x, row.center().y), vec2(width, 36.0));
     let mut host = root.new_child(egui::UiBuilder::new().max_rect(pill));
     draw_address_pill(&mut host, chrome, actions);
+
+    navbar_resize(root, chrome, actions, strip);
 
     // Reserve the strip so the content card starts below it.
     root.allocate_rect(strip, Sense::hover());
 
     // Favourites hover card last, over everything else in the bar.
     draw_favourites_card(root, chrome, actions, star);
+}
+
+/// Drag the bar's bottom edge to change its height. The room this opens up is
+/// the point: widgets — a player, and whatever else earns a place — will live
+/// under the controls, and there is no sense adding a menu for them before
+/// there is anywhere to put them.
+fn navbar_resize(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    strip: Rect,
+) {
+    let stored = chrome
+        .settings
+        .navbar_height
+        .clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT);
+    let grip = Rect::from_min_max(
+        pos2(strip.min.x, strip.max.y - 5.0),
+        pos2(strip.max.x, strip.max.y + 1.0),
+    );
+    let response = root.interact(grip, Id::new("zervo_navbar_resize"), Sense::drag());
+    if response.hovered() || response.dragged() {
+        root.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+        // A short bar in the middle, so the edge reads as draggable rather
+        // than as a stray line.
+        let handle = Rect::from_center_size(
+            pos2(strip.center().x, strip.max.y - 2.0),
+            vec2(34.0, 3.0),
+        );
+        root.painter().rect_filled(
+            handle,
+            CornerRadius::same(2),
+            chrome.palette.text_muted.gamma_multiply(0.7),
+        );
+    }
+
+    let mut height = stored;
+    if response.dragged() {
+        height = (height + response.drag_delta().y).clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT);
+        chrome.settings.navbar_height = height;
+    }
+    // Written once the drag ends, not every frame of it.
+    if !root.ctx().egui_is_using_pointer() && (height - stored).abs() > 0.5 {
+        chrome.settings.navbar_height = height;
+        actions.push(UiAction::PersistSettings);
+    }
 }
 
 /// The pill's width, draggable by either edge. Dragging one edge moves the
