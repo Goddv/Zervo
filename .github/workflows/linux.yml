@@ -41,14 +41,25 @@ jobs:
 
       - name: Install build dependencies
         # Servo's own list, from python/servo/platform/linux_packages/apt.
-        # Noninteractive, or a package that wants to ask something — tzdata is
-        # the usual culprit — waits for an answer that never comes and the job
-        # sits there until it times out.
+        #
+        # Three guards, because this step hung for three hours twice. The
+        # runner boots with unattended-upgrades holding the dpkg lock, and
+        # apt-get waits on it indefinitely by default; noninteractive alone
+        # does not help, since nothing is being asked. So: stop the upgrader,
+        # give the lock a bounded wait, and cap the step, which turns a
+        # silent multi-hour hang into a failure that says what happened.
+        timeout-minutes: 20
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service || true
+          sudo systemctl kill --kill-who=all apt-daily.service || true
+          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            echo "waiting for the dpkg lock..."
+            sleep 3
+          done
+          sudo apt-get -o DPkg::Lock::Timeout=300 update
+          sudo apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
             build-essential ca-certificates ccache clang cmake curl g++ git gperf \
             libdbus-1-dev libfreetype6-dev libgl1-mesa-dri libgles2-mesa-dev \
             libglib2.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
