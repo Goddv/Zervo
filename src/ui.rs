@@ -123,7 +123,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     }
 
     let outer = root.available_rect_before_wrap();
-    let content_rect = paint_content_backdrop(root, outer, &chrome.palette);
+    // With the bar up, the card starts where the bar ends: the gap under the
+    // pill is then the bar's own, and matches the gap above it.
+    let top_margin = if chrome.browser.sidebar_collapsed {
+        0.0
+    } else {
+        theme::CONTENT_MARGIN
+    };
+    let content_rect = paint_content_backdrop(root, outer, &chrome.palette, top_margin);
 
     let active_kind = chrome.browser.active_tab().map(|tab| tab.kind);
     let mut ambient = false;
@@ -317,7 +324,11 @@ fn paint_chrome_fill(
 }
 
 /// Compute the inset card rect. (Nothing is painted here — see the note.)
-fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette) -> Rect {
+/// `top` is separate because the navigation bar already ends in the space the
+/// card would otherwise add for itself. Applying both put 14pt under the
+/// address pill against 6pt above it, which is the card sitting lower than it
+/// needs to rather than a margin anyone chose.
+fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) -> Rect {
     // No background fill here: the window-wide chrome base already covers
     // this area, and filling it again would cut the gradient off at the
     // sidebar edge.
@@ -325,7 +336,14 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette) -> Rect {
     // whole square content rect, which would erase the shadow inside the
     // rounded corners and leave square unshadowed patches. It is painted as
     // a ring in `finish_content_frame`, after the corner masks.
-    snap_rect(outer.shrink(theme::CONTENT_MARGIN), root.pixels_per_point())
+    let inset = Rect::from_min_max(
+        pos2(
+            outer.min.x + theme::CONTENT_MARGIN,
+            outer.min.y + top,
+        ),
+        outer.max - vec2(theme::CONTENT_MARGIN, theme::CONTENT_MARGIN),
+    );
+    snap_rect(inset, root.pixels_per_point())
 }
 
 /// The rounded-rect outline as (point, outward normal).
