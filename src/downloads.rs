@@ -279,9 +279,13 @@ pub fn reveal(path: &Path) {
         .arg("-R")
         .arg(path)
         .spawn();
-    // No portable "reveal", so open the containing folder. Good enough, and
-    // every desktop has it.
-    #[cfg(not(target_os = "macos"))]
+    // Explorer has a real reveal; elsewhere there is none, so open the
+    // containing folder, which every desktop can do.
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = std::process::Command::new("xdg-open")
         .arg(path.parent().unwrap_or(path))
         .spawn();
@@ -291,7 +295,9 @@ pub fn reveal(path: &Path) {
 pub fn open_file(path: &Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(path).spawn();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer").arg(path).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
 

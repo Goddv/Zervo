@@ -1,0 +1,130 @@
+name: Windows
+
+# Zervo compiles the Servo engine, and on Windows that includes building
+# SpiderMonkey, so a cold build is long. Release tags and manual dispatch only.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      engine-downloads:
+        description: Build with engine-backed downloads (uses the patched engine)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+  SERVO_FORK: https://github.com/Goddv/servo
+  SERVO_REV: 0d5a12189e5003ee95b335642470e2baf25fe607
+  # mozjs looks for this exact version, in this exact place, and panics with
+  # "MozTools or MozillaBuild not found!" if it is missing. It does not fetch
+  # it itself.
+  MOZTOOLS_VERSION: "4.0"
+
+jobs:
+  build:
+    name: Build .exe
+    runs-on: windows-2025
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show environment
+        run: |
+          cmake --version
+          ninja --version
+          clang --version
+
+      - name: Fetch moztools
+        # SpiderMonkey's build needs it, and expects it under the target
+        # directory rather than anywhere on PATH.
+        shell: pwsh
+        run: |
+          $url = "https://github.com/servo/servo-build-deps/releases/download/msvc-deps/moztools-$env:MOZTOOLS_VERSION.zip"
+          $dir = "target/dependencies/moztools"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile "$dir/moztools.zip"
+          Expand-Archive -Path "$dir/moztools.zip" -DestinationPath $dir -Force
+          # The archive unpacks as moztools-4.0; mozjs wants plain 4.0.
+          if (Test-Path "$dir/moztools-$env:MOZTOOLS_VERSION") {
+            Move-Item "$dir/moztools-$env:MOZTOOLS_VERSION" "$dir/$env:MOZTOOLS_VERSION"
+          }
+          Get-ChildItem $dir
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      - name: Point Cargo at the patched engine
+        shell: bash
+        run: |
+          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
+            echo "engine-downloads off; building against the published crate"
+            exit 0
+          fi
+          cat >> .cargo/config.toml <<EOF
+
+          [patch.crates-io]
+          servo = { git = "$SERVO_FORK", rev = "$SERVO_REV" }
+          EOF
+
+      - name: Build
+        shell: bash
+        run: |
+          FEATURES=""
+          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
+            FEATURES="engine-downloads"
+          fi
+          # No media: GStreamer on Windows means an MSI and a bundling step,
+          # which is its own piece of work.
+          if [ -n "$FEATURES" ]; then
+            cargo build --profile release --features "$FEATURES"
+          else
+            cargo build --profile release
+          fi
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $out = "target/windows"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item target/release/zervo.exe "$out/Zervo.exe"
+          # Anything the binary needs beside it. Most of Servo links statically,
+          # but whatever does not has to travel with the exe.
+          Get-ChildItem target/release -Filter *.dll | ForEach-Object {
+            Copy-Item $_.FullName $out
+          }
+          Get-ChildItem $out
+          Compress-Archive -Path "$out/*" -DestinationPath "target/Zervo-$version-windows-x64.zip" -Force
+
+      - name: sccache stats
+        run: sccache --show-stats
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zervo-windows
+          path: target/*.zip
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/*.zip

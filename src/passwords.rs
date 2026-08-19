@@ -266,7 +266,74 @@ fn delete_secret(site: &str, username: &str) -> Result<(), Failure> {
     )
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failure> {
+    // DPAPI through PowerShell. Windows has no keychain command that hands a
+    // password back, but it does have per-user encryption, which is the
+    // property that matters: the file is useless to any other account.
+    let path = secret_path(site, username)?;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let script = format!(
+        "ConvertTo-SecureString -String '{}' -AsPlainText -Force | ConvertFrom-SecureString",
+        encode(password)
+    );
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|error| format!("Could not run PowerShell to encrypt the password: {error}"))?;
+    if !output.status.success() {
+        return Err("Windows would not encrypt the password.".to_owned());
+    }
+    std::fs::write(&path, String::from_utf8_lossy(&output.stdout).trim())
+        .map_err(|error| format!("Could not save the password: {error}"))
+}
+
+#[cfg(target_os = "windows")]
+fn read_secret(site: &str, username: &str) -> Option<String> {
+    let stored = std::fs::read_to_string(secret_path(site, username).ok()?).ok()?;
+    let script = format!(
+        "$s = ConvertTo-SecureString '{}'; \
+         [Runtime.InteropServices.Marshal]::PtrToStringAuto( \
+           [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))",
+        stored.trim()
+    );
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .and_then(|hex| decode(&hex))
+}
+
+#[cfg(target_os = "windows")]
+fn delete_secret(site: &str, username: &str) -> Result<(), Failure> {
+    let path = secret_path(site, username)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Could not remove the password: {error}")),
+    }
+}
+
+/// Where one encrypted secret lives. Named from the site and username rather
+/// than an index, so the file and the entry cannot drift apart.
+#[cfg(target_os = "windows")]
+fn secret_path(site: &str, username: &str) -> Result<std::path::PathBuf, Failure> {
+    let safe: String = format!("{site}-{username}")
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    crate::settings::data_dir()
+        .map(|dir| dir.join("credentials").join(format!("{safe}.dpapi")))
+        .ok_or_else(|| "No place to keep credentials.".to_owned())
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failure> {
     use std::io::Write;
     use std::process::Stdio;
@@ -298,7 +365,7 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn read_secret(site: &str, username: &str) -> Option<String> {
     let output = Command::new("secret-tool")
         .args(["lookup", "service", &service(site), "account", username])
@@ -312,7 +379,7 @@ fn read_secret(site: &str, username: &str) -> Option<String> {
     Some(decode(&stored).unwrap_or(stored))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn delete_secret(site: &str, username: &str) -> Result<(), Failure> {
     run(
         Command::new("secret-tool").args(["clear", "service", &service(site), "account", username]),

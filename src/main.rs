@@ -16,6 +16,9 @@ mod keyboard;
 mod library;
 mod passwords;
 mod phosphor;
+// macOS has its own paths inline, using the AppKit bindings it already has.
+#[cfg(not(target_os = "macos"))]
+mod platform;
 mod settings;
 mod state;
 mod theme;
