@@ -1,8 +1,13 @@
 # Local development against a patched Servo checkout.
 #
-# Uncomment and point at your fork to build with `--features engine-downloads`
-# (see docs/SERVO.md). Left commented so a fresh clone builds against the
-# pinned upstream revision with no setup.
+# Uncomment to build with `--features engine-downloads` (see docs/SERVO.md).
+# Left commented so a fresh clone builds against the published crate with no
+# setup; CI appends the same block for release builds.
+#
+# [patch.crates-io]
+# servo = { git = "https://github.com/Goddv/servo", rev = "0d5a12189e5003ee95b335642470e2baf25fe607" }
+#
+# Or point at a local checkout while working on the patch itself:
 #
 # [patch.crates-io]
 # servo = { path = "/absolute/path/to/servo/components/servo" }
