@@ -150,7 +150,8 @@ SPEC
         echo "rpmbuild failed:" >&2; tail -30 "$TOP/build.log" >&2; exit 1; }
     find "$TOP/RPMS" -name '*.rpm' -exec cp {} target/linux/ \;
     rm -rf "$TOP"
-    echo "==> $(ls target/linux/*.rpm | tail -1)"
+    RPM=$(find target/linux -name '*.rpm' | sort | tail -1)
+    echo "==> $RPM"
 fi
 
 ls -la target/linux/
