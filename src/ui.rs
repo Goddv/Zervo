@@ -350,7 +350,9 @@ pub fn finish_content_frame(
     let radius = theme::CONTENT_RADIUS;
     let pad = 1.5;
 
-    const SEGMENTS: usize = 12;
+    // One arc segment per physical pixel, so the facets are sub-pixel and the
+    // curve cannot look polygonal on a Retina display.
+    let segments = ((radius * root.pixels_per_point()).ceil() as usize).clamp(16, 64);
     // (corner, arc center, start angle, outward direction)
     let corners = [
         (
@@ -384,16 +386,21 @@ pub fn finish_content_frame(
     // All four corner masks in ONE mesh: independent triangles each get their
     // own antialiased edges, and the AA seams between adjacent fan triangles
     // let the page underneath shine through as hairlines. A single mesh with
-    // shared vertices has no interior seams; its hard outer arc edge is then
-    // covered by the border stroke below.
+    // shared vertices has no interior seams.
+    //
+    // Meshes are not antialiased at all, though, so the arc where the mask
+    // meets the page is a hard, stair-stepped edge. Each arc is therefore
+    // retraced afterwards with a stroked line — which epaint *does*
+    // antialias — in the same colour, feathering the boundary.
     if mask_corners {
         let mut mesh = Mesh::default();
+        let mut arc_edges: Vec<(Vec<egui::Pos2>, Color32)> = Vec::new();
         for (corner, center, start_angle, outward) in corners {
             let corner_out = corner + outward * pad;
-            let mut arc: Vec<egui::Pos2> = (0..=SEGMENTS)
+            let mut arc: Vec<egui::Pos2> = (0..=segments)
                 .map(|segment| {
                     let angle = start_angle
-                        + (segment as f32 / SEGMENTS as f32) * 0.5 * std::f32::consts::PI;
+                        + (segment as f32 / segments as f32) * 0.5 * std::f32::consts::PI;
                     pos2(
                         center.x + radius * angle.cos(),
                         center.y + radius * angle.sin(),
@@ -426,11 +433,26 @@ pub fn finish_content_frame(
             for point in &arc {
                 mesh.colored_vertex(*point, chrome_color_at(root, point.y, palette, top_glow));
             }
-            for segment in 0..SEGMENTS as u32 {
+            for segment in 0..segments as u32 {
                 mesh.add_triangle(base, base + 1 + segment, base + 2 + segment);
             }
+            // The true arc (endpoints not pushed out) for the AA pass.
+            let true_arc: Vec<egui::Pos2> = (0..=segments)
+                .map(|segment| {
+                    let angle = start_angle
+                        + (segment as f32 / segments as f32) * 0.5 * std::f32::consts::PI;
+                    pos2(
+                        center.x + radius * angle.cos(),
+                        center.y + radius * angle.sin(),
+                    )
+                })
+                .collect();
+            arc_edges.push((true_arc, chrome_color_at(root, corner.y, palette, top_glow)));
         }
         fan_painter.add(Shape::mesh(mesh));
+        for (arc, colour) in arc_edges {
+            fan_painter.add(Shape::line(arc, Stroke::new(1.4_f32, colour)));
+        }
     }
 
     // Drop shadow, drawn AFTER the corner masks: filling it beforehand works
