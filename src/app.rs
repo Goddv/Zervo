@@ -476,6 +476,26 @@ impl servo::WebViewDelegate for AppState {
         self.window.request_redraw();
     }
 
+    /// Page console output. Zervo has no devtools, so the terminal is the only
+    /// place it can go, and having it go nowhere at all makes debugging a page
+    /// in Zervo much harder than it needs to be.
+    fn show_console_message(
+        &self,
+        _webview: WebView,
+        level: servo::ConsoleLogLevel,
+        message: String,
+    ) {
+        use servo::ConsoleLogLevel;
+        match level {
+            ConsoleLogLevel::Error => log::error!(target: "console", "{message}"),
+            ConsoleLogLevel::Warn => log::warn!(target: "console", "{message}"),
+            ConsoleLogLevel::Debug | ConsoleLogLevel::Trace => {
+                log::debug!(target: "console", "{message}")
+            },
+            _ => log::info!(target: "console", "{message}"),
+        }
+    }
+
     fn hide_embedder_control(&self, _webview: WebView, control_id: servo::EmbedderControlId) {
         if self.visible_input_method.get() == Some(control_id) {
             self.visible_input_method.set(None);
