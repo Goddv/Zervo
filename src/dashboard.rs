@@ -328,6 +328,8 @@ pub fn draw(
 
     let drag_id = Id::new("zervo_widget_drag");
     let sizes_id = Id::new("zervo_widget_sizes");
+    let resize_id = Id::new("zervo_widget_resize");
+    let resizing = ctx.data(|data| data.get_temp::<usize>(resize_id));
     let dragging = ctx.data(|data| data.get_temp::<usize>(drag_id));
     let slots = layout(placed, area);
     let pointer = ctx.input(|input| input.pointer.latest_pos());
@@ -411,6 +413,11 @@ pub fn draw(
     for (index, (widget, slot)) in placed.iter().zip(slots.iter()).enumerate() {
         let response = root.interact(*slot, drag_id.with(index), Sense::click_and_drag());
         let held = dragging == Some(index);
+        // Hover is taken from the pointer, not from the card's own response.
+        // Registering the small controls on top of the card makes the card
+        // itself stop counting as hovered, which hid them again on the very
+        // next frame — they flickered, and could not be clicked.
+        let over = pointer.is_some_and(|pos| slot.contains(pos));
 
         if response.drag_started() {
             ctx.data_mut(|data| data.insert_temp(drag_id, index));
@@ -425,7 +432,7 @@ pub fn draw(
                 _ => {},
             }
         }
-        if response.hovered() || held {
+        if over || held {
             ctx.set_cursor_icon(if held {
                 CursorIcon::Grabbing
             } else {
@@ -455,7 +462,7 @@ pub fn draw(
         }
 
         // Remove and resize appear on hover, so they are never in the way.
-        if response.hovered() && !held {
+        if over && !held {
             let close = Rect::from_center_size(
                 pos2(drawn.max.x - 11.0, drawn.min.y + 11.0),
                 vec2(16.0, 16.0),
@@ -468,22 +475,50 @@ pub fn draw(
                 changes.push(Change::Remove(index));
             }
 
-            let resize = Rect::from_center_size(
-                pos2(drawn.max.x - 11.0, drawn.max.y - 11.0),
-                vec2(16.0, 16.0),
+            draw_resize_handle(root, palette, drawn);
+        }
+
+        // The corner both drags and clicks: drag to resize by cells, click for
+        // the list of sizes. One affordance, because two in the same corner is
+        // one too many.
+        if over || resizing == Some(index) {
+            let corner = Rect::from_center_size(
+                pos2(slot.max.x - 11.0, slot.max.y - 11.0),
+                vec2(20.0, 20.0),
             );
-            icons::draw_icon(
-                root.painter(),
-                resize.shrink(3.0),
-                Icon::Sliders,
-                palette.text_muted,
+            let handle = root.interact(
+                corner,
+                drag_id.with(("size", index)),
+                Sense::click_and_drag(),
             );
-            if root
-                .interact(resize, drag_id.with(("size", index)), Sense::click())
-                .on_hover_text(format!("Size — {}", widget.size.label()))
-                .clicked()
-            {
+            if handle.hovered() || resizing == Some(index) {
+                ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+            }
+            if handle.drag_started() {
+                ctx.data_mut(|data| data.insert_temp(resize_id, index));
+            }
+            if handle.clicked() {
                 ctx.data_mut(|data| data.insert_temp(sizes_id, index));
+            }
+            if resizing == Some(index)
+                && let Some(pos) = pointer
+            {
+                let wanted = size_from_corner(*slot, pos, columns, rows);
+                let (_, _, width, height) =
+                    footprint(&Placed { size: wanted, ..*widget }, columns, rows);
+                let preview = Rect::from_min_size(slot.min, vec2(extent(width), extent(height)));
+                root.painter().rect_stroke(
+                    preview,
+                    CornerRadius::same(10),
+                    Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
+                    StrokeKind::Inside,
+                );
+                if handle.drag_stopped() {
+                    ctx.data_mut(|data| data.remove::<usize>(resize_id));
+                    if wanted != widget.size {
+                        changes.push(Change::Resize(index, wanted));
+                    }
+                }
             }
         }
     }
@@ -495,10 +530,19 @@ pub fn draw(
     // ── The size menu, for whichever widget asked for one.
     if let Some(index) = ctx.data(|data| data.get_temp::<usize>(sizes_id))
         && let Some(slot) = slots.get(index)
-        && let Some(size) = draw_size_menu(root, palette, *slot, placed[index].size)
     {
-        ctx.data_mut(|data| data.remove::<usize>(sizes_id));
-        changes.push(Change::Resize(index, size));
+        match draw_size_menu(root, palette, *slot, placed[index].size) {
+            Some(size) => {
+                ctx.data_mut(|data| data.remove::<usize>(sizes_id));
+                changes.push(Change::Resize(index, size));
+            },
+            // A press that did not land on the menu dismisses it, or it stays
+            // up until something is picked.
+            None if ctx.input(|input| input.pointer.any_pressed()) && !over_menu(&ctx) => {
+                ctx.data_mut(|data| data.remove::<usize>(sizes_id));
+            },
+            None => {},
+        }
     }
 
     // ── The add tile, after the last widget.
@@ -544,6 +588,36 @@ pub fn draw(
     changes
 }
 
+/// The size a corner drag is asking for, in whole cells.
+fn size_from_corner(slot: Rect, pos: egui::Pos2, columns: u8, rows: u8) -> Size {
+    let width = (((pos.x - slot.min.x + GAP) / (CELL + GAP)).round() as i32).clamp(1, columns as i32);
+    let height = (((pos.y - slot.min.y + GAP) / (CELL + GAP)).round() as i32).clamp(1, rows as i32);
+    Size::cells(width as u8, height as u8)
+}
+
+/// The mark in a card's corner that says it can be resized.
+fn draw_resize_handle(root: &mut Ui, palette: &Palette, rect: Rect) {
+    let corner = pos2(rect.max.x - 6.0, rect.max.y - 6.0);
+    for step in 0..3 {
+        let offset = step as f32 * 4.0;
+        root.painter().line_segment(
+            [
+                pos2(corner.x - offset, corner.y),
+                pos2(corner.x, corner.y - offset),
+            ],
+            Stroke::new(1.2_f32, palette.text_muted.gamma_multiply(0.7)),
+        );
+    }
+}
+
+/// Whether the pointer is over whichever menu is up, so a press elsewhere can
+/// dismiss it.
+fn over_menu(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<Rect>(Id::new("zervo_menu_rect")))
+        .zip(ctx.input(|input| input.pointer.interact_pos()))
+        .is_some_and(|(rect, pos)| rect.contains(pos))
+}
+
 /// A floating list, used for both menus.
 fn menu<T: Copy>(
     root: &mut Ui,
@@ -562,6 +636,7 @@ fn menu<T: Copy>(
         ),
         ctx.content_rect(),
     );
+    ctx.data_mut(|data| data.insert_temp(Id::new("zervo_menu_rect"), rect));
     let mut chosen = None;
     egui::Area::new(Id::new(id))
         .order(egui::Order::Foreground)

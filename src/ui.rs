@@ -1210,7 +1210,8 @@ fn draw_favourites_card(
                         break;
                     }
                     let response = ui.interact(tile, id.with(("tile", index)), Sense::click());
-                    if response.hovered() {
+                    let over = pointer.is_some_and(|pos| tile.contains(pos));
+                    if over {
                         ui.painter()
                             .rect_filled(tile, CornerRadius::same(9), palette.surface_hover);
                     }
@@ -1235,7 +1236,7 @@ fn draw_favourites_card(
                         FontId::proportional(10.5),
                         palette.text,
                     );
-                    if response.hovered() {
+                    if over {
                         let close = Rect::from_center_size(
                             pos2(tile.max.x - 8.0, tile.min.y + 8.0),
                             vec2(14.0, 14.0),
@@ -1260,7 +1261,11 @@ fn draw_favourites_card(
                     }
                     let being_edited = editing.as_ref().is_some_and(|(at, _)| at == url);
                     let response = ui.interact(row, id.with(("row", index)), Sense::click());
-                    if response.hovered() && !being_edited {
+                    // From the pointer, not the row's response: the rename and
+                    // remove controls sit on top of the row, which stops the
+                    // row counting as hovered and takes them away again.
+                    let over = pointer.is_some_and(|pos| row.contains(pos));
+                    if over && !being_edited {
                         ui.painter()
                             .rect_filled(row, CornerRadius::same(8), palette.surface_hover);
                     }
@@ -1300,7 +1305,7 @@ fn draw_favourites_card(
                         FontId::proportional(13.0),
                         palette.text,
                     );
-                    if response.hovered() {
+                    if over {
                         let rename = Rect::from_center_size(
                             pos2(row.max.x - 30.0, row.center().y),
                             vec2(18.0, 18.0),
