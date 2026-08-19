@@ -21,23 +21,10 @@ in released builds.
 
 ### No audio or video
 
-The `media-gstreamer` feature is not enabled on the `servo` dependency, so
-`<video>` and `<audio>` do not play. This is the last Tier 0 gap and the one
-that is not embedder work.
-
-It needs three things, none of them small:
-
-1. **GStreamer installed at build time.** On macOS Servo expects the official
-   framework at `/Library/Frameworks/GStreamer.framework`, which is a `.pkg`
-   installer needing admin rights, not a `brew install`.
-2. **The same on CI**, adding an install step to every release build.
-3. **Bundling.** A `.app` that only runs on machines that already have the
-   framework is no use, so the needed libraries and plugins have to be copied
-   into the bundle and their install names rewritten. Servo does this in
-   `python/servo/gstreamer.py` and ships plugin lists in the published crate
-   (`gstreamer_plugin_lists/macos.rs.in`), which is the place to start.
-
-Expect this to be its own milestone rather than a change.
+`<video>` and `<audio>` need `--features media`, which needs GStreamer. The
+plumbing is in place — the Cargo feature, the bundling script and the CI install
+step — but the build itself is only as available as the framework, which has to
+be installed system-wide with admin rights. See [PACKAGING.md](PACKAGING.md).
 
 ## Tier 1 — expected behaviour, and the API already exists
 

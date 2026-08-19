@@ -50,3 +50,28 @@ quarantined.
 In CI, store the certificate as a base64 secret, import it into a temporary
 keychain, and use an app-specific password (or App Store Connect API key) for
 notarytool. Do not commit any of it.
+
+## Audio and video
+
+`--features media` needs the official GStreamer distribution installed at
+`/Library/Frameworks/GStreamer.framework`. Servo supports no other source for it
+on macOS, and pins 1.22.3. Both packages are needed — the runtime and the
+headers:
+
+```bash
+BASE=https://github.com/servo/servo-build-deps/releases/download/macOS
+curl -L -o /tmp/gstreamer.pkg       $BASE/gstreamer-1.0-1.22.3-universal.pkg
+curl -L -o /tmp/gstreamer-devel.pkg $BASE/gstreamer-1.0-devel-1.22.3-universal.pkg
+sudo installer -pkg /tmp/gstreamer.pkg -target /
+sudo installer -pkg /tmp/gstreamer-devel.pkg -target /
+```
+
+`scripts/bundle-gstreamer.py` then copies the libraries and plugins into
+`Zervo.app/Contents/Frameworks` and rewrites their install names, so the bundle
+runs on machines that have never heard of GStreamer. `bundle-macos.sh` calls it
+for you. The plugins are loaded by name at runtime and never show up in `otool`
+output, so they are listed explicitly in that script; if playback breaks after a
+Servo update, check the list against `gstreamer_plugin_lists/` in the servo
+crate.
+
+Expect the bundle to grow by roughly 100 MB.

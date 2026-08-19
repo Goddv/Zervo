@@ -19,6 +19,10 @@ on:
         description: Build with engine-backed downloads (uses the patched engine)
         type: boolean
         default: true
+      media:
+        description: Build with audio and video (installs GStreamer)
+        type: boolean
+        default: true
 
 permissions:
   contents: write   # to attach the .dmg to a release
@@ -29,6 +33,9 @@ env:
   # builds compile against a fork carrying the embedder-download patch. Pinned
   # to a revision, never a branch: Servo lands dozens of commits a day and the
   # embedding API is not stable.
+  # Servo only supports the official GStreamer distribution on macOS, and pins
+  # this version. Both packages are needed: the runtime and the headers.
+  GSTREAMER_VERSION: 1.22.3
   SERVO_FORK: https://github.com/Goddv/servo
   SERVO_REV: 0d5a12189e5003ee95b335642470e2baf25fe607
   # sccache is the single biggest lever here: Servo's own CI measures ~15 min
@@ -79,6 +86,16 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
+      - name: Install GStreamer
+        if: ${{ inputs.media != 'false' }}
+        run: |
+          BASE=https://github.com/servo/servo-build-deps/releases/download/macOS
+          for PKG in gstreamer-1.0 gstreamer-1.0-devel; do
+            curl -L -sS -o "/tmp/$PKG.pkg" "$BASE/$PKG-$GSTREAMER_VERSION-universal.pkg"
+            sudo installer -pkg "/tmp/$PKG.pkg" -target /
+          done
+          ls /Library/Frameworks/GStreamer.framework/Versions/1.0/bin/pkg-config
+
       - name: Point Cargo at the patched engine
         # Appended rather than committed, so a plain clone still builds against
         # the published crate with no setup. Patching `servo` pulls the whole
@@ -96,9 +113,14 @@ jobs:
       - name: Build and bundle
         run: |
           ARGS=(--profile "${{ inputs.profile || 'release' }}" --dmg)
+          FEATURES=""
           if [ "${{ inputs.engine-downloads }}" != "false" ]; then
-            ARGS+=(--features engine-downloads)
+            FEATURES="engine-downloads"
           fi
+          if [ "${{ inputs.media }}" != "false" ]; then
+            FEATURES="${FEATURES:+$FEATURES,}media"
+          fi
+          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
           ./scripts/bundle-macos.sh "${ARGS[@]}"
 
       - name: sccache stats
@@ -120,7 +142,7 @@ jobs:
         with:
           files: target/*.dmg
           body: |
-            Unsigned build, with engine-backed downloads. macOS will refuse to open it until you clear the
+            Unsigned build, with downloads and media playback. macOS will refuse to open it until you clear the
             quarantine flag:
 
             ```

@@ -25,6 +25,21 @@ APP="target/Zervo.app"
 BIN_DIR="$APP/Contents/MacOS"
 RES_DIR="$APP/Contents/Resources"
 
+# The GStreamer framework ships its own pkg-config that knows where the
+# framework is, so putting its bin first is all the build needs to find it.
+GSTREAMER_ROOT="/Library/Frameworks/GStreamer.framework/Versions/1.0"
+case ",$FEATURES," in
+    *,media,*)
+        [ -d "$GSTREAMER_ROOT" ] || {
+            echo "--features media needs GStreamer at $GSTREAMER_ROOT" >&2
+            echo "see docs/PACKAGING.md" >&2
+            exit 1
+        }
+        export PATH="$GSTREAMER_ROOT/bin:$PATH"
+        WITH_MEDIA=1 ;;
+    *) WITH_MEDIA=0 ;;
+esac
+
 echo "==> building (profile: $PROFILE${FEATURES:+, features: $FEATURES})"
 if [ -n "$FEATURES" ]; then
     cargo build --profile "$PROFILE" --features "$FEATURES"
@@ -45,6 +60,11 @@ rm -rf "$APP"
 mkdir -p "$BIN_DIR" "$RES_DIR"
 cp "$BUILT" "$BIN_DIR/Zervo"
 cp assets/icon/Zervo.icns "$RES_DIR/Zervo.icns"
+
+if [ "$WITH_MEDIA" = "1" ]; then
+    echo "==> bundling GStreamer"
+    ./scripts/bundle-gstreamer.py "$APP"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
