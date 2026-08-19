@@ -101,15 +101,32 @@ impl Controls {
 
         match &mut self.pending[index] {
             EmbedderControl::SimpleDialog(dialog) => {
-                resolution =
-                    draw_dialog(&ctx, &measure, palette, content_rect, origin, dialog, escape, enter);
+                resolution = draw_dialog(
+                    &ctx,
+                    &measure,
+                    palette,
+                    content_rect,
+                    origin,
+                    dialog,
+                    escape,
+                    enter,
+                );
             },
             EmbedderControl::SelectElement(select) => {
                 let anchor = to_window(select.position());
                 let options = select.options().to_vec();
                 let multiple = select.allow_select_multiple();
                 let mut chosen = select.selected_options();
-                let picked = draw_select(&ctx, palette, content_rect, anchor, &options, &chosen, multiple, settled);
+                let picked = draw_select(
+                    &ctx,
+                    palette,
+                    content_rect,
+                    anchor,
+                    &options,
+                    &chosen,
+                    multiple,
+                    settled,
+                );
                 match picked {
                     Some(Picked::Option(id)) => {
                         if multiple {
@@ -134,8 +151,14 @@ impl Controls {
             },
             EmbedderControl::ColorPicker(picker) => {
                 let anchor = to_window(picker.position());
-                match draw_color_picker(&ctx, palette, content_rect, anchor, picker.current_color(), settled)
-                {
+                match draw_color_picker(
+                    &ctx,
+                    palette,
+                    content_rect,
+                    anchor,
+                    picker.current_color(),
+                    settled,
+                ) {
                     Some(Some(colour)) => {
                         picker.select(Some(colour));
                         resolution = Some(Resolution::Accept);
@@ -149,7 +172,15 @@ impl Controls {
             },
             EmbedderControl::ContextMenu(menu) => {
                 let anchor = to_window(menu.position());
-                match draw_context_menu(&ctx, &measure, palette, content_rect, anchor, menu.items(), settled) {
+                match draw_context_menu(
+                    &ctx,
+                    &measure,
+                    palette,
+                    content_rect,
+                    anchor,
+                    menu.items(),
+                    settled,
+                ) {
                     Some(Some(action)) => resolution = Some(Resolution::Menu(action)),
                     Some(None) => resolution = Some(Resolution::Cancel),
                     None => {},
@@ -393,8 +424,8 @@ fn draw_select(
         };
     }
     let width = anchor.width().max(180.0).min(content_rect.width() - 24.0);
-    let height = (rows * ROW + 16.0 + if multiple { 36.0 } else { 0.0 })
-        .min(content_rect.height() * 0.7);
+    let height =
+        (rows * ROW + 16.0 + if multiple { 36.0 } else { 0.0 }).min(content_rect.height() * 0.7);
     let rect = clamp_to(
         Rect::from_min_size(pos2(anchor.min.x, anchor.max.y + 4.0), vec2(width, height)),
         content_rect,
@@ -408,13 +439,22 @@ fn draw_select(
                 for entry in options {
                     match entry {
                         SelectElementOptionOrOptgroup::Option(option) => {
-                            if select_row(ui, palette, &option.label, option.is_disabled, selected.contains(&option.id), 0.0) {
+                            if select_row(
+                                ui,
+                                palette,
+                                &option.label,
+                                option.is_disabled,
+                                selected.contains(&option.id),
+                                0.0,
+                            ) {
                                 picked = Some(Picked::Option(option.id));
                             }
                         },
                         SelectElementOptionOrOptgroup::Optgroup { label, options } => {
-                            let (rect, _) =
-                                ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+                            let (rect, _) = ui.allocate_exact_size(
+                                vec2(ui.available_width(), ROW),
+                                Sense::hover(),
+                            );
                             ui.painter().text(
                                 pos2(rect.min.x + 6.0, rect.center().y),
                                 Align2::LEFT_CENTER,
@@ -423,7 +463,14 @@ fn draw_select(
                                 palette.text_muted,
                             );
                             for option in options {
-                                if select_row(ui, palette, &option.label, option.is_disabled, selected.contains(&option.id), 12.0) {
+                                if select_row(
+                                    ui,
+                                    palette,
+                                    &option.label,
+                                    option.is_disabled,
+                                    selected.contains(&option.id),
+                                    12.0,
+                                ) {
                                     picked = Some(Picked::Option(option.id));
                                 }
                             }
@@ -469,8 +516,11 @@ fn select_row(
         },
     );
     if selected {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), palette.accent.gamma_multiply(0.28));
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(6),
+            palette.accent.gamma_multiply(0.28),
+        );
     } else if response.hovered() {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(6), palette.surface_hover);
@@ -502,12 +552,30 @@ fn draw_color_picker(
     // A fixed palette rather than a colour wheel: enough for the handful of
     // pages that use `<input type=color>`, and it cannot be got subtly wrong.
     const SWATCHES: [(u8, u8, u8); 24] = [
-        (0, 0, 0), (68, 68, 68), (102, 102, 102), (153, 153, 153),
-        (204, 204, 204), (255, 255, 255), (152, 0, 0), (255, 0, 0),
-        (255, 153, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255),
-        (74, 134, 232), (0, 0, 255), (153, 0, 255), (255, 0, 255),
-        (230, 184, 175), (244, 204, 204), (252, 229, 205), (255, 242, 204),
-        (217, 234, 211), (208, 224, 227), (201, 218, 248), (217, 210, 233),
+        (0, 0, 0),
+        (68, 68, 68),
+        (102, 102, 102),
+        (153, 153, 153),
+        (204, 204, 204),
+        (255, 255, 255),
+        (152, 0, 0),
+        (255, 0, 0),
+        (255, 153, 0),
+        (255, 255, 0),
+        (0, 255, 0),
+        (0, 255, 255),
+        (74, 134, 232),
+        (0, 0, 255),
+        (153, 0, 255),
+        (255, 0, 255),
+        (230, 184, 175),
+        (244, 204, 204),
+        (252, 229, 205),
+        (255, 242, 204),
+        (217, 234, 211),
+        (208, 224, 227),
+        (201, 218, 248),
+        (217, 210, 233),
     ];
     const CELL: f32 = 26.0;
     const COLUMNS: usize = 6;
@@ -536,8 +604,9 @@ fn draw_color_picker(
                 CornerRadius::same(5),
                 Color32::from_rgb(*red, *green, *blue),
             );
-            let chosen = current
-                .is_some_and(|colour| (colour.red, colour.green, colour.blue) == (*red, *green, *blue));
+            let chosen = current.is_some_and(|colour| {
+                (colour.red, colour.green, colour.blue) == (*red, *green, *blue)
+            });
             if chosen || response.hovered() {
                 ui.painter().rect_stroke(
                     cell,
@@ -599,8 +668,8 @@ fn draw_context_menu(
         for (index, item) in items.iter().enumerate() {
             match item {
                 ContextMenuItem::Separator => {
-                    let (rect, _) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), SEPARATOR), Sense::hover());
+                    let (rect, _) = ui
+                        .allocate_exact_size(vec2(ui.available_width(), SEPARATOR), Sense::hover());
                     ui.painter().hline(
                         rect.x_range(),
                         rect.center().y,
@@ -614,11 +683,18 @@ fn draw_context_menu(
                 } => {
                     let (rect, response) = ui.allocate_exact_size(
                         vec2(ui.available_width(), ROW),
-                        if *enabled { Sense::click() } else { Sense::hover() },
+                        if *enabled {
+                            Sense::click()
+                        } else {
+                            Sense::hover()
+                        },
                     );
                     if *enabled && response.hovered() {
-                        ui.painter()
-                            .rect_filled(rect, CornerRadius::same(6), palette.surface_hover);
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(6),
+                            palette.surface_hover,
+                        );
                     }
                     let colour = if *enabled {
                         palette.text

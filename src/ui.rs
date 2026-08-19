@@ -54,7 +54,11 @@ pub enum UiAction {
     },
     RemoveNavItem(NavItem),
     AddNavItem(NavItem),
-    PlaceWidget { index: usize, col: u8, row: u8 },
+    PlaceWidget {
+        index: usize,
+        col: u8,
+        row: u8,
+    },
     ResizeWidget(usize, crate::dashboard::Size),
     MediaAction(servo::MediaSessionActionType),
     SavePassword,
@@ -353,10 +357,7 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) 
     // rounded corners and leave square unshadowed patches. It is painted as
     // a ring in `finish_content_frame`, after the corner masks.
     let inset = Rect::from_min_max(
-        pos2(
-            outer.min.x + theme::CONTENT_MARGIN,
-            outer.min.y + top,
-        ),
+        pos2(outer.min.x + theme::CONTENT_MARGIN, outer.min.y + top),
         outer.max - vec2(theme::CONTENT_MARGIN, theme::CONTENT_MARGIN),
     );
     snap_rect(inset, root.pixels_per_point())
@@ -719,56 +720,55 @@ fn sidebar_body(
     // ── Top row: nav icons, right of the macOS traffic lights. All of these
     // are in the navigation bar when the sidebar is collapsed.
     if !compact {
-    ui.horizontal(|ui| {
-        #[cfg(target_os = "macos")]
-        ui.add_space(58.0);
+        ui.horizontal(|ui| {
+            #[cfg(target_os = "macos")]
+            ui.add_space(58.0);
 
-        let (can_go_back, can_go_forward, is_settings) = chrome
-            .browser
-            .active_tab()
-            .map(|tab| {
-                (
-                    tab.can_go_back,
-                    tab.can_go_forward,
-                    tab.kind != TabKind::Web,
-                )
-            })
-            .unwrap_or_default();
+            let (can_go_back, can_go_forward, is_settings) = chrome
+                .browser
+                .active_tab()
+                .map(|tab| {
+                    (
+                        tab.can_go_back,
+                        tab.can_go_forward,
+                        tab.kind != TabKind::Web,
+                    )
+                })
+                .unwrap_or_default();
 
-        if icons::icon_button(ui, Icon::Sidebar, 17.0, &palette, true)
-            .on_hover_text(if chrome.browser.sidebar_collapsed {
-                "Show sidebar"
-            } else {
-                "Hide sidebar"
-            })
-            .clicked()
-        {
-            actions.push(UiAction::ToggleSidebar);
-        }
-        ui.add_space(2.0);
-
-        if icons::icon_button(ui, Icon::Back, 18.0, &palette, can_go_back).clicked() {
-            actions.push(UiAction::Back);
-        }
-        if chrome.settings.show_forward_button
-            && icons::icon_button(ui, Icon::Forward, 18.0, &palette, can_go_forward)
+            if icons::icon_button(ui, Icon::Sidebar, 17.0, &palette, true)
+                .on_hover_text(if chrome.browser.sidebar_collapsed {
+                    "Show sidebar"
+                } else {
+                    "Hide sidebar"
+                })
                 .clicked()
-        {
-            actions.push(UiAction::Forward);
-        }
-        if chrome.settings.show_reload_button
-            && icons::icon_button(ui, Icon::Reload, 17.0, &palette, !is_settings)
-                .on_hover_text("Reload (⌘R)")
-                .clicked()
-        {
-            actions.push(UiAction::Reload);
-        }
-    });
-    ui.add_space(10.0);
+            {
+                actions.push(UiAction::ToggleSidebar);
+            }
+            ui.add_space(2.0);
 
-    // ── Search / address pill.
-    draw_address_pill(ui, chrome, actions, 36.0);
-    ui.add_space(12.0);
+            if icons::icon_button(ui, Icon::Back, 18.0, &palette, can_go_back).clicked() {
+                actions.push(UiAction::Back);
+            }
+            if chrome.settings.show_forward_button
+                && icons::icon_button(ui, Icon::Forward, 18.0, &palette, can_go_forward).clicked()
+            {
+                actions.push(UiAction::Forward);
+            }
+            if chrome.settings.show_reload_button
+                && icons::icon_button(ui, Icon::Reload, 17.0, &palette, !is_settings)
+                    .on_hover_text("Reload (⌘R)")
+                    .clicked()
+            {
+                actions.push(UiAction::Reload);
+            }
+        });
+        ui.add_space(10.0);
+
+        // ── Search / address pill.
+        draw_address_pill(ui, chrome, actions, 36.0);
+        ui.add_space(12.0);
     } else {
         // The traffic lights still sit over the top of the sidebar.
         #[cfg(target_os = "macos")]
@@ -788,8 +788,7 @@ fn sidebar_body(
             let active_tab = chrome.browser.active_tab;
             let always_close = chrome.settings.always_show_tab_close;
 
-            for (workspace_index, workspace) in chrome.browser.workspaces.iter().enumerate()
-            {
+            for (workspace_index, workspace) in chrome.browser.workspaces.iter().enumerate() {
                 workspace_header(
                     ui,
                     workspace_index,
@@ -879,7 +878,11 @@ fn draw_history_page(
     let palette = chrome.palette;
     root.ctx()
         .layer_painter(egui::LayerId::background())
-        .rect_filled(content_rect, CornerRadius::same(theme::CONTENT_RADIUS as u8), palette.bg);
+        .rect_filled(
+            content_rect,
+            CornerRadius::same(theme::CONTENT_RADIUS as u8),
+            palette.bg,
+        );
 
     let mut ui = root.new_child(
         egui::UiBuilder::new()
@@ -902,10 +905,7 @@ fn draw_history_page(
     ui.add_space(12.0);
 
     // ── Search.
-    let field = Rect::from_min_size(
-        ui.cursor().min,
-        vec2(ui.available_width().min(420.0), 32.0),
-    );
+    let field = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(420.0), 32.0));
     glass::paint(ui.painter(), field, &palette, Glass::new(9));
     icons::draw_icon(
         ui.painter(),
@@ -959,8 +959,8 @@ fn draw_history_page(
                 );
                 ui.add_space(4.0);
                 for (index, visit) in rows {
-                    let (row, response) = ui
-                        .allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                    let (row, response) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
                     if response.hovered() {
                         ui.painter()
                             .rect_filled(row, CornerRadius::same(8), palette.surface_hover);
@@ -1162,7 +1162,8 @@ fn draw_favourites_card(
             }
 
             // ── Header: what this is, and how to show it.
-            let header = Rect::from_min_size(card.min + vec2(12.0, 8.0), vec2(card.width() - 24.0, 20.0));
+            let header =
+                Rect::from_min_size(card.min + vec2(12.0, 8.0), vec2(card.width() - 24.0, 20.0));
             ui.painter().text(
                 header.left_center(),
                 Align2::LEFT_CENTER,
@@ -1182,7 +1183,11 @@ fn draw_favourites_card(
             );
             if ui
                 .interact(switch, id.with("layout"), Sense::click())
-                .on_hover_text(if grid { "Show as a list" } else { "Show as tiles" })
+                .on_hover_text(if grid {
+                    "Show as a list"
+                } else {
+                    "Show as tiles"
+                })
                 .on_hover_cursor(CursorIcon::PointingHand)
                 .clicked()
             {
@@ -1219,16 +1224,22 @@ fn draw_favourites_card(
                     let response = ui.interact(tile, id.with(("tile", index)), Sense::click());
                     let over = pointer.is_some_and(|pos| tile.contains(pos));
                     if over {
-                        ui.painter()
-                            .rect_filled(tile, CornerRadius::same(9), palette.surface_hover);
+                        ui.painter().rect_filled(
+                            tile,
+                            CornerRadius::same(9),
+                            palette.surface_hover,
+                        );
                     }
                     // No favicon store yet, so the initial stands in for one.
                     let badge = Rect::from_center_size(
                         pos2(tile.center().x, tile.min.y + 20.0),
                         vec2(26.0, 26.0),
                     );
-                    ui.painter()
-                        .rect_filled(badge, CornerRadius::same(7), palette.accent.gamma_multiply(0.22));
+                    ui.painter().rect_filled(
+                        badge,
+                        CornerRadius::same(7),
+                        palette.accent.gamma_multiply(0.22),
+                    );
                     ui.painter().text(
                         badge.center(),
                         Align2::CENTER_CENTER,
@@ -1248,8 +1259,16 @@ fn draw_favourites_card(
                             pos2(tile.max.x - 8.0, tile.min.y + 8.0),
                             vec2(14.0, 14.0),
                         );
-                        icons::draw_icon(ui.painter(), close.shrink(2.0), Icon::Close, palette.text_muted);
-                        if ui.interact(close, id.with(("gx", index)), Sense::click()).clicked() {
+                        icons::draw_icon(
+                            ui.painter(),
+                            close.shrink(2.0),
+                            Icon::Close,
+                            palette.text_muted,
+                        );
+                        if ui
+                            .interact(close, id.with(("gx", index)), Sense::click())
+                            .clicked()
+                        {
                             actions.push(UiAction::RemoveFavourite(url.clone()));
                         }
                     }
@@ -1278,7 +1297,10 @@ fn draw_favourites_card(
                     }
                     icons::draw_icon(
                         ui.painter(),
-                        Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(13.0, 13.0)),
+                        Rect::from_center_size(
+                            pos2(row.min.x + 14.0, row.center().y),
+                            vec2(13.0, 13.0),
+                        ),
                         Icon::Globe,
                         palette.text_muted,
                     );
@@ -1288,7 +1310,10 @@ fn draw_favourites_card(
                             pos2(row.min.x + 28.0, row.min.y + 2.0),
                             pos2(row.max.x - 8.0, row.max.y - 2.0),
                         );
-                        let mut draft = editing.as_ref().map(|(_, name)| name.clone()).unwrap_or_default();
+                        let mut draft = editing
+                            .as_ref()
+                            .map(|(_, name)| name.clone())
+                            .unwrap_or_default();
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
                         let editor = child.add_sized(
                             field.size(),
@@ -1317,7 +1342,12 @@ fn draw_favourites_card(
                             pos2(row.max.x - 30.0, row.center().y),
                             vec2(18.0, 18.0),
                         );
-                        icons::draw_icon(ui.painter(), rename.shrink(3.0), Icon::Sliders, palette.text_muted);
+                        icons::draw_icon(
+                            ui.painter(),
+                            rename.shrink(3.0),
+                            Icon::Sliders,
+                            palette.text_muted,
+                        );
                         if ui
                             .interact(rename, id.with(("edit", index)), Sense::click())
                             .on_hover_text("Rename")
@@ -1329,7 +1359,12 @@ fn draw_favourites_card(
                             pos2(row.max.x - 10.0, row.center().y),
                             vec2(18.0, 18.0),
                         );
-                        icons::draw_icon(ui.painter(), close.shrink(3.0), Icon::Close, palette.text_muted);
+                        icons::draw_icon(
+                            ui.painter(),
+                            close.shrink(3.0),
+                            Icon::Close,
+                            palette.text_muted,
+                        );
                         if ui
                             .interact(close, id.with(("x", index)), Sense::click())
                             .on_hover_text("Remove")
@@ -1380,14 +1415,23 @@ pub fn ellipsize(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_owned();
     }
-    text.chars().take(limit.saturating_sub(1)).collect::<String>() + "…"
+    text.chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>()
+        + "…"
 }
 
 /// Keep a rect inside `bounds`.
 pub fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
     let mut min = rect.min;
-    min.x = min.x.clamp(bounds.min.x + 8.0, (bounds.max.x - rect.width() - 8.0).max(bounds.min.x + 8.0));
-    min.y = min.y.clamp(bounds.min.y + 8.0, (bounds.max.y - rect.height() - 8.0).max(bounds.min.y + 8.0));
+    min.x = min.x.clamp(
+        bounds.min.x + 8.0,
+        (bounds.max.x - rect.width() - 8.0).max(bounds.min.x + 8.0),
+    );
+    min.y = min.y.clamp(
+        bounds.min.y + 8.0,
+        (bounds.max.y - rect.height() - 8.0).max(bounds.min.y + 8.0),
+    );
     Rect::from_min_size(min, rect.size())
 }
 
@@ -1573,7 +1617,10 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     if !extras.is_empty() {
         let width = extras.len() as f32 * nav_item_width() + (extras.len() - 1) as f32 * spacing;
         let tray = Rect::from_min_size(
-            pos2(right_edge_start - 10.0 - width, row.center().y - item_size.y / 2.0),
+            pos2(
+                right_edge_start - 10.0 - width,
+                row.center().y - item_size.y / 2.0,
+            ),
             vec2(width, item_size.y),
         );
         let mut group = root.new_child(
@@ -1620,7 +1667,10 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     if shelf_open {
         let shelf = Rect::from_min_max(
             pos2(window.left() + theme::CONTENT_MARGIN, row.max.y),
-            pos2(window.right() - theme::CONTENT_MARGIN, strip.max.y - SHELF_BOTTOM),
+            pos2(
+                window.right() - theme::CONTENT_MARGIN,
+                strip.max.y - SHELF_BOTTOM,
+            ),
         );
         // A recess rather than another card: the widgets are the cards, and
         // two levels of card inside each other reads as clutter.
@@ -1711,7 +1761,11 @@ fn draw_navbar_config(
             .map(|(side, index, _, rect)| {
                 (
                     *side,
-                    if pos.x > rect.center().x { index + 1 } else { *index },
+                    if pos.x > rect.center().x {
+                        index + 1
+                    } else {
+                        *index
+                    },
                     *rect,
                     pos.x > rect.center().x,
                 )
@@ -1772,8 +1826,14 @@ fn draw_navbar_config(
         );
 
         // Taking it off the bar.
-        let close = Rect::from_center_size(pos2(drawn.max.x - 2.0, drawn.min.y + 2.0), vec2(13.0, 13.0));
-        icons::draw_icon(root.painter(), close.shrink(1.5), Icon::Close, palette.text_muted);
+        let close =
+            Rect::from_center_size(pos2(drawn.max.x - 2.0, drawn.min.y + 2.0), vec2(13.0, 13.0));
+        icons::draw_icon(
+            root.painter(),
+            close.shrink(1.5),
+            Icon::Close,
+            palette.text_muted,
+        );
         if !held
             && root
                 .interact(close, drag_id.with(("off", slot)), Sense::click())
@@ -1788,7 +1848,11 @@ fn draw_navbar_config(
     if dragging.is_some()
         && let Some((_, _, rect, after)) = target
     {
-        let x = if after { rect.max.x + 1.0 } else { rect.min.x - 1.0 };
+        let x = if after {
+            rect.max.x + 1.0
+        } else {
+            rect.min.x - 1.0
+        };
         root.painter().rect_filled(
             Rect::from_center_size(pos2(x, rect.center().y), vec2(2.0, rect.height() + 6.0)),
             CornerRadius::same(1),
@@ -1804,7 +1868,10 @@ fn draw_navbar_config(
         .collect();
     let width = (hidden.len().max(1) as f32) * (nav_item_width() + 4.0) + 150.0;
     let tray = crate::ui::clamp_into(
-        Rect::from_min_size(pos2(row.center().x - width / 2.0, row.max.y + 8.0), vec2(width, 40.0)),
+        Rect::from_min_size(
+            pos2(row.center().x - width / 2.0, row.max.y + 8.0),
+            vec2(width, 40.0),
+        ),
         ctx.content_rect(),
     );
     egui::Area::new(Id::new("zervo_nav_tray"))
@@ -1812,7 +1879,8 @@ fn draw_navbar_config(
         .fixed_pos(tray.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            ui.painter().rect_filled(tray, CornerRadius::same(10), palette.bg);
+            ui.painter()
+                .rect_filled(tray, CornerRadius::same(10), palette.bg);
             for shape in glass::shapes(tray, &palette, Glass::new(10)) {
                 ui.painter().add(shape);
             }
@@ -1833,7 +1901,8 @@ fn draw_navbar_config(
                     pos2(x, tray.center().y - (NAVBAR_ICON + 8.0) / 2.0),
                     vec2(nav_item_width(), NAVBAR_ICON + 8.0),
                 );
-                let response = ui.interact(slot, Id::new("zervo_nav_back").with(*item), Sense::click());
+                let response =
+                    ui.interact(slot, Id::new("zervo_nav_back").with(*item), Sense::click());
                 if response.hovered() {
                     ui.painter()
                         .rect_filled(slot, CornerRadius::same(8), palette.surface_hover);
@@ -1869,7 +1938,13 @@ fn draw_nav_item(
     let (can_go_back, can_go_forward, is_web) = chrome
         .browser
         .active_tab()
-        .map(|tab| (tab.can_go_back, tab.can_go_forward, tab.kind == TabKind::Web))
+        .map(|tab| {
+            (
+                tab.can_go_back,
+                tab.can_go_forward,
+                tab.kind == TabKind::Web,
+            )
+        })
         .unwrap_or_default();
 
     let mut host = root.new_child(
@@ -2098,8 +2173,7 @@ fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
     let in_panel = visible && pointer.is_some_and(|pos| hot.contains(pos));
     // Never pull it away mid-gesture: a held button, a drag, or an open menu
     // keeps it up even if the pointer strays outside.
-    let busy = state.open
-        && (ctx.egui_is_using_pointer() || egui::Popup::is_any_open(ctx));
+    let busy = state.open && (ctx.egui_is_using_pointer() || egui::Popup::is_any_open(ctx));
     // ⌘L focuses the address pill, which lives in the sidebar — so reveal it,
     // or the shortcut does nothing and the pending focus fires later, at
     // whatever moment the pointer next happens to brush the edge.
@@ -2235,8 +2309,7 @@ fn draw_address_pill(
         0.22,
     ));
 
-    let (pill_rect, _) =
-        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let (pill_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
 
     let radius = (height * 0.32) as u8;
     glass::paint(
@@ -2287,11 +2360,7 @@ fn draw_address_pill(
     icons::draw_icon(inner.painter(), badge, icon, tint);
     if !hint.is_empty() {
         inner
-            .interact(
-                badge.expand(4.0),
-                pill_id.with("security"),
-                Sense::hover(),
-            )
+            .interact(badge.expand(4.0), pill_id.with("security"), Sense::hover())
             .on_hover_text(hint);
     }
     inner.add_space(22.0);
@@ -3823,11 +3892,7 @@ fn settings_customize(
 /// Deliberately plain about what this can and cannot do: Servo gives the
 /// embedder no way to see a submitted form or write into a page, so there is no
 /// autofill to offer and pretending otherwise would be worse than saying so.
-fn settings_passwords(
-    ui: &mut Ui,
-    chrome: &mut ChromeContext,
-    actions: &mut Vec<UiAction>,
-) {
+fn settings_passwords(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     let palette = chrome.palette;
 
     settings_section(ui, &palette, "Saved logins", |ui| {
@@ -3878,9 +3943,18 @@ fn settings_passwords(
             );
             let remove =
                 Rect::from_center_size(pos2(row.max.x - 14.0, row.center().y), vec2(18.0, 18.0));
-            icons::draw_icon(ui.painter(), remove.shrink(4.0), Icon::Trash, palette.text_muted);
+            icons::draw_icon(
+                ui.painter(),
+                remove.shrink(4.0),
+                Icon::Trash,
+                palette.text_muted,
+            );
             if ui
-                .interact(remove, Id::new("zervo_pw_remove").with((&site, &username)), Sense::click())
+                .interact(
+                    remove,
+                    Id::new("zervo_pw_remove").with((&site, &username)),
+                    Sense::click(),
+                )
                 .on_hover_text("Forget this login")
                 .on_hover_cursor(CursorIcon::PointingHand)
                 .clicked()

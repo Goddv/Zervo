@@ -144,7 +144,10 @@ impl Vault {
             .map_err(|error| format!("That does not look like a Zervo export: {error}"))?;
         let mut imported = 0;
         for entry in entries {
-            if self.set(&entry.site, &entry.username, &entry.password).is_ok() {
+            if self
+                .set(&entry.site, &entry.username, &entry.password)
+                .is_ok()
+            {
                 imported += 1;
             }
         }
@@ -182,7 +185,8 @@ fn encode(secret: &str) -> String {
 }
 
 fn decode(stored: &str) -> Option<String> {
-    if stored.is_empty() || stored.len() % 2 != 0 || !stored.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if stored.is_empty() || stored.len() % 2 != 0 || !stored.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..stored.len())
@@ -239,10 +243,11 @@ fn read_secret(site: &str, username: &str) -> Option<String> {
         ])
         .output()
         .ok()?;
-    let stored = output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim_end().to_owned())?;
+    let stored = output.status.success().then(|| {
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_owned()
+    })?;
     // Anything saved before the encoding went in reads back as itself.
     Some(decode(&stored).unwrap_or(stored))
 }
@@ -299,23 +304,18 @@ fn read_secret(site: &str, username: &str) -> Option<String> {
         .args(["lookup", "service", &service(site), "account", username])
         .output()
         .ok()?;
-    let stored = output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim_end().to_owned())?;
+    let stored = output.status.success().then(|| {
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_owned()
+    })?;
     Some(decode(&stored).unwrap_or(stored))
 }
 
 #[cfg(not(target_os = "macos"))]
 fn delete_secret(site: &str, username: &str) -> Result<(), Failure> {
     run(
-        Command::new("secret-tool").args([
-            "clear",
-            "service",
-            &service(site),
-            "account",
-            username,
-        ]),
+        Command::new("secret-tool").args(["clear", "service", &service(site), "account", username]),
         "remove the password from your credential store",
     )
 }

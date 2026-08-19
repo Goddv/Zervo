@@ -18,9 +18,9 @@ use winit::window::Window;
 
 use crate::controls::Controls;
 use crate::dashboard::Media;
+use crate::keyboard::CMD_OR_CONTROL;
 use crate::library::Library;
 use crate::passwords::Vault;
-use crate::keyboard::CMD_OR_CONTROL;
 use crate::state::{BrowserState, TabId};
 
 /// Engine-driven download traffic, queued for the UI thread.
@@ -338,9 +338,10 @@ impl AppState {
             .arg("--file-selection")
             .output()
             .ok()?;
-        output.status.success().then(|| {
-            std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
-        })
+        output
+            .status
+            .success()
+            .then(|| std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
     }
 
     /// Answer a `<input type=file>` request with the system open panel.
@@ -452,7 +453,6 @@ impl servo::WebViewDelegate for AppState {
         })
     }
 
-
     fn notify_new_frame_ready(&self, _webview: WebView) {
         self.needs_repaint.set(true);
         self.window.request_redraw();
@@ -463,7 +463,9 @@ impl servo::WebViewDelegate for AppState {
     /// bar used to go stale on sites that use them.
     fn notify_url_changed(&self, webview: WebView, url: Url) {
         let title = webview.page_title().unwrap_or_default();
-        self.library.borrow_mut().record(url.as_str(), &title, now());
+        self.library
+            .borrow_mut()
+            .record(url.as_str(), &title, now());
         let mut browser = self.browser.borrow_mut();
         if let Some(tab) = browser.tab_for_webview_mut(&webview) {
             tab.url = url.to_string();
@@ -614,11 +616,7 @@ impl servo::WebViewDelegate for AppState {
     /// in Zervo much harder than it needs to be.
     /// HTTP authentication. This is the one place the engine asks the embedder
     /// for credentials, so it is the one place a saved login can be used.
-    fn request_authentication(
-        &self,
-        _webview: WebView,
-        request: servo::AuthenticationRequest,
-    ) {
+    fn request_authentication(&self, _webview: WebView, request: servo::AuthenticationRequest) {
         let host = request.url().host_str().unwrap_or_default().to_owned();
         match self.vault.borrow().for_host(&host) {
             Some((login, password)) => {

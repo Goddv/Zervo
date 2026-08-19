@@ -42,8 +42,11 @@ pub enum WidgetKind {
 }
 
 impl WidgetKind {
-    pub const ALL: [WidgetKind; 3] =
-        [WidgetKind::Clock, WidgetKind::NowPlaying, WidgetKind::Transport];
+    pub const ALL: [WidgetKind; 3] = [
+        WidgetKind::Clock,
+        WidgetKind::NowPlaying,
+        WidgetKind::Transport,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -363,10 +366,19 @@ pub fn draw(
     // with nothing above it.
     let snap = match (dragging, pointer) {
         (Some(held), Some(pos)) => placed.get(held).map(|widget| {
-            let (col, row) =
-                cell_at(area, pos - vec2(cell, CELL_HEIGHT) / 2.0, widget.size, columns, rows);
+            let (col, row) = cell_at(
+                area,
+                pos - vec2(cell, CELL_HEIGHT) / 2.0,
+                widget.size,
+                columns,
+                rows,
+            );
             let (_, _, width, height) = footprint(
-                &Placed { col, row, ..*widget },
+                &Placed {
+                    col,
+                    row,
+                    ..*widget
+                },
                 columns,
                 rows,
             );
@@ -444,9 +456,7 @@ pub fn draw(
             ctx.data_mut(|data| data.remove::<usize>(drag_id));
             match (target, snap) {
                 (Some(over), _) => changes.push(Change::Swap { a: index, b: over }),
-                (None, Some((col, row, _))) => {
-                    changes.push(Change::Place { index, col, row })
-                },
+                (None, Some((col, row, _))) => changes.push(Change::Place { index, col, row }),
                 _ => {},
             }
         }
@@ -484,7 +494,12 @@ pub fn draw(
                 pos2(drawn.max.x - 11.0, drawn.min.y + 11.0),
                 vec2(16.0, 16.0),
             );
-            icons::draw_icon(root.painter(), close.shrink(3.0), Icon::Close, palette.text_muted);
+            icons::draw_icon(
+                root.painter(),
+                close.shrink(3.0),
+                Icon::Close,
+                palette.text_muted,
+            );
             if root
                 .interact(close, drag_id.with(("close", index)), Sense::click())
                 .clicked()
@@ -521,8 +536,14 @@ pub fn draw(
                 && let Some(pos) = pointer
             {
                 let wanted = size_from_corner(*slot, pos, cell, columns, rows);
-                let (_, _, width, height) =
-                    footprint(&Placed { size: wanted, ..*widget }, columns, rows);
+                let (_, _, width, height) = footprint(
+                    &Placed {
+                        size: wanted,
+                        ..*widget
+                    },
+                    columns,
+                    rows,
+                );
                 let preview =
                     Rect::from_min_size(slot.min, vec2(extent_w(width, cell), extent(height)));
                 root.painter().rect_stroke(
@@ -568,7 +589,8 @@ pub fn draw(
 
 /// The size a corner drag is asking for, in whole cells.
 fn size_from_corner(slot: Rect, pos: egui::Pos2, cell: f32, columns: u8, rows: u8) -> Size {
-    let width = (((pos.x - slot.min.x + GAP) / (cell + GAP)).round() as i32).clamp(1, columns as i32);
+    let width =
+        (((pos.x - slot.min.x + GAP) / (cell + GAP)).round() as i32).clamp(1, columns as i32);
     let height =
         (((pos.y - slot.min.y + GAP) / (CELL_HEIGHT + GAP)).round() as i32).clamp(1, rows as i32);
     Size::cells(width as u8, height as u8)
@@ -648,7 +670,11 @@ fn menu<T: Copy>(
                     Align2::LEFT_CENTER,
                     label,
                     FontId::proportional(13.0),
-                    if *current { palette.accent } else { palette.text },
+                    if *current {
+                        palette.accent
+                    } else {
+                        palette.text
+                    },
                 );
                 if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                     chosen = Some(*value);
@@ -664,7 +690,14 @@ pub fn add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<Widget
         .iter()
         .map(|kind| (kind.label().to_owned(), *kind, false))
         .collect();
-    menu(root, palette, "zervo_widget_menu_area", anchor, 170.0, &rows)
+    menu(
+        root,
+        palette,
+        "zervo_widget_menu_area",
+        anchor,
+        170.0,
+        &rows,
+    )
 }
 
 fn draw_size_menu(root: &mut Ui, palette: &Palette, anchor: Rect, current: Size) -> Option<Size> {
@@ -672,7 +705,14 @@ fn draw_size_menu(root: &mut Ui, palette: &Palette, anchor: Rect, current: Size)
         .iter()
         .map(|size| (size.label(), *size, *size == current))
         .collect();
-    menu(root, palette, "zervo_widget_size_area", anchor, 120.0, &rows)
+    menu(
+        root,
+        palette,
+        "zervo_widget_size_area",
+        anchor,
+        120.0,
+        &rows,
+    )
 }
 
 /// How a card is drawn: ordinary, carried by the pointer, or the one a drop
@@ -710,11 +750,9 @@ fn draw_widget(
     let material = match look {
         Look::Held => Glass::new(10),
         // Lit, so it is obvious which card is being traded with.
-        Look::Target => Glass::new(10).tint(crate::theme::mix(
-            palette.surface,
-            palette.accent,
-            0.30,
-        )),
+        Look::Target => {
+            Glass::new(10).tint(crate::theme::mix(palette.surface, palette.accent, 0.30))
+        },
         Look::Normal => Glass::new(10).strength(0.85),
     };
     for shape in glass::shapes(rect, palette, material) {
@@ -797,7 +835,11 @@ fn draw_widget(
             let buttons = [
                 (Icon::Back, MediaSessionActionType::PreviousTrack),
                 (
-                    if media.playing { Icon::Pause } else { Icon::Play },
+                    if media.playing {
+                        Icon::Pause
+                    } else {
+                        Icon::Play
+                    },
                     if media.playing {
                         MediaSessionActionType::Pause
                     } else {
@@ -831,7 +873,8 @@ fn draw_widget(
                         palette.text
                     },
                 );
-                if !media.is_idle() && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                if !media.is_idle() && response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+                {
                     changes.push(Change::Media(action));
                 }
             }
