@@ -733,7 +733,7 @@ fn sidebar_body(
     ui.add_space(10.0);
 
     // ── Search / address pill.
-    draw_address_pill(ui, chrome, actions);
+    draw_address_pill(ui, chrome, actions, 36.0);
     ui.add_space(12.0);
     } else {
         // The traffic lights still sit over the top of the sidebar.
@@ -1185,6 +1185,9 @@ pub const NAVBAR_DEFAULT_HEIGHT: f32 = NAVBAR_ROW;
 const NAVBAR_MAX_HEIGHT: f32 = 220.0;
 /// Room the macOS traffic lights need before the first button.
 const TRAFFIC_LIGHTS: f32 = 78.0;
+/// Sized against the buttons rather than the row, so the pill has about as
+/// much air around it as they do.
+const NAVBAR_PILL_HEIGHT: f32 = 28.0;
 /// One size for every button in the bar. `icon_button` derives the whole
 /// button from the glyph size, so mixing sizes gives visibly different hit
 /// areas and hover shapes sitting on the same line.
@@ -1291,9 +1294,12 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     // ── Centre: the address pill, centred on the window rather than on the
     // space left between the two groups, so it does not drift as they change.
     let width = navbar_pill_width(root, chrome, actions, row);
-    let pill = Rect::from_center_size(pos2(window.center().x, row.center().y), vec2(width, 36.0));
+    let pill = Rect::from_center_size(
+        pos2(window.center().x, row.center().y),
+        vec2(width, NAVBAR_PILL_HEIGHT),
+    );
     let mut host = root.new_child(egui::UiBuilder::new().max_rect(pill));
-    draw_address_pill(&mut host, chrome, actions);
+    draw_address_pill(&mut host, chrome, actions, NAVBAR_PILL_HEIGHT);
 
     navbar_resize(root, chrome, actions, strip);
 
@@ -1370,7 +1376,7 @@ fn navbar_pill_width(
     for (index, side) in [(-1.0_f32), 1.0].iter().enumerate() {
         let edge = Rect::from_center_size(
             pos2(centre.x + side * width / 2.0, centre.y),
-            vec2(10.0, 30.0),
+            vec2(10.0, NAVBAR_PILL_HEIGHT),
         );
         let response = root.interact(
             edge,
@@ -1572,7 +1578,16 @@ fn paint_edge_shadow(painter: &egui::Painter, rect: Rect, colour: Color32) {
     painter.add(Shape::mesh(mesh));
 }
 
-fn draw_address_pill(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
+/// `height` because the bar and the sidebar want different ones: in the bar it
+/// sits in a row of 25pt buttons, and a 36pt pill beside those reads as
+/// misaligned however well its centre lines up — it has 2pt of air where they
+/// have seven, so it looks like it is falling out of the top of the window.
+fn draw_address_pill(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    height: f32,
+) {
     let palette = chrome.palette;
     let loading = chrome
         .browser
@@ -1588,20 +1603,20 @@ fn draw_address_pill(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<
         0.22,
     ));
 
-    let pill_height = 36.0;
     let (pill_rect, _) =
-        ui.allocate_exact_size(vec2(ui.available_width(), pill_height), Sense::hover());
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
 
+    let radius = (height * 0.32) as u8;
     glass::paint(
         ui.painter(),
         pill_rect,
         &palette,
-        Glass::new(10).glow(focus_t),
+        Glass::new(radius).glow(focus_t),
     );
     if focus_t > 0.0 {
         ui.painter().rect_stroke(
             pill_rect,
-            CornerRadius::same(10),
+            CornerRadius::same(radius),
             Stroke::new(
                 1.0 + 0.5 * focus_t,
                 palette.accent.gamma_multiply(0.85 * focus_t),
