@@ -7,8 +7,13 @@
 **A calm, workspace-oriented browser built on the [Servo][servo] engine.**
 
 macOS · Rust · [MPL-2.0](LICENSE)
-<img src="assets/screenshots/Zervo dark.png" width="128" alt="Zervo dark">
-<img src="assets/screenshots/Zervo light.png" width="128" alt="Zervo light">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light.png">
+  <img alt="The Zervo window: a sidebar of workspaces and tabs on the left, servo.org rendered in a floating content card" src="assets/screenshots/zervo-light.png" width="100%">
+</picture>
+
 </div>
 
 ---
