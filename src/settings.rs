@@ -180,6 +180,13 @@ pub struct Settings {
     /// Opacity of the chrome (sidebar and surrounds), 0.35..=1.0. Below 1.0
     /// the window is translucent; the web content itself stays opaque.
     pub chrome_opacity: f32,
+    /// Opacity of the chrome's card surfaces — the address pill, tab rows,
+    /// settings sections, shelf widgets — 0.0..=1.0. Independent of
+    /// `chrome_opacity`, and unlike it this one reaches zero: at zero the
+    /// cards are gone and only their text and icons remain. Surfaces that
+    /// float over a web page or a photograph ignore it, because a modal you
+    /// cannot see is a fault rather than a look.
+    pub card_opacity: f32,
 
     // ── New tab page widgets.
     pub newtab_clock: bool,
@@ -223,6 +230,7 @@ impl Default for Settings {
             top_glow: 1.0,
             content_border: true,
             chrome_opacity: 0.85,
+            card_opacity: 1.0,
             newtab_clock: true,
             newtab_greeting: true,
             newtab_quick_links: true,

@@ -98,6 +98,26 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         text_muted: blend(a.text_muted, b.text_muted),
         border: blend(a.border, b.border),
         shadow: blend(a.shadow, b.shadow),
+        // Not a colour and not part of the theme, so it does not cross over —
+        // it is whatever the setting says, on both sides of the fade.
+        card_opacity: b.card_opacity,
+    }
+}
+
+impl Palette {
+    /// Stamp the user's card-opacity setting on. `resolve` has no business
+    /// knowing about Settings, so main.rs does this once a frame.
+    ///
+    /// NaN is possible — the value is deserialised from settings.json — and it
+    /// would reach `Color32::gamma_multiply`, which debug-asserts on a
+    /// non-finite factor and would then panic once per surface per frame.
+    pub fn with_card_opacity(mut self, opacity: f32) -> Self {
+        self.card_opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        self
     }
 }
 
@@ -130,6 +150,15 @@ pub struct Palette {
     pub border: Color32,
     /// Shadow color for the floating content card.
     pub shadow: Color32,
+    /// How solid the chrome's card surfaces are, 0.0..=1.0 — the user's
+    /// setting, not a colour.
+    ///
+    /// It lives here because the palette is already handed to every
+    /// `glass::shapes` call in the app; the alternative was a parameter on
+    /// nine drawing functions and their callers. `resolve` leaves it at 1.0
+    /// and main.rs stamps the setting on, the same way `dark` is a fact about
+    /// the theme rather than a colour.
+    pub card_opacity: f32,
 }
 
 // Colour architecture inspired by Zen Browser's public design tokens: the chrome is neutral gray bases
@@ -176,6 +205,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             text_muted: Color32::from_rgb(158, 158, 168),
             border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
+            card_opacity: 1.0,
         }
     } else {
         Palette {
@@ -189,6 +219,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             text_muted: Color32::from_rgb(96, 96, 104),
             border: Color32::from_rgb(204, 204, 204),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
+            card_opacity: 1.0,
         }
     };
     // The active-tab tint follows the accent.

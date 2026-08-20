@@ -874,7 +874,8 @@ fn draw_history_page(
 
     // ── Search.
     let field = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(420.0), 32.0));
-    glass::paint(ui.painter(), field, &palette, Glass::new(9));
+    // Not faded: the box is the only sign this is typeable.
+    glass::paint(ui.painter(), field, &palette, Glass::new(9).no_fade());
     icons::draw_icon(
         ui.painter(),
         Rect::from_center_size(pos2(field.min.x + 16.0, field.center().y), vec2(14.0, 14.0)),
@@ -1099,7 +1100,10 @@ fn hover_card(
             for shape in glass::shapes(
                 drawn,
                 palette,
-                Glass::new(12).opaque(palette.bg).border(palette.border),
+                Glass::new(12)
+                    .opaque(palette.bg)
+                    .border(palette.border)
+                    .no_fade(),
             ) {
                 painter.add(shape);
             }
@@ -1139,7 +1143,10 @@ fn popup_menu<T: Clone>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::new(10).opaque(palette.bg).border(palette.border),
+                Glass::new(10)
+                    .opaque(palette.bg)
+                    .border(palette.border)
+                    .no_fade(),
             ) {
                 painter.add(shape);
             }
@@ -2261,7 +2268,8 @@ fn draw_navbar_config(
         .fixed_pos(tray.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            for shape in glass::shapes(tray, &palette, Glass::new(10).opaque(palette.bg)) {
+            for shape in glass::shapes(tray, &palette, Glass::new(10).opaque(palette.bg).no_fade())
+            {
                 ui.painter().add(shape);
             }
             ui.painter().text(
@@ -4117,6 +4125,44 @@ fn settings_appearance(
             .size(11.5)
             .color(palette.text_muted),
         );
+        ui.add_space(10.0);
+
+        ui.label(
+            RichText::new("Card opacity")
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+        if widgets::slider(ui, &mut chrome.settings.card_opacity, 0.0..=1.0, palette) {
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.label(
+            RichText::new(if chrome.settings.card_opacity <= 0.0 {
+                "Off — the address bar, tab rows and settings cards are gone; \
+                 their text and icons remain."
+                    .to_owned()
+            } else {
+                format!(
+                    "{:.0}% — the address bar, tab rows, shelf widgets and these \
+                     sections. Menus and dialogs keep their own.",
+                    chrome.settings.card_opacity * 100.0
+                )
+            })
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+        if chrome.settings.card_opacity < 0.35 && chrome.settings.chrome_opacity < 1.0 {
+            // The two multiply. The card fill is what lifts text off the
+            // chrome, so thinning both at once is where legibility actually
+            // goes, and it is worth saying so at the point of the mistake.
+            ui.label(
+                RichText::new(
+                    "Low with a translucent chrome: text sits on the desktop \
+                     rather than on a surface.",
+                )
+                .size(11.5)
+                .color(palette.accent),
+            );
+        }
     });
 }
 
