@@ -15,8 +15,15 @@ propagated into `prefers-color-scheme`.
 As of 0.3.0, also: `alert`/`confirm`/`prompt`, `<select>` popups, `<input
 type=color>`, `<input type=file>` through the system open panel, the context
 menu, input methods, cookies and logins surviving a restart, `file://` URLs,
-page console output, and — in released builds — file downloads and audio and
-video playback.
+page console output to the log, and — in released builds — file downloads and
+audio and video playback.
+
+Since then: HTTP authentication (`request_authentication`), page zoom on ⌘+, ⌘-
+and ⌘0, the address bar following same-document navigation
+(`notify_url_changed`, so `pushState` no longer leaves it stale), media session
+metadata and playback actions (`notify_media_session_event`, which is what the
+player widgets drive), a searchable history, favourites, and a login vault kept
+in the system keychain.
 
 Tier 0 is done. What is left is the list below.
 
@@ -48,14 +55,8 @@ Each of these is a delegate method or a `WebView` call away.
   `WebView::exit_fullscreen` is there for the way back out.
 - **Permissions.** `request_permission` is not implemented. Geolocation,
   notifications, camera and microphone requests never reach the user.
-- **HTTP authentication.** `request_authentication` is not implemented, so
-  anything behind basic auth is unreachable.
-- **Zoom.** `WebView::set_page_zoom` exists and nothing calls it. ⌘+, ⌘- and ⌘0.
 - **The link target on hover.** `notify_status_text_changed` and
   `WebView::status_text` exist; the usual bottom-left overlay does not.
-- **The address bar during same-document navigation.** `notify_url_changed` is
-  not implemented; the URL is currently taken from history changes, so
-  `pushState` navigations can leave it stale.
 - **Clearing browsing data.** `Servo::site_data_manager` offers `clear_cookies`,
   `clear_session_cookies` and `clear_site_data`, and nothing in Settings calls
   them. Now that cookies persist, there is no way to get rid of them.
@@ -70,17 +71,24 @@ Each of these is a delegate method or a `WebView` call away.
   where filling would attach.
 - **Session restore.** Pure chrome work, no engine involvement: workspaces and
   tabs written out and read back at launch.
+- **Favicons for history and favourites.** They are fetched per live webview and
+  kept in memory, so a saved page has no icon until it is open. A small on-disk
+  icon store would fix both lists at once.
 
 ## Tier 2 — needs engine work, or is genuinely expensive
 
 - **Find in page.** There is no find API on `WebView` in Servo 0.5.0 at all.
   This cannot be done from the embedder side and needs engine work first.
-- **Web notifications** (`show_notification`), **protocol handlers**
-  (`request_protocol_handler`), **media session** (`notify_media_session_event`).
+- **Pausing and resuming a download.** The transfer is an HTTP response being
+  streamed to disk with no way to suspend it and no range-request restart, so
+  the downloads card offers stop and start-again and nothing between. Real
+  pause/resume means teaching the fetch layer about it.
+- **Web notifications** (`show_notification`) and **protocol handlers**
+  (`request_protocol_handler`).
 - **Accessibility.** `notify_accessibility_tree_update` is not implemented, so
   VoiceOver sees nothing.
-- **Devtools.** `show_console_message` is not implemented, so page console output
-  is invisible.
+- **Devtools.** Console output goes to Zervo's log and nowhere the user can see;
+  there is no inspector, network panel or JavaScript console in the browser.
 - **Extensions, sync, profiles.** Not planned.
 
 ## Known rough edges
@@ -92,6 +100,8 @@ Each of these is a delegate method or a `WebView` call away.
 - **Two dialogs at once.** Only the most recent page-initiated control is drawn;
   anything queued behind it waits. A page cannot reasonably need two answers at
   once, and stacked modals are worse than a queue.
+- **Linux and Windows have never been run.** The packages build and install;
+  whether the window opens is unknown. See the platform table in the README.
 
 ## A note on where fixes go
 

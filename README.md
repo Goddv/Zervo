@@ -27,9 +27,18 @@ so some sites will not work. See [Limitations](#limitations).
 
 ## What it looks like
 
-- **Sidebar-first.** No top toolbar. Navigation, the address bar, pinned
-  "essentials", workspaces and tabs all live in one collapsible sidebar.
+- **Sidebar-first, or bar-first.** Everything lives in one collapsible sidebar:
+  navigation, the address bar, pinned "essentials", workspaces and tabs. Collapse
+  it and navigation moves into a bar across the top, with the address pill
+  centred on the window and the sidebar left holding only tabs.
+- **A bar you arrange.** Drag its buttons between the two sides, take them off,
+  put them back. Drag the bar itself taller and it uncovers a shelf of widgets —
+  a clock and media controls so far — laid out on a grid, dropped where you like
+  and resized by the corner.
 - **Workspaces.** Tabs are grouped into named spaces, each with its own colour.
+- **Favourites and history.** The star saves a page and hovering it opens the
+  list; history is searchable and grouped by how long ago.
+- **Saved logins**, kept in the system keychain rather than in Zervo's own files.
 - **Frosted chrome.** Real macOS vibrancy behind an adjustable-opacity chrome.
 - **A new tab page** with seven backgrounds (three animated) and toggleable
   widgets — clock, greeting, quick links, search.
@@ -101,21 +110,43 @@ that, and what signing would cost.
 There is a longer tour in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 including how the chrome and the engine share one GL context.
 
+## Platforms
+
+| Platform | Build | State |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `.dmg`, GStreamer bundled | Used daily by its author |
+| Debian and Ubuntu | `.deb` | Builds and installs; never run |
+| Fedora | `.rpm` | Builds and installs; never run |
+| Windows x64 | self-contained `.exe` | Builds; never run |
+
+The Linux and Windows packages are new and honest about it: they compile,
+package and install, and nobody has started one. Whether Zervo opens a window
+there is untested — the rendering context, X11 versus Wayland and the GL setup
+have never been exercised. A report either way is genuinely useful.
+
+macOS keeps two things the others do not: the frosted vibrancy behind the chrome,
+which is an AppKit feature, and bundled media, since GStreamer on Linux is an
+ordinary package and on Windows is a piece of work not yet done.
+
 ## Limitations
 
-- **macOS only.** The vibrancy, Dock icon and bundling are AppKit-specific.
-  The rest is portable, and patches for other platforms are welcome.
 - **Servo is young.** Expect broken layouts, missing APIs, and sites that
   refuse the user agent. This is a property of the engine, not of Zervo.
-- **No extensions, no sync, no profiles.** Not yet.
+- **Streaming video does not work.** YouTube and the rest need Media Source
+  Extensions, which Servo does not have. Local and progressive video plays.
+- **No extensions.** The engine has none, so neither does the button.
+- **Passwords cannot be filled into web forms.** The engine offers no hook for
+  a submitted form, so saved logins are a vault plus HTTP authentication.
+- **No sync, no profiles.** Not yet.
 - **Unsigned builds.** See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Contributing
 
-Yes please — see [CONTRIBUTING.md](CONTRIBUTING.md). [docs/PARITY.md](docs/PARITY.md)
-is the list of what still stands between Zervo and a browser you could use daily,
-in the order the gaps hurt, with where in the code each one lives. Most of it is
-embedder work, not engine work.
+Yes please — see [CONTRIBUTING.md](CONTRIBUTING.md).
+[docs/TODO.md](docs/TODO.md) is what is being worked on next;
+[docs/PARITY.md](docs/PARITY.md) is the full list of what still stands between
+Zervo and a browser you could use daily, in the order the gaps hurt, with where
+in the code each one lives. Most of it is embedder work, not engine work.
 
 If you want to improve the *engine*, contribute to [Servo][servo] directly.
 Note that Servo does not accept AI-generated contributions.
