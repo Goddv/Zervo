@@ -127,4 +127,73 @@ pub mod glyph {
 
     /// Phosphor `check-circle`
     pub const CHECKCIRCLE: &str = "\u{e184}";
+
+    /// Phosphor `squares-four`
+    pub const SQUARESFOUR: &str = "\u{e464}";
+
+    /// Phosphor `note-pencil`
+    pub const NOTEPENCIL: &str = "\u{e34c}";
+
+    /// Phosphor `list-checks`
+    pub const LISTCHECKS: &str = "\u{eadc}";
+
+    /// Phosphor `check-square`
+    pub const CHECKSQUARE: &str = "\u{e186}";
+
+    /// Phosphor `square`
+    pub const SQUARE: &str = "\u{e45e}";
+
+    /// Phosphor `image`
+    pub const IMAGE: &str = "\u{e2ca}";
+
+    /// Phosphor `mountains`
+    pub const MOUNTAINS: &str = "\u{e7ae}";
+
+    /// Phosphor `shuffle`
+    pub const SHUFFLE: &str = "\u{e422}";
+
+    /// Phosphor `globe-hemisphere-west`
+    pub const GLOBEHEMISPHERE: &str = "\u{e28c}";
+
+    /// Phosphor `music-notes`
+    pub const MUSICNOTES: &str = "\u{e340}";
+
+    /// Phosphor `stack`
+    pub const STACK: &str = "\u{e466}";
+
+    /// Phosphor `pencil-simple`
+    pub const PENCIL: &str = "\u{e3b4}";
+
+    /// Phosphor `dots-six-vertical`
+    pub const DOTSSIX: &str = "\u{eae2}";
+
+    /// Phosphor `corners-out`
+    pub const CORNERSOUT: &str = "\u{e1d0}";
+
+    /// Phosphor `calendar-blank`
+    pub const CALENDAR: &str = "\u{e10a}";
+
+    /// Phosphor `trend-up`
+    pub const TRENDUP: &str = "\u{e4ae}";
+
+    /// Phosphor `clock-counter-clockwise`
+    pub const CLOCKCOUNTER: &str = "\u{e1a0}";
+
+    /// Phosphor `arrow-counter-clockwise`
+    pub const ARROWCOUNTER: &str = "\u{e038}";
+
+    /// Phosphor `minus`
+    pub const MINUS: &str = "\u{e32a}";
+
+    /// Phosphor `link-simple`
+    pub const LINK: &str = "\u{e2e6}";
+
+    /// Phosphor `skip-back`
+    pub const SKIPBACK: &str = "\u{e5a4}";
+
+    /// Phosphor `skip-forward`
+    pub const SKIPFORWARD: &str = "\u{e5a6}";
+
+    /// Phosphor `puzzle-piece`
+    pub const PUZZLE: &str = "\u{e596}";
 }
