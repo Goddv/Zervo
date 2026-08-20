@@ -140,6 +140,9 @@ impl Gestures {
 #[derive(Default)]
 pub struct Recognizer {
     travel: Vec2,
+    /// The fingers are down. Separate from `started`, which is the clock.
+    open: bool,
+    /// When the stroke first *moved*.
     started: Option<Instant>,
     /// The stroke began inside the momentum window, so it is inertia from the
     /// previous one and cannot be a gesture.
@@ -156,9 +159,15 @@ impl Recognizer {
             TouchPhase::Started => {
                 // A Started while a stroke is already open is AppKit's
                 // MayBegin followed by Began — the fingers landing and then
-                // moving. One stroke, not two.
-                if self.started.is_none() {
-                    self.started = Some(now);
+                // moving. One stroke, not two. Unless the open one has been
+                // going longer than any flick is allowed to last, in which
+                // case its Ended went missing and this is genuinely new.
+                let stale = self
+                    .started
+                    .is_some_and(|start| now.saturating_duration_since(start) > MAX_DURATION);
+                if !self.open || stale {
+                    self.open = true;
+                    self.started = None;
                     self.travel = Vec2::ZERO;
                     self.inertia = self
                         .settled
@@ -167,6 +176,14 @@ impl Recognizer {
                 None
             },
             TouchPhase::Moved => {
+                // The clock runs from the first real movement, not from the
+                // fingers landing. Resting them for a moment before flicking
+                // is ordinary, and charging that pause to the flick's budget
+                // makes the same gesture work or not depending on how long
+                // you hesitated first.
+                if self.started.is_none() && delta.length() > 0.5 {
+                    self.started = Some(now);
+                }
                 self.travel += delta;
                 None
             },
@@ -175,11 +192,15 @@ impl Recognizer {
                 let moved = self.travel.length() > 1.0;
                 // Only a stroke that went somewhere leaves inertia behind, so
                 // resting two fingers and lifting them again — which AppKit
-                // also reports as a phase run — must not arm the window.
-                self.settled = moved.then_some(now);
+                // also reports as a phase run — must not arm the window. Nor
+                // may a stroke that was itself inertia, or a second flick made
+                // while the first is still coasting would be swallowed too,
+                // and so would the third.
+                self.settled = (moved && !self.inertia).then_some(now);
                 let direction = started
                     .filter(|_| !self.inertia)
                     .and_then(|start| self.recognise(now.saturating_duration_since(start)));
+                self.open = false;
                 self.travel = Vec2::ZERO;
                 direction
             },

@@ -64,6 +64,14 @@ use winit::window::Window;
 /// How long the chrome takes to cross from one theme to the other.
 const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(220);
 
+/// Which side of the window owns the pointer between a press and its release.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PointerOwner {
+    Free,
+    Chrome,
+    Page,
+}
+
 use crate::app::AppState;
 use crate::keyboard::{CMD_OR_ALT, CMD_OR_CONTROL, keyboard_event_from_winit};
 use crate::settings::{NewTabPage, Settings};
@@ -113,13 +121,15 @@ struct RunningApp {
     controls_open: bool,
     /// Accumulates scroll events into trackpad swipes.
     swipe: gestures::Recognizer,
-    /// The pointer went down on the chrome, so the chrome keeps it until the
-    /// button comes back up — even once it has travelled out over the page.
+    /// Whichever side the pointer went down on keeps it until the button
+    /// comes back up, wherever it has travelled to since.
     ///
-    /// Without this, dragging a tab across the window hands the move events to
-    /// the engine the moment the pointer crosses into the content rect, and
-    /// the drag never finishes because the release is never seen.
-    chrome_holds_pointer: bool,
+    /// Without this a drag that crosses the boundary is handed to the other
+    /// side halfway through and never finishes, because the release is
+    /// delivered somewhere the press was not: a tab dragged out over the page
+    /// loses its drop, and a control dragged off the page onto the sidebar is
+    /// left stuck to the cursor.
+    pointer_owner: PointerOwner,
     /// Throttles history writes: every visit marks the library dirty, and
     /// rewriting the file on each one would be a lot of churn for a browse.
     library_saved_at: std::time::Instant,
@@ -302,7 +312,7 @@ impl ApplicationHandler<WakerEvent> for App {
             content_rect_points: egui::Rect::ZERO,
             controls_open: false,
             swipe: gestures::Recognizer::default(),
-            chrome_holds_pointer: false,
+            pointer_owner: PointerOwner::Free,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
             applied_theme,
@@ -425,7 +435,9 @@ impl RunningApp {
 
         // Re-decided on every press rather than remembered indefinitely, so a
         // mouse-up we never see — AppKit swallows one whenever it runs its own
-        // window-drag loop — cannot wedge the chrome on.
+        // window-drag loop — cannot wedge either side on. Not cleared on
+        // CursorLeft: leaving the window mid-drag is exactly when the owner
+        // matters most.
         if matches!(
             &event,
             WindowEvent::MouseInput {
@@ -433,13 +445,14 @@ impl RunningApp {
                 ..
             }
         ) {
-            self.chrome_holds_pointer = !pointer_on_page;
+            self.pointer_owner = if pointer_on_page {
+                PointerOwner::Page
+            } else {
+                PointerOwner::Chrome
+            };
         }
-        if matches!(
-            &event,
-            WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false)
-        ) {
-            self.chrome_holds_pointer = false;
+        if matches!(&event, WindowEvent::Focused(false)) {
+            self.pointer_owner = PointerOwner::Free;
         }
         if let WindowEvent::MouseWheel { delta, phase, .. } = &event
             && self.settings.gestures.enabled
@@ -470,7 +483,11 @@ impl RunningApp {
             }
         }
 
-        let over_content = pointer_on_page && !self.chrome_holds_pointer;
+        let over_content = match self.pointer_owner {
+            PointerOwner::Chrome => false,
+            PointerOwner::Page => true,
+            PointerOwner::Free => pointer_on_page,
+        };
         if matches!(
             &event,
             WindowEvent::MouseInput {
@@ -478,9 +495,9 @@ impl RunningApp {
                 ..
             }
         ) {
-            // Released after the routing decision, so the release itself still
+            // Cleared after the routing decision, so the release itself still
             // goes wherever the press went.
-            self.chrome_holds_pointer = false;
+            self.pointer_owner = PointerOwner::Free;
         }
 
         let mut consumed = false;
@@ -1245,27 +1262,38 @@ impl RunningApp {
                 workspace,
                 index,
             } => {
-                let mut browser = state.browser.borrow_mut();
-                if browser.move_tab(tab, workspace, index) {
-                    // Following the tab is what the gesture means. Dropping it
-                    // into a workspace you are not looking at and staying put
-                    // reads as having lost it.
-                    browser.active_workspace = workspace;
-                    browser.active_tab = Some(tab);
+                let moved = {
+                    let mut browser = state.browser.borrow_mut();
+                    let moved = browser.move_tab(tab, workspace, index);
+                    if moved {
+                        browser.active_workspace = workspace;
+                    }
+                    moved
+                };
+                if moved {
+                    // Through SelectTab, not by assigning active_tab: that
+                    // field is the model's opinion, and the engine only shows,
+                    // focuses and unthrottles a webview when activate_tab says
+                    // so. Setting it directly leaves the page you were on
+                    // displayed and focused while the sidebar claims otherwise.
+                    // Following the tab is what the gesture means — dropping it
+                    // somewhere you are not looking reads as having lost it.
+                    self.apply_action(ui::UiAction::SelectTab(tab));
                 }
-                drop(browser);
                 state.window.request_redraw();
             },
             UiAction::GroupTabs { onto, dragged } => {
-                let mut browser = state.browser.borrow_mut();
-                let name = Self::group_name(&browser, onto, dragged);
-                let index = browser.group_tabs(name, onto, dragged);
-                browser.active_workspace = index;
-                browser.active_tab = Some(dragged);
-                // Opened for editing straight away: the group is the answer to
-                // a question the user has not been asked yet.
-                browser.workspace_edit = Some((index, browser.workspaces[index].name.clone()));
-                drop(browser);
+                {
+                    let mut browser = state.browser.borrow_mut();
+                    let name = Self::group_name(&browser, onto, dragged);
+                    let index = browser.group_tabs(name, onto, dragged);
+                    browser.active_workspace = index;
+                    // Opened for editing straight away: the group is the answer
+                    // to a question the user has not been asked yet.
+                    browser.workspace_edit = Some((index, browser.workspaces[index].name.clone()));
+                }
+                // See MoveTab — the engine has to be told, not just the model.
+                self.apply_action(ui::UiAction::SelectTab(dragged));
                 state.window.request_redraw();
             },
             UiAction::RenameWorkspace(index, name) => {
@@ -1358,14 +1386,17 @@ impl RunningApp {
 
     /// A provisional name for a group made from two tabs.
     ///
-    /// Their shared host if they have one, since grouping two pages from the
+    /// Their shared host, when they have one — grouping two pages from the
     /// same site is the common case and "github.com" is a better guess than
-    /// anything generic. Otherwise the numbered default, which at least says
-    /// what to replace.
+    /// anything generic. Internal pages are skipped rather than parsed: the
+    /// authority of `zervo://newtab` is `newtab`, so two new tabs would
+    /// otherwise produce a workspace called "newtab". Otherwise the numbered
+    /// default, which at least says what to replace.
     fn group_name(browser: &state::BrowserState, onto: TabId, dragged: TabId) -> String {
         let host = |id: TabId| {
             browser
                 .tab(id)
+                .filter(|tab| tab.url.starts_with("https://") || tab.url.starts_with("http://"))
                 .and_then(|tab| tab.url.split("://").nth(1))
                 .and_then(|rest| rest.split('/').next())
                 .map(|host| host.trim_start_matches("www.").to_owned())

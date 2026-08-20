@@ -317,12 +317,15 @@ impl BrowserState {
         let tab = self.workspaces[from].tabs.remove(at);
         // Within one workspace the caller's index was worked out against the
         // list as it looked *before* the removal, so everything after the tab
-        // has since shifted down one. Without this, dragging a tab downward
-        // always lands it one slot short.
-        let mut index = index.min(self.workspaces[workspace].tabs.len());
+        // has since shifted down one. Correct for that first and clamp
+        // second: clamping to the post-removal length already accounts for
+        // the shift, so doing it the other way round subtracts it twice and
+        // a tab dragged to the end of its own list lands one slot short.
+        let mut index = index;
         if from == workspace && at < index {
             index -= 1;
         }
+        let index = index.min(self.workspaces[workspace].tabs.len());
         self.workspaces[workspace].tabs.insert(index, tab);
         true
     }
