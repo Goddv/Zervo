@@ -941,6 +941,16 @@ fn sidebar_body(
                 ctx.request_repaint();
             }
 
+            // A drag can end without its row ever seeing the release: close
+            // the tab mid-drag with Cmd-W and the row that would have reported
+            // it is not built at all, which used to leave the sidebar showing
+            // drop carets for the rest of the session.
+            let orphaned = dragging.is_some_and(|id| chrome.browser.tab(id).is_none())
+                || (dragging.is_some() && !ctx.input(|input| input.pointer.any_down()));
+            if orphaned {
+                ctx.data_mut(|data| data.remove::<TabId>(drag_id));
+            }
+
             if released {
                 ctx.data_mut(|data| data.remove::<TabId>(drag_id));
                 if let (Some(held), Some((workspace, index, onto))) = (dragging, target) {
@@ -969,9 +979,13 @@ fn sidebar_body(
                     },
                     WorkspaceName::Keep(name) => {
                         chrome.browser.workspace_edit = None;
+                        ctx.data_mut(|data| data.remove::<usize>(Id::new("zervo_ws_focus")));
                         actions.push(UiAction::RenameWorkspace(index, name));
                     },
-                    WorkspaceName::Discard => chrome.browser.workspace_edit = None,
+                    WorkspaceName::Discard => {
+                        chrome.browser.workspace_edit = None;
+                        ctx.data_mut(|data| data.remove::<usize>(Id::new("zervo_ws_focus")));
+                    },
                 }
             }
         });
@@ -1517,7 +1531,15 @@ fn draw_favourites_card(
                         TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
                     );
                     if !editor.has_focus() && !editor.lost_focus() {
-                        editor.request_focus();
+                        // Once, when the editor opens. Requesting it every frame pins the
+                        // keyboard here: clicking the address bar takes focus for a single
+                        // frame and loses it again, and every keystroke in the window ends up
+                        // in this field until it is dismissed.
+                        let focus_key = Id::new("zervo_ws_focus");
+                        if ui.ctx().data(|data| data.get_temp::<usize>(focus_key)) != Some(index) {
+                            editor.request_focus();
+                            ui.ctx().data_mut(|data| data.insert_temp(focus_key, index));
+                        }
                     }
                     let entered = child.input(|input| input.key_pressed(Key::Enter));
                     let escaped = child.input(|input| input.key_pressed(Key::Escape));
@@ -3132,16 +3154,17 @@ fn workspace_header(
 
         let entered = ui.input(|input| input.key_pressed(egui::Key::Enter));
         let escaped = ui.input(|input| input.key_pressed(egui::Key::Escape));
-        *rename = Some((
-            index,
-            if keep || entered {
-                WorkspaceName::Keep(text)
-            } else if discard || escaped {
-                WorkspaceName::Discard
-            } else {
-                WorkspaceName::Typing(text)
-            },
-        ));
+        // Only when something actually happened. Writing Typing(text) every
+        // frame would overwrite a rename the context menu asked for on any
+        // workspace drawn after this one, since there is a single slot and the
+        // last writer wins — and the menu is always drawn later.
+        if keep || entered {
+            *rename = Some((index, WorkspaceName::Keep(text)));
+        } else if discard || escaped {
+            *rename = Some((index, WorkspaceName::Discard));
+        } else if text != draft {
+            *rename = Some((index, WorkspaceName::Typing(text)));
+        }
         return rect;
     }
 
