@@ -492,9 +492,6 @@ fn paint_photo(
     // so the fade did not merely fail to run, the wallpaper never appeared at
     // all. A frame that draws nothing still has to ask for the next one.
     *ambient |= fade < 1.0;
-    if fade <= 0.0 {
-        return None;
-    }
 
     // The picture is fitted to the page at its *full* height and then cropped
     // as the widget shelf takes space off the top, rather than refitted to
