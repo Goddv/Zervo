@@ -1074,6 +1074,22 @@ impl RunningApp {
                     downloads::open_file(&item.path);
                 }
             },
+            UiAction::RestartDownload(id) => {
+                // Servo has no "fetch this again" call, so the way to start a
+                // download over is to ask for the URL again — which is how it
+                // started in the first place.
+                let url = self
+                    .downloads
+                    .items
+                    .iter()
+                    .find(|item| item.id == id)
+                    .map(|item| item.url.clone());
+                self.downloads.remove(id);
+                if let Some(url) = url {
+                    self.apply_action(UiAction::Navigate(url));
+                }
+                state.window.request_redraw();
+            },
             UiAction::ClearDownloads => {
                 self.downloads.clear_finished();
                 state.window.request_redraw();
