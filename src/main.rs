@@ -105,8 +105,6 @@ struct RunningApp {
     webview_relative_mouse: Cell<Point2D<f32, DevicePixel>>,
     /// The content rect left over after the chrome panels, in egui points.
     content_rect_points: egui::Rect,
-    /// Revealed autohide sidebar, floating over the content card.
-    overlay_rect_points: Option<egui::Rect>,
     /// A page-initiated dialog or menu is up.
     controls_open: bool,
     /// Throttles history writes: every visit marks the library dirty, and
@@ -264,7 +262,6 @@ impl ApplicationHandler<WakerEvent> for App {
             cursor: PhysicalPosition::default(),
             webview_relative_mouse: Cell::new(Point2D::zero()),
             content_rect_points: egui::Rect::ZERO,
-            overlay_rect_points: None,
             controls_open: false,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
@@ -370,12 +367,17 @@ impl RunningApp {
         // While the settings page covers the content area, egui owns it — as
         // it does the strip a revealed autohide sidebar floats over, or its
         // clicks and scrolls would reach the page underneath as well.
+        // Anything egui has floating over the content owns the pointer: the
+        // favourites card, the downloads card, the revealed sidebar, widget
+        // menus, page dialogs. Asking egui which layer is under the pointer
+        // covers all of them, including ones added later — the previous
+        // version listed overlays by hand, and every overlay anyone forgot to
+        // add sent its clicks straight through to the page underneath.
         let over_content = self.content_rect_points.contains(cursor_points)
             && !self.settings_open
+            // A modal dialog blocks the whole page, not just its own rect.
             && !self.controls_open
-            && !self
-                .overlay_rect_points
-                .is_some_and(|rect| rect.contains(cursor_points));
+            && !self.egui_glow.egui_ctx.is_pointer_over_egui();
 
         let mut consumed = false;
         match &event {
@@ -750,7 +752,6 @@ impl RunningApp {
             state
                 .content_origin
                 .set((output.content_rect.min.x, output.content_rect.min.y));
-            self.overlay_rect_points = output.chrome_overlay;
             self.controls_open = output.controls_open;
             self.settings_open = output.settings_open;
             ambient = output.ambient;
