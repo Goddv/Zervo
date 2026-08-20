@@ -364,72 +364,14 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) 
     snap_rect(inset, root.pixels_per_point())
 }
 
-/// The rounded-rect outline as (point, outward normal).
-///
-/// Sampling the four corner arcs and joining them also yields the straight
-/// edges: an arc's endpoints sit exactly at the edge tangent points, and their
-/// normals are the edge normals.
-fn card_outline(rect: Rect, radius: f32, arc_segments: usize) -> Vec<(egui::Pos2, egui::Vec2)> {
-    let mut outline = Vec::with_capacity(4 * (arc_segments + 1));
-    let corners = [
-        (pos2(rect.max.x - radius, rect.max.y - radius), 0.0_f32),
-        (pos2(rect.min.x + radius, rect.max.y - radius), 0.5),
-        (pos2(rect.min.x + radius, rect.min.y + radius), 1.0),
-        (pos2(rect.max.x - radius, rect.min.y + radius), 1.5),
-    ];
-    for (centre, quarter) in corners {
-        for segment in 0..=arc_segments {
-            let angle =
-                (quarter + segment as f32 / arc_segments as f32 * 0.5) * std::f32::consts::PI;
-            let normal = vec2(angle.cos(), angle.sin());
-            outline.push((centre + normal * radius, normal));
-        }
-    }
-    outline
-}
-
-/// Extrude `outline` outwards as a ring mesh, colouring each radial step with
-/// `colour_at(t)` where `t` runs 0 (at the outline) to 1 (at `spread`).
-fn paint_outline_ring(
-    painter: &egui::Painter,
-    outline: &[(egui::Pos2, egui::Vec2)],
-    spread: f32,
-    steps: usize,
-    colour_at: impl Fn(f32) -> Color32,
-) {
-    let mut mesh = Mesh::default();
-    for step in 0..=steps {
-        let t = step as f32 / steps as f32;
-        let colour = colour_at(t);
-        for (point, normal) in outline {
-            mesh.colored_vertex(*point + *normal * (spread * t), colour);
-        }
-    }
-    let ring = outline.len() as u32;
-    for step in 0..steps as u32 {
-        for index in 0..ring {
-            let next = (index + 1) % ring;
-            let (inner, outer) = (step * ring, (step + 1) * ring);
-            mesh.add_triangle(inner + index, inner + next, outer + next);
-            mesh.add_triangle(inner + index, outer + next, outer + index);
-        }
-    }
-    painter.add(Shape::mesh(mesh));
-}
-
-/// A soft shadow hugging a rounded rect.
-///
-/// Concentric strokes are the obvious approach and the wrong one: each stroke
-/// has a hard edge, so a handful of them read as visible bands rather than a
-/// shadow. Interpolating vertex colours across a ring mesh gives a continuous
-/// falloff instead.
+/// A soft shadow hugging the content card.
 fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: &Palette) {
-    let outline = card_outline(rect, radius, 10);
-    let base = palette.shadow.gamma_multiply(0.9);
-    // Quadratic falloff, close to how a real penumbra reads.
-    paint_outline_ring(painter, &outline, 9.0, 10, |t| {
-        base.gamma_multiply((1.0 - t).powi(2))
-    });
+    painter.add(glass::shadow(
+        rect,
+        radius,
+        palette.shadow.gamma_multiply(0.9),
+        9.0,
+    ));
 }
 
 /// Hide the seam between the opaque corner masks and translucent chrome.
@@ -450,13 +392,13 @@ fn paint_card_opacity_blend(
     if chrome_opacity >= 1.0 {
         return; // Opaque chrome has no seam to hide.
     }
-    let outline = card_outline(rect, radius, 10);
+    let outline = glass::outline(rect, radius, 20);
     // Reach past the corner wedge — the furthest the square box sits from the
     // arc is radius * (sqrt(2) - 1).
     let spread = radius * 0.42 + 6.0;
-    paint_outline_ring(painter, &outline, spread, 8, |t| {
+    painter.add(glass::ring(&outline, spread, 8, |t| {
         chrome.gamma_multiply((1.0 - t).powi(2))
-    });
+    }));
 }
 
 /// Draw the rounded-corner masks and border over the (square) webview blit.
@@ -1126,16 +1068,13 @@ fn hover_card(
             // catching clicks meant for its own top row.
             ui.set_clip_rect(drawn);
             let painter = ui.painter();
-            painter.rect_filled(card, CornerRadius::same(12), palette.bg);
-            for shape in glass::shapes(card, palette, Glass::new(12)) {
+            for shape in glass::shapes(
+                card,
+                palette,
+                Glass::new(12).opaque(palette.bg).border(palette.border),
+            ) {
                 painter.add(shape);
             }
-            painter.rect_stroke(
-                card,
-                CornerRadius::same(12),
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
             add(ui, card);
             ui.advance_cursor_after_rect(drawn);
         });
@@ -1165,16 +1104,13 @@ fn popup_menu<T: Clone>(
         .constrain(false)
         .show(ctx, |ui| {
             let painter = ui.painter();
-            painter.rect_filled(rect, CornerRadius::same(10), palette.bg);
-            for shape in glass::shapes(rect, palette, Glass::new(10)) {
+            for shape in glass::shapes(
+                rect,
+                palette,
+                Glass::new(10).opaque(palette.bg).border(palette.border),
+            ) {
                 painter.add(shape);
             }
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(10),
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
             for (index, (label, value)) in rows.iter().enumerate() {
                 let row = Rect::from_min_size(
                     pos2(rect.min.x + 6.0, rect.min.y + 6.0 + index as f32 * ROW),
@@ -2293,9 +2229,7 @@ fn draw_navbar_config(
         .fixed_pos(tray.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            ui.painter()
-                .rect_filled(tray, CornerRadius::same(10), palette.bg);
-            for shape in glass::shapes(tray, &palette, Glass::new(10)) {
+            for shape in glass::shapes(tray, &palette, Glass::new(10).opaque(palette.bg)) {
                 ui.painter().add(shape);
             }
             ui.painter().text(

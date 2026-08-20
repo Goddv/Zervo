@@ -645,16 +645,13 @@ fn menu<T: Copy>(
         .constrain(false)
         .show(&ctx, |ui| {
             let painter = ui.painter();
-            painter.rect_filled(rect, CornerRadius::same(10), palette.bg);
-            for shape in glass::shapes(rect, palette, Glass::new(10)) {
+            for shape in glass::shapes(
+                rect,
+                palette,
+                Glass::new(10).opaque(palette.bg).border(palette.border),
+            ) {
                 painter.add(shape);
             }
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(10),
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
             for (index, (label, value, current)) in rows.iter().enumerate() {
                 let row = Rect::from_min_size(
                     pos2(rect.min.x + 6.0, rect.min.y + 6.0 + index as f32 * ROW),
@@ -746,7 +743,6 @@ fn draw_widget(
     let painter = root.painter();
     // Opaque, with the shadow left on: these stack over the content card, and
     // a translucent card in a pile does not read as a card.
-    painter.rect_filled(rect, CornerRadius::same(10), palette.bg);
     let material = match look {
         Look::Held => Glass::new(10),
         // Lit, so it is obvious which card is being traded with.
@@ -754,7 +750,8 @@ fn draw_widget(
             Glass::new(10).tint(crate::theme::mix(palette.surface, palette.accent, 0.30))
         },
         Look::Normal => Glass::new(10).strength(0.85),
-    };
+    }
+    .opaque(palette.bg);
     for shape in glass::shapes(rect, palette, material) {
         painter.add(shape);
     }

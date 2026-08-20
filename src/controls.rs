@@ -233,19 +233,16 @@ fn panel<R>(
                     .rect_filled(scrim, CornerRadius::ZERO, dim(palette));
             }
             let painter = ui.painter();
-            // Opaque backing first. These float over live page content and the
+            // Backed opaquely: these float over live page content and the
             // glass material is only about 95% opaque, which is fine over the
             // chrome but lets page text ghost through a menu.
-            painter.rect_filled(rect, CornerRadius::same(radius), palette.bg);
-            for shape in glass::shapes(rect, palette, Glass::new(radius)) {
+            for shape in glass::shapes(
+                rect,
+                palette,
+                Glass::new(radius).opaque(palette.bg).border(palette.border),
+            ) {
                 painter.add(shape);
             }
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(radius),
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
             let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(14.0)));
             let value = add(&mut inner);
             ui.advance_cursor_after_rect(rect);
