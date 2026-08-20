@@ -71,6 +71,7 @@ pub enum UiAction {
     RevealDownload(u64),
     OpenDownload(u64),
     ClearDownloads,
+    RestartDownload(u64),
     /// Pointer started dragging empty chrome — move the OS window.
     DragWindow,
     /// A setting changed: persist and re-apply (theme, etc.).
@@ -1062,13 +1063,144 @@ fn draw_favourite_star(
     rect
 }
 
+/// A card that opens while the pointer is on `anchor` and stays open while it
+/// is on either. Returns the rect it drew into, so a caller can tell whether
+/// it is showing.
+///
+/// Shared because every reveal in the bar wants the same behaviour, and the
+/// fiddly parts — the gap between trigger and card counting as "still here",
+/// growing downward so the card never covers what opened it — are worth
+/// getting right once.
+fn hover_card(
+    root: &mut Ui,
+    palette: &Palette,
+    key: &str,
+    anchor: Rect,
+    size: egui::Vec2,
+    add: impl FnOnce(&mut Ui, Rect),
+) -> Option<Rect> {
+    let ctx = root.ctx().clone();
+    let id = Id::new(key);
+    let pointer = ctx.input(|input| input.pointer.latest_pos());
+    let was_open = ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+
+    let card = clamp_into(
+        Rect::from_min_size(
+            pos2(anchor.center().x - size.x / 2.0, anchor.max.y + 6.0),
+            size,
+        ),
+        ctx.content_rect(),
+    );
+    // The gap between trigger and card counts as still hovering, or the card
+    // closes in the space between them.
+    let bridge = Rect::from_min_max(
+        pos2(anchor.min.x.min(card.min.x), anchor.max.y),
+        pos2(anchor.max.x.max(card.min.x + 40.0), card.min.y + 2.0),
+    );
+    let open = pointer.is_some_and(|pos| {
+        anchor.contains(pos)
+            || (was_open && (card.expand(6.0).contains(pos) || bridge.contains(pos)))
+    });
+    ctx.data_mut(|data| data.insert_temp(id, open));
+
+    let grow = glass::ease_out(ctx.animate_bool_with_time(id.with("grow"), open, 0.13));
+    if grow <= 0.0 {
+        return None;
+    }
+    // Grows downward out of the trigger's underside, so it never covers it.
+    let drawn = Rect::from_min_size(
+        card.min,
+        vec2(card.width(), (card.height() * grow).max(1.0)),
+    );
+
+    egui::Area::new(id.with("area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(drawn.min)
+        .constrain(false)
+        .show(&ctx, |ui| {
+            // Clipped, so a half-grown card shows the top of a whole one
+            // rather than a squashed one. Widgets outside the clip are not
+            // interactive either, which is what keeps a growing card from
+            // catching clicks meant for its own top row.
+            ui.set_clip_rect(drawn);
+            let painter = ui.painter();
+            painter.rect_filled(card, CornerRadius::same(12), palette.bg);
+            for shape in glass::shapes(card, palette, Glass::new(12)) {
+                painter.add(shape);
+            }
+            painter.rect_stroke(
+                card,
+                CornerRadius::same(12),
+                Stroke::new(1.0_f32, palette.border),
+                StrokeKind::Inside,
+            );
+            add(ui, card);
+            ui.advance_cursor_after_rect(drawn);
+        });
+    Some(drawn)
+}
+
+/// A small floating list, anchored under `at`. Used for right-click menus in
+/// the chrome, which egui's own menus do not cover because these hang off
+/// hand-drawn rows rather than widgets.
+fn popup_menu<T: Clone>(
+    ctx: &egui::Context,
+    palette: &Palette,
+    key: Id,
+    at: egui::Pos2,
+    rows: &[(String, T)],
+) -> Option<T> {
+    const ROW: f32 = 28.0;
+    let width = 200.0;
+    let rect = clamp_into(
+        Rect::from_min_size(at, vec2(width, rows.len() as f32 * ROW + 12.0)),
+        ctx.content_rect(),
+    );
+    let mut chosen = None;
+    egui::Area::new(key)
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .constrain(false)
+        .show(ctx, |ui| {
+            let painter = ui.painter();
+            painter.rect_filled(rect, CornerRadius::same(10), palette.bg);
+            for shape in glass::shapes(rect, palette, Glass::new(10)) {
+                painter.add(shape);
+            }
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(10),
+                Stroke::new(1.0_f32, palette.border),
+                StrokeKind::Inside,
+            );
+            for (index, (label, value)) in rows.iter().enumerate() {
+                let row = Rect::from_min_size(
+                    pos2(rect.min.x + 6.0, rect.min.y + 6.0 + index as f32 * ROW),
+                    vec2(rect.width() - 12.0, ROW),
+                );
+                let response = ui.interact(row, key.with(index), Sense::click());
+                if response.hovered() {
+                    ui.painter()
+                        .rect_filled(row, CornerRadius::same(7), palette.surface_hover);
+                }
+                ui.painter().text(
+                    pos2(row.min.x + 8.0, row.center().y),
+                    Align2::LEFT_CENTER,
+                    label,
+                    FontId::proportional(13.0),
+                    palette.text,
+                );
+                if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                    chosen = Some(value.clone());
+                }
+            }
+            ui.advance_cursor_after_rect(rect);
+        });
+    chosen
+}
+
 /// Hovering the star opens a card of the favourites, rather than spending a
 /// whole bar on them.
-///
-/// It grows from just under the star, never over it: an animating card that
-/// overlaps its own trigger swallows the click that opened it, which is why
-/// the star stopped responding once this existed. For the same reason the card
-/// only takes input once it has finished growing.
 fn draw_favourites_card(
     root: &mut Ui,
     chrome: &mut ChromeContext,
@@ -1078,50 +1210,16 @@ fn draw_favourites_card(
     const ROW: f32 = 32.0;
     const TILE: f32 = 62.0;
 
-    let ctx = root.ctx().clone();
-    let id = Id::new("zervo_favourites_card");
-    let pointer = ctx.input(|input| input.pointer.latest_pos());
-    let was_open = ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-
+    let palette = chrome.palette;
     let grid = chrome.settings.favourites_grid;
     let count = chrome.library.favourites.len().max(1);
-    let (width, height) = if grid {
-        let columns = 4;
-        let rows = count.div_ceil(columns).clamp(1, 4) as f32;
-        (columns as f32 * TILE + 20.0, rows * TILE + 46.0)
+    let size = if grid {
+        let rows = count.div_ceil(4).clamp(1, 4) as f32;
+        vec2(4.0 * TILE + 20.0, rows * TILE + 46.0)
     } else {
-        (280.0, count.clamp(1, 10) as f32 * ROW + 46.0)
+        vec2(300.0, count.clamp(1, 10) as f32 * ROW + 46.0)
     };
-    let card = clamp_into(
-        Rect::from_min_size(
-            pos2(star.center().x - width / 2.0, star.max.y + 6.0),
-            vec2(width, height),
-        ),
-        ctx.content_rect(),
-    );
 
-    // The gap between star and card counts as still hovering, or the card
-    // closes in the space between them.
-    let bridge = Rect::from_min_max(
-        pos2(star.min.x.min(card.min.x), star.max.y),
-        pos2(star.max.x.max(card.min.x + 40.0), card.min.y + 2.0),
-    );
-    let open = pointer.is_some_and(|pos| {
-        star.contains(pos) || (was_open && (card.expand(6.0).contains(pos) || bridge.contains(pos)))
-    });
-    ctx.data_mut(|data| data.insert_temp(id, open));
-
-    let grow = glass::ease_out(ctx.animate_bool_with_time(id.with("grow"), open, 0.13));
-    if grow <= 0.0 {
-        return;
-    }
-    // Grows downward out of the star's underside, so it never covers it.
-    let drawn = Rect::from_min_size(
-        card.min,
-        vec2(card.width(), (card.height() * grow).max(1.0)),
-    );
-
-    let palette = chrome.palette;
     let favourites: Vec<(String, String)> = chrome
         .library
         .favourites
@@ -1129,27 +1227,20 @@ fn draw_favourites_card(
         .map(|entry| (entry.url.clone(), entry.title.clone()))
         .collect();
     let editing = chrome.browser.favourite_edit.clone();
+    let id = Id::new("zervo_favourites_card");
 
     let mut toggle_layout = false;
     let mut edit: Option<Option<(String, String)>> = None;
 
-    egui::Area::new(id.with("area"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(drawn.min)
-        .constrain(false)
-        .show(&ctx, |ui| {
-            ui.set_clip_rect(drawn);
-            let painter = ui.painter();
-            painter.rect_filled(card, CornerRadius::same(12), palette.bg);
-            for shape in glass::shapes(card, &palette, Glass::new(12)) {
-                painter.add(shape);
-            }
-            painter.rect_stroke(
-                card,
-                CornerRadius::same(12),
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
+    hover_card(
+        root,
+        &palette,
+        "zervo_favourites_card",
+        star,
+        size,
+        |ui, card| {
+            let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
+
             // ── Header: what this is, and how to show it.
             let header =
                 Rect::from_min_size(card.min + vec2(12.0, 8.0), vec2(card.width() - 24.0, 20.0));
@@ -1195,16 +1286,13 @@ fn draw_favourites_card(
                     FontId::proportional(12.0),
                     palette.text_muted,
                 );
-                ui.advance_cursor_after_rect(drawn);
                 return;
             }
 
             if grid {
                 for (index, (url, title)) in favourites.iter().enumerate() {
-                    let column = index % 4;
-                    let row = index / 4;
                     let tile = Rect::from_min_size(
-                        body.min + vec2(column as f32 * TILE, row as f32 * TILE),
+                        body.min + vec2((index % 4) as f32 * TILE, (index / 4) as f32 * TILE),
                         vec2(TILE - 6.0, TILE - 6.0),
                     );
                     if tile.max.y > body.max.y {
@@ -1265,110 +1353,143 @@ fn draw_favourites_card(
                         actions.push(UiAction::Navigate(url.clone()));
                     }
                 }
-            } else {
-                for (index, (url, title)) in favourites.iter().enumerate() {
-                    let row = Rect::from_min_size(
-                        pos2(body.min.x, body.min.y + index as f32 * ROW),
-                        vec2(body.width(), ROW - 2.0),
+                return;
+            }
+
+            for (index, (url, title)) in favourites.iter().enumerate() {
+                let row = Rect::from_min_size(
+                    pos2(body.min.x, body.min.y + index as f32 * ROW),
+                    vec2(body.width(), ROW - 2.0),
+                );
+                if row.max.y > body.max.y {
+                    break;
+                }
+                let being_edited = editing.as_ref().is_some_and(|(at, _)| at == url);
+                let response = ui.interact(row, id.with(("row", index)), Sense::click());
+                // Hover from the pointer, not the row's response: the controls sit
+                // on top of the row, which stops the row counting as hovered.
+                let over = pointer.is_some_and(|pos| row.contains(pos));
+                if over && !being_edited {
+                    ui.painter()
+                        .rect_filled(row, CornerRadius::same(8), palette.surface_hover);
+                }
+                icons::draw_icon(
+                    ui.painter(),
+                    Rect::from_center_size(
+                        pos2(row.min.x + 14.0, row.center().y),
+                        vec2(13.0, 13.0),
+                    ),
+                    Icon::Globe,
+                    palette.text_muted,
+                );
+
+                if being_edited {
+                    let mut draft = editing
+                        .as_ref()
+                        .map(|(_, name)| name.clone())
+                        .unwrap_or_default();
+                    let field = Rect::from_min_max(
+                        pos2(row.min.x + 28.0, row.min.y + 2.0),
+                        pos2(row.max.x - 46.0, row.max.y - 2.0),
                     );
-                    if row.max.y > body.max.y {
-                        break;
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+                    let editor = child.add_sized(
+                        field.size(),
+                        TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
+                    );
+                    if !editor.has_focus() && !editor.lost_focus() {
+                        editor.request_focus();
                     }
-                    let being_edited = editing.as_ref().is_some_and(|(at, _)| at == url);
-                    let response = ui.interact(row, id.with(("row", index)), Sense::click());
-                    // From the pointer, not the row's response: the rename and
-                    // remove controls sit on top of the row, which stops the
-                    // row counting as hovered and takes them away again.
-                    let over = pointer.is_some_and(|pos| row.contains(pos));
-                    if over && !being_edited {
-                        ui.painter()
-                            .rect_filled(row, CornerRadius::same(8), palette.surface_hover);
-                    }
+                    let entered = child.input(|input| input.key_pressed(Key::Enter));
+                    let escaped = child.input(|input| input.key_pressed(Key::Escape));
+
+                    // An explicit tick, because committing only on Enter-and-blur
+                    // meant a rename was lost far more often than it was kept.
+                    let save = Rect::from_center_size(
+                        pos2(row.max.x - 30.0, row.center().y),
+                        vec2(20.0, 20.0),
+                    );
+                    icons::draw_icon(ui.painter(), save.shrink(3.0), Icon::Check, palette.accent);
+                    let saved = ui
+                        .interact(save, id.with(("save", index)), Sense::click())
+                        .on_hover_text("Save")
+                        .on_hover_cursor(CursorIcon::PointingHand)
+                        .clicked();
+                    let cancel = Rect::from_center_size(
+                        pos2(row.max.x - 10.0, row.center().y),
+                        vec2(20.0, 20.0),
+                    );
                     icons::draw_icon(
                         ui.painter(),
-                        Rect::from_center_size(
-                            pos2(row.min.x + 14.0, row.center().y),
-                            vec2(13.0, 13.0),
-                        ),
-                        Icon::Globe,
+                        cancel.shrink(4.0),
+                        Icon::Close,
                         palette.text_muted,
                     );
+                    let cancelled = ui
+                        .interact(cancel, id.with(("cancelrename", index)), Sense::click())
+                        .on_hover_text("Discard")
+                        .clicked();
 
-                    if being_edited {
-                        let field = Rect::from_min_max(
-                            pos2(row.min.x + 28.0, row.min.y + 2.0),
-                            pos2(row.max.x - 8.0, row.max.y - 2.0),
-                        );
-                        let mut draft = editing
-                            .as_ref()
-                            .map(|(_, name)| name.clone())
-                            .unwrap_or_default();
-                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
-                        let editor = child.add_sized(
-                            field.size(),
-                            TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
-                        );
-                        editor.request_focus();
-                        edit = Some(Some((url.clone(), draft.clone())));
-                        if editor.lost_focus() {
-                            if child.input(|input| input.key_pressed(Key::Enter)) {
-                                actions.push(UiAction::RenameFavourite(url.clone(), draft));
-                            }
-                            edit = Some(None);
-                        }
-                        continue;
+                    if saved || entered {
+                        actions.push(UiAction::RenameFavourite(url.clone(), draft.clone()));
+                        edit = Some(None);
+                    } else if cancelled || escaped {
+                        edit = Some(None);
+                    } else {
+                        edit = Some(Some((url.clone(), draft)));
                     }
+                    continue;
+                }
 
-                    ui.painter().text(
-                        pos2(row.min.x + 28.0, row.center().y),
-                        Align2::LEFT_CENTER,
-                        ellipsize(display_name(title, url), 24),
-                        FontId::proportional(13.0),
-                        palette.text,
+                ui.painter().text(
+                    pos2(row.min.x + 28.0, row.center().y),
+                    Align2::LEFT_CENTER,
+                    ellipsize(display_name(title, url), 24),
+                    FontId::proportional(13.0),
+                    palette.text,
+                );
+                if over {
+                    let rename = Rect::from_center_size(
+                        pos2(row.max.x - 30.0, row.center().y),
+                        vec2(18.0, 18.0),
                     );
-                    if over {
-                        let rename = Rect::from_center_size(
-                            pos2(row.max.x - 30.0, row.center().y),
-                            vec2(18.0, 18.0),
-                        );
-                        icons::draw_icon(
-                            ui.painter(),
-                            rename.shrink(3.0),
-                            Icon::Sliders,
-                            palette.text_muted,
-                        );
-                        if ui
-                            .interact(rename, id.with(("edit", index)), Sense::click())
-                            .on_hover_text("Rename")
-                            .clicked()
-                        {
-                            edit = Some(Some((url.clone(), title.clone())));
-                        }
-                        let close = Rect::from_center_size(
-                            pos2(row.max.x - 10.0, row.center().y),
-                            vec2(18.0, 18.0),
-                        );
-                        icons::draw_icon(
-                            ui.painter(),
-                            close.shrink(3.0),
-                            Icon::Close,
-                            palette.text_muted,
-                        );
-                        if ui
-                            .interact(close, id.with(("x", index)), Sense::click())
-                            .on_hover_text("Remove")
-                            .clicked()
-                        {
-                            actions.push(UiAction::RemoveFavourite(url.clone()));
-                        }
+                    icons::draw_icon(
+                        ui.painter(),
+                        rename.shrink(3.0),
+                        Icon::Sliders,
+                        palette.text_muted,
+                    );
+                    if ui
+                        .interact(rename, id.with(("edit", index)), Sense::click())
+                        .on_hover_text("Rename")
+                        .clicked()
+                    {
+                        edit = Some(Some((url.clone(), title.clone())));
                     }
-                    if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                        actions.push(UiAction::Navigate(url.clone()));
+                    let close = Rect::from_center_size(
+                        pos2(row.max.x - 10.0, row.center().y),
+                        vec2(18.0, 18.0),
+                    );
+                    icons::draw_icon(
+                        ui.painter(),
+                        close.shrink(3.0),
+                        Icon::Close,
+                        palette.text_muted,
+                    );
+                    if ui
+                        .interact(close, id.with(("x", index)), Sense::click())
+                        .on_hover_text("Remove")
+                        .clicked()
+                    {
+                        actions.push(UiAction::RemoveFavourite(url.clone()));
                     }
                 }
+                if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                    actions.push(UiAction::Navigate(url.clone()));
+                }
             }
-            ui.advance_cursor_after_rect(drawn);
-        });
+        },
+    );
 
     if toggle_layout {
         chrome.settings.favourites_grid = !grid;
@@ -1377,6 +1498,301 @@ fn draw_favourites_card(
     if let Some(next) = edit {
         chrome.browser.favourite_edit = next;
     }
+}
+
+/// Hovering the downloads button opens the list, with the controls that
+/// actually do something on each row.
+///
+/// Pause and resume are shown but disabled. Servo streams a download's bytes
+/// to the embedder as they arrive and offers no way to ask it to stop and pick
+/// up again, so there is nothing to hang them on — a button that quietly did
+/// nothing would be worse than one that says why.
+fn draw_downloads_card(
+    root: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    anchor: Rect,
+) {
+    use crate::downloads::{DownloadState, format_bytes};
+    const ROW: f32 = 46.0;
+
+    let palette = chrome.palette;
+    let items: Vec<(
+        u64,
+        String,
+        String,
+        Option<f32>,
+        u64,
+        Option<u64>,
+        DownloadState,
+    )> = chrome
+        .downloads
+        .items
+        .iter()
+        .rev()
+        .take(8)
+        .map(|item| {
+            (
+                item.id,
+                item.filename.clone(),
+                item.url.clone(),
+                item.fraction(),
+                item.received,
+                item.total,
+                item.state.clone(),
+            )
+        })
+        .collect();
+    let rows = items.len().max(1) as f32;
+    let size = vec2(360.0, rows * ROW + 52.0);
+    let id = Id::new("zervo_downloads_card");
+    let menu_id = Id::new("zervo_download_menu");
+
+    hover_card(
+        root,
+        &palette,
+        "zervo_downloads_card",
+        anchor,
+        size,
+        |ui, card| {
+            let ctx = ui.ctx().clone();
+            let pointer = ctx.input(|input| input.pointer.latest_pos());
+
+            let header =
+                Rect::from_min_size(card.min + vec2(12.0, 8.0), vec2(card.width() - 24.0, 20.0));
+            ui.painter().text(
+                header.left_center(),
+                Align2::LEFT_CENTER,
+                "Downloads",
+                FontId::proportional(11.5),
+                palette.text_muted,
+            );
+            if !items.is_empty() {
+                let clear = Rect::from_center_size(
+                    pos2(header.max.x - 9.0, header.center().y),
+                    vec2(18.0, 18.0),
+                );
+                icons::draw_icon(
+                    ui.painter(),
+                    clear.shrink(3.0),
+                    Icon::Trash,
+                    palette.text_muted,
+                );
+                if ui
+                    .interact(clear, id.with("clear"), Sense::click())
+                    .on_hover_text("Clear finished")
+                    .on_hover_cursor(CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    actions.push(UiAction::ClearDownloads);
+                }
+            }
+
+            let body = Rect::from_min_max(
+                pos2(card.min.x + 10.0, card.min.y + 34.0),
+                card.max - vec2(10.0, 8.0),
+            );
+            if items.is_empty() {
+                ui.painter().text(
+                    body.left_top() + vec2(4.0, 12.0),
+                    Align2::LEFT_TOP,
+                    "Nothing downloaded yet.",
+                    FontId::proportional(12.0),
+                    palette.text_muted,
+                );
+                return;
+            }
+
+            for (index, (download, filename, _url, fraction, received, total, state)) in
+                items.iter().enumerate()
+            {
+                let row = Rect::from_min_size(
+                    pos2(body.min.x, body.min.y + index as f32 * ROW),
+                    vec2(body.width(), ROW - 4.0),
+                );
+                if row.max.y > body.max.y {
+                    break;
+                }
+                let over = pointer.is_some_and(|pos| row.contains(pos));
+                let response = ui.interact(row, id.with(("row", index)), Sense::click_and_drag());
+                if over {
+                    ui.painter()
+                        .rect_filled(row, CornerRadius::same(8), palette.surface_hover);
+                }
+
+                let running = *state == DownloadState::Running;
+                icons::draw_icon(
+                    ui.painter(),
+                    Rect::from_center_size(
+                        pos2(row.min.x + 16.0, row.center().y),
+                        vec2(15.0, 15.0),
+                    ),
+                    match state {
+                        DownloadState::Running => Icon::FileArrowDown,
+                        DownloadState::Complete => Icon::CheckCircle,
+                        _ => Icon::XCircle,
+                    },
+                    match state {
+                        DownloadState::Complete => palette.accent,
+                        DownloadState::Failed(_) | DownloadState::Cancelled => {
+                            palette.text_muted.gamma_multiply(0.8)
+                        },
+                        DownloadState::Running => palette.text_muted,
+                    },
+                );
+                ui.painter().text(
+                    pos2(row.min.x + 34.0, row.min.y + 13.0),
+                    Align2::LEFT_CENTER,
+                    ellipsize(filename, 30),
+                    FontId::proportional(13.0),
+                    palette.text,
+                );
+                let detail = match state {
+                    DownloadState::Running => match total {
+                        Some(total) => {
+                            format!("{} of {}", format_bytes(*received), format_bytes(*total))
+                        },
+                        None => format_bytes(*received),
+                    },
+                    DownloadState::Complete => format_bytes(*received),
+                    DownloadState::Cancelled => "Stopped".to_owned(),
+                    DownloadState::Failed(why) => ellipsize(why, 34),
+                };
+                ui.painter().text(
+                    pos2(row.min.x + 34.0, row.min.y + 29.0),
+                    Align2::LEFT_CENTER,
+                    detail,
+                    FontId::proportional(11.0),
+                    palette.text_muted,
+                );
+                if let Some(fraction) = fraction
+                    && running
+                {
+                    let track = Rect::from_min_size(
+                        pos2(row.min.x + 34.0, row.max.y - 8.0),
+                        vec2(row.width() - 150.0, 3.0),
+                    );
+                    ui.painter()
+                        .rect_filled(track, CornerRadius::same(2), palette.border);
+                    ui.painter().rect_filled(
+                        Rect::from_min_size(
+                            track.min,
+                            vec2(track.width() * fraction, track.height()),
+                        ),
+                        CornerRadius::same(2),
+                        palette.accent,
+                    );
+                }
+
+                // ── Controls, on hover so a quiet list stays quiet.
+                if over {
+                    let mut x = row.max.x - 16.0;
+                    let mut control = |ui: &mut Ui,
+                                       icon: Icon,
+                                       tip: &str,
+                                       enabled: bool,
+                                       key: &str| {
+                        let hit = Rect::from_center_size(pos2(x, row.center().y), vec2(24.0, 24.0));
+                        x -= 26.0;
+                        let response = ui.interact(hit, id.with((key, index)), Sense::click());
+                        if enabled && response.hovered() {
+                            ui.painter()
+                                .rect_filled(hit, CornerRadius::same(7), palette.surface);
+                        }
+                        icons::draw_icon(
+                            ui.painter(),
+                            hit.shrink(6.0),
+                            icon,
+                            if enabled {
+                                palette.text
+                            } else {
+                                palette.text_muted.gamma_multiply(0.35)
+                            },
+                        );
+                        enabled && response.on_hover_text(tip).clicked()
+                    };
+
+                    if running {
+                        if control(ui, Icon::Close, "Stop", true, "stop") {
+                            actions.push(UiAction::CancelDownload(*download));
+                        }
+                        control(
+                            ui,
+                            Icon::Pause,
+                            "Pause — the engine cannot suspend a transfer",
+                            false,
+                            "pause",
+                        );
+                    } else {
+                        if control(ui, Icon::Reload, "Start again", true, "restart") {
+                            actions.push(UiAction::RestartDownload(*download));
+                        }
+                        if *state == DownloadState::Complete {
+                            if control(ui, Icon::Folder, "Show in folder", true, "reveal") {
+                                actions.push(UiAction::RevealDownload(*download));
+                            }
+                            if control(ui, Icon::ExternalLink, "Open", true, "open") {
+                                actions.push(UiAction::OpenDownload(*download));
+                            }
+                        }
+                    }
+                }
+
+                if response.secondary_clicked()
+                    && let Some(pos) = pointer
+                {
+                    ctx.data_mut(|data| data.insert_temp(menu_id, (*download, pos)));
+                }
+                if *state == DownloadState::Complete
+                    && response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+                {
+                    actions.push(UiAction::OpenDownload(*download));
+                }
+            }
+
+            // ── Right-click menu.
+            if let Some((download, at)) =
+                ctx.data(|data| data.get_temp::<(u64, egui::Pos2)>(menu_id))
+            {
+                let url = items
+                    .iter()
+                    .find(|(id, ..)| *id == download)
+                    .map(|(_, _, url, ..)| url.clone())
+                    .unwrap_or_default();
+                let filename = items
+                    .iter()
+                    .find(|(id, ..)| *id == download)
+                    .map(|(_, name, ..)| name.clone())
+                    .unwrap_or_default();
+                let rows = [
+                    ("Copy download link".to_owned(), 0u8),
+                    ("Copy file name".to_owned(), 1),
+                    ("Show in folder".to_owned(), 2),
+                    ("Open".to_owned(), 3),
+                    ("Start again".to_owned(), 4),
+                    ("Remove from list".to_owned(), 5),
+                ];
+                match popup_menu(&ctx, &palette, menu_id.with("area"), at, &rows) {
+                    Some(choice) => {
+                        ctx.data_mut(|data| data.remove::<(u64, egui::Pos2)>(menu_id));
+                        match choice {
+                            0 => ctx.copy_text(url),
+                            1 => ctx.copy_text(filename),
+                            2 => actions.push(UiAction::RevealDownload(download)),
+                            3 => actions.push(UiAction::OpenDownload(download)),
+                            4 => actions.push(UiAction::RestartDownload(download)),
+                            _ => actions.push(UiAction::RemoveDownload(download)),
+                        }
+                    },
+                    // A press anywhere else puts it away.
+                    None if ctx.input(|input| input.pointer.any_pressed()) => {
+                        ctx.data_mut(|data| data.remove::<(u64, egui::Pos2)>(menu_id));
+                    },
+                    None => {},
+                }
+            }
+        },
+    );
 }
 
 /// A saved page's name, falling back to its host when it has no title.
@@ -1707,12 +2123,19 @@ fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
 
     // Favourites hover card last, over everything else in the bar. Not while
     // arranging, when the star is something to move rather than to use.
-    if !config
-        && let Some((.., star)) = placed
-            .iter()
-            .find(|(_, _, item, _)| *item == NavItem::Favourite)
-    {
-        draw_favourites_card(root, chrome, actions, *star);
+    if !config {
+        let anchor = |want: NavItem| {
+            placed
+                .iter()
+                .find(|(_, _, item, _)| *item == want)
+                .map(|(.., rect)| *rect)
+        };
+        if let Some(star) = anchor(NavItem::Favourite) {
+            draw_favourites_card(root, chrome, actions, star);
+        }
+        if let Some(tray) = anchor(NavItem::Downloads) {
+            draw_downloads_card(root, chrome, actions, tray);
+        }
     }
 }
 
