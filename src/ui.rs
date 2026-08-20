@@ -1018,8 +1018,7 @@ fn draw_history_page(
 
     // ── Search.
     let field = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(420.0), 32.0));
-    // Not faded: the box is the only sign this is typeable.
-    glass::paint(ui.painter(), field, &palette, Glass::new(9).no_fade());
+    glass::paint(ui.painter(), field, &palette, Glass::new(9));
     icons::draw_icon(
         ui.painter(),
         Rect::from_center_size(pos2(field.min.x + 16.0, field.center().y), vec2(14.0, 14.0)),
@@ -1247,7 +1246,9 @@ fn hover_card(
                 Glass::new(12)
                     .opaque(palette.bg)
                     .border(palette.border)
-                    .no_fade(),
+                    // The favourites and downloads cards are cards in the
+                    // sense the setting means.
+                    .fades(),
             ) {
                 painter.add(shape);
             }
@@ -1287,10 +1288,7 @@ fn popup_menu<T: Clone>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::new(10)
-                    .opaque(palette.bg)
-                    .border(palette.border)
-                    .no_fade(),
+                Glass::new(10).opaque(palette.bg).border(palette.border),
             ) {
                 painter.add(shape);
             }
@@ -2412,8 +2410,7 @@ fn draw_navbar_config(
         .fixed_pos(tray.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            for shape in glass::shapes(tray, &palette, Glass::new(10).opaque(palette.bg).no_fade())
-            {
+            for shape in glass::shapes(tray, &palette, Glass::new(10).opaque(palette.bg)) {
                 ui.painter().add(shape);
             }
             ui.painter().text(
@@ -3225,10 +3222,8 @@ fn paint_tab_ghost(
         palette,
         Glass::new(8)
             .tint(palette.active)
-            .opaque(palette.bg)
-            // It travels over the web page, so it neither thins with the
-            // card-opacity setting nor lets the page show through it.
-            .no_fade(),
+            // It travels over the web page, so nothing shows through it.
+            .opaque(palette.bg),
     ) {
         painter.add(shape);
     }
@@ -3444,8 +3439,7 @@ fn tab_row(
                 Glass::new(8)
                     .tint(palette.accent)
                     .strength(0.55)
-                    .no_shadow()
-                    .no_fade(),
+                    .no_shadow(),
             );
         },
         Some(edge) => {
@@ -4515,32 +4509,18 @@ fn settings_appearance(
         }
         ui.label(
             RichText::new(if chrome.settings.card_opacity <= 0.0 {
-                "Off — the address bar, tab rows and settings cards are gone; \
-                 their text and icons remain."
-                    .to_owned()
+                "Off — the cards are gone and their contents float.".to_owned()
             } else {
                 format!(
-                    "{:.0}% — the address bar, tab rows, shelf widgets and these \
-                     sections. Menus and dialogs keep their own.",
+                    "{:.0}% — the favourites and downloads cards, the shelf's \
+                     widgets, and the new tab page's. Not the chrome's own \
+                     furniture.",
                     chrome.settings.card_opacity * 100.0
                 )
             })
             .size(11.5)
             .color(palette.text_muted),
         );
-        if chrome.settings.card_opacity < 0.35 && chrome.settings.chrome_opacity < 1.0 {
-            // The two multiply. The card fill is what lifts text off the
-            // chrome, so thinning both at once is where legibility actually
-            // goes, and it is worth saying so at the point of the mistake.
-            ui.label(
-                RichText::new(
-                    "Low with a translucent chrome: text sits on the desktop \
-                     rather than on a surface.",
-                )
-                .size(11.5)
-                .color(palette.accent),
-            );
-        }
     });
 }
 
