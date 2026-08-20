@@ -63,3 +63,16 @@ Listed so nobody starts them expecting to finish. Details in
   itself quickly.
 - **`ui.rs` is past four thousand lines.** The cards, the navigation bar and the
   settings page each want to be their own module.
+- **Most corner radii are still numbers.** `theme::Tier` names six sizes and the
+  material decides what each comes to, and the new tab page uses nothing else —
+  but `ui.rs` and `controls.rs` still write theirs in figures. The tiers were
+  picked to cover seventy of the seventy-seven radii in the tree, so the sweep
+  is close to a find-and-replace. Until it happens, a second material only
+  reaches half the application.
+- **`Palette` has drifted into being a `Style`.** It began as colours. It now
+  also carries `dark`, the card-opacity setting, the whole `Material` and the
+  wallpaper to frost against — none of which are colours. The name is the only
+  thing wrong: everything in there genuinely wants to reach every surface, and
+  hanging it off the palette is what let all of it arrive without changing a
+  single signature. Renaming touches every file, so it wants doing on its own
+  and not alongside anything else.
