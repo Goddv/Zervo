@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.5 — 21 August 2026
+## 0.3.6 — 21 August 2026
 
 A new tab page you arrange yourself, tabs you can drag, trackpad swipes,
 and fixes to things that looked finished and were not.
@@ -152,6 +152,14 @@ worse half was underneath: when the ramp did start at zero, the page returned
 early without asking for another frame, so nothing advanced it and the
 wallpaper stayed invisible for the life of the tab. A frame that draws nothing
 still has to ask for the next one.
+
+Fixing that woke a guard the bug had kept dead, and for one frame on every
+picture-to-picture swap the page went somewhere else entirely — cards on their
+opaque backings instead of frosted glass, the accent gradient over the top, the
+text off white onto the palette, and the board twenty points taller because the
+credit line had gone. The guard is not needed now that a backdrop can carry an
+arrival of zero and simply draw nothing, so the frame is allowed through and
+the page holds still.
 
 **Two of the four internal pages could not be typed in.** Every one of them
 shows its address in the address bar — `zervo://settings`, `zervo://newtab`,
