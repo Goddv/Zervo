@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 — 21 August 2026
 
 A new tab page you arrange yourself, tabs you can drag, trackpad swipes,
 and fixes to things that looked finished and were not.
