@@ -27,7 +27,7 @@ use crate::glass::{self, Glass};
 use crate::grid::{self, Cell, Span};
 use crate::icons::{self, Icon};
 use crate::state::TabId;
-use crate::theme::{self, Palette};
+use crate::theme::{self, Palette, Tier};
 use crate::ui::{ChromeContext, UiAction};
 
 // ── The grid ───────────────────────────────────────────────────────────────
@@ -284,7 +284,7 @@ pub fn draw(
 ) -> bool {
     let palette = chrome.palette;
     let base = theme::page_base(&palette);
-    let radius = CornerRadius::same(theme::CONTENT_RADIUS as u8);
+    let radius = CornerRadius::same(chrome.palette.radius(Tier::Panel));
 
     // The backdrop goes on egui's background layer so every card, menu and
     // text field lands on top of it without having to be ordered.
@@ -296,9 +296,23 @@ pub fn draw(
 
     let photo = chrome.settings.new_tab_background == crate::settings::NewTabBackground::Photo;
     let mut ambient = false;
-    let mut over_photo = false;
+    let mut painted = None;
     if photo {
-        over_photo = paint_photo(root, chrome, &backdrop, content_rect, radius, &mut ambient);
+        painted = paint_photo(root, chrome, &backdrop, content_rect, radius, &mut ambient);
+    }
+    let over_photo = painted.is_some();
+
+    // Hand the palette the blurred copy of what was just painted. From here
+    // until the page is finished, every glass surface inside the content rect
+    // frosts itself against it — the cards, the search box, the header pills,
+    // and anything anyone adds later — without one of them being told to.
+    let restore = chrome.palette;
+    if let (Some(uv), Some(frost)) = (painted, chrome.wallpaper.frost) {
+        chrome.palette = chrome.palette.with_frost(Some(theme::Frost {
+            texture: frost.id(),
+            rect: content_rect,
+            uv,
+        }));
     }
     if !over_photo {
         ambient |= crate::ui::paint_newtab_background(
@@ -311,10 +325,11 @@ pub fn draw(
         );
     }
 
-    let ink = Ink::new(&palette, over_photo);
+    let ink = Ink::new(&chrome.palette, over_photo);
 
     if content_rect.width() < NARROW || content_rect.height() < 260.0 {
         draw_narrow(root, chrome, content_rect, &ink, actions);
+        chrome.palette = restore;
         return ambient;
     }
 
@@ -351,6 +366,10 @@ pub fn draw(
     if apply(chrome, changes) {
         actions.push(UiAction::PersistSettings);
     }
+    // Whatever is drawn after the page — a dialog the page raised, the content
+    // card's own edges — is not on the wallpaper and must not be frosted
+    // against it.
+    chrome.palette = restore;
     ambient
 }
 
@@ -448,10 +467,8 @@ fn paint_photo(
     content_rect: Rect,
     radius: CornerRadius,
     ambient: &mut bool,
-) -> bool {
-    let Some(texture) = chrome.wallpaper.texture else {
-        return false;
-    };
+) -> Option<Rect> {
+    let texture = chrome.wallpaper.texture?;
     let palette = chrome.palette;
     // Fade in, keyed on the texture: a new picture appearing all at once is
     // the one moment this page draws attention to itself.
@@ -461,7 +478,7 @@ fn paint_photo(
         0.5,
     ));
     if fade <= 0.0 {
-        return false;
+        return None;
     }
     *ambient |= fade < 1.0;
 
@@ -533,7 +550,7 @@ fn paint_photo(
     };
     scrim(HEADER * 3.4, dim * 0.75, true);
     scrim(CREDIT * 6.0, dim * 0.65, false);
-    true
+    Some(uv)
 }
 
 /// The uv rectangle that makes an image cover `target` without distorting it,
@@ -591,7 +608,6 @@ fn draw_header(
     let mut cursor = header.max.x;
     let done = header_button(
         root,
-        ink,
         &palette,
         &mut cursor,
         header,
@@ -605,7 +621,6 @@ fn draw_header(
 
     let add = header_button(
         root,
-        ink,
         &palette,
         &mut cursor,
         header,
@@ -659,7 +674,6 @@ fn draw_header(
 
     let wallpaper = header_button(
         root,
-        ink,
         &palette,
         &mut cursor,
         header,
@@ -675,7 +689,6 @@ fn draw_header(
     if editing {
         let reset = header_button(
             root,
-            ink,
             &palette,
             &mut cursor,
             header,
@@ -701,7 +714,6 @@ fn draw_header(
 #[allow(clippy::too_many_arguments)]
 fn header_button(
     root: &mut Ui,
-    ink: &Ink,
     palette: &Palette,
     cursor: &mut f32,
     header: Rect,
@@ -743,10 +755,10 @@ fn header_button(
     // controls have to be readable on somebody else's photograph. Letting the
     // card-opacity setting thin them away puts back the exact bug they were
     // added to fix, and they are buttons rather than cards besides.
-    let mut material = Glass::new(9)
+    let mut material = Glass::tier(Tier::Control)
         .strength(0.7 + 0.3 * hover.max(on))
         .no_shadow()
-        .opaque(theme::card_backing(palette, ink.photo));
+        .opaque(palette.bg);
     if on > 0.0 {
         material = material.tint(theme::mix(palette.surface, palette.accent, 0.45 * on));
     }
@@ -997,7 +1009,7 @@ fn draw_board(
         // what the eye should be following.
         area.painter().rect_filled(
             board.expand(6.0),
-            CornerRadius::same(12),
+            CornerRadius::same(palette.radius(Tier::Panel)),
             palette
                 .accent
                 .gamma_multiply(if ink.dark { 0.05 } else { 0.045 }),
@@ -1032,12 +1044,12 @@ fn draw_board(
         let destination = metrics.rect(at, tile.span);
         area.painter().rect_filled(
             destination,
-            CornerRadius::same(10),
+            CornerRadius::same(palette.radius(Tier::Card)),
             palette.accent.gamma_multiply(0.10),
         );
         area.painter().rect_stroke(
             destination,
-            CornerRadius::same(10),
+            CornerRadius::same(palette.radius(Tier::Card)),
             Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
             StrokeKind::Inside,
         );
@@ -1147,8 +1159,11 @@ fn draw_board(
             ),
             vec2(3.0, 40.0),
         );
-        area.painter()
-            .rect_filled(thumb, CornerRadius::same(2), ink.muted.gamma_multiply(0.5));
+        area.painter().rect_filled(
+            thumb,
+            CornerRadius::same(palette.radius(Tier::Hairline)),
+            ink.muted.gamma_multiply(0.5),
+        );
     }
 
     ambient
@@ -1164,8 +1179,11 @@ fn draw_handles(
 ) {
     let close =
         Rect::from_center_size(pos2(rect.max.x - 12.0, rect.min.y + 12.0), vec2(18.0, 18.0));
-    area.painter()
-        .rect_filled(close, CornerRadius::same(7), palette.surface_hover);
+    area.painter().rect_filled(
+        close,
+        CornerRadius::same(palette.radius(Tier::Control)),
+        palette.surface_hover,
+    );
     icons::draw_icon(
         area.painter(),
         close.shrink(4.0),
@@ -1248,7 +1266,7 @@ fn draw_resizer(
     );
     area.painter().rect_stroke(
         Rect::from_min_size(rect.min, metrics.size(wanted)),
-        CornerRadius::same(10),
+        CornerRadius::same(palette.radius(Tier::Card)),
         Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
         StrokeKind::Inside,
     );
@@ -1342,15 +1360,15 @@ fn draw_tile(
     let framed = !tile.card.bare() || editing;
     if framed && tile.card != Card::Search {
         let mut material = if carried {
-            Glass::new(10)
+            Glass::tier(Tier::Card)
         } else if editing {
-            Glass::new(10)
+            Glass::tier(Tier::Card)
                 .strength(0.8)
                 .border(palette.accent.gamma_multiply(0.55))
         } else {
-            Glass::new(10).strength(if ink.photo { 0.95 } else { 0.85 })
+            Glass::tier(Tier::Card).strength(if ink.photo { 0.95 } else { 0.85 })
         }
-        .opaque(theme::card_backing(&palette, ink.photo));
+        .opaque(palette.bg);
         // The card-opacity setting reaches these: they are the page's cards,
         // and thinning them — over a photograph especially — is the point of
         // the setting. Not while the page is being arranged, though: the edge
@@ -1476,23 +1494,15 @@ fn draw_search(
             .animate_bool_with_time(id.with("focus"), focused, 0.22),
     );
 
-    // Over a photograph the pill has to be found at a glance, so it sits a
-    // shade above the cards rather than level with them. Level with them, on a
-    // picture with a bright sky in it, is invisible.
-    let backing = if ink.photo {
-        theme::mix(
-            theme::card_backing(&palette, true),
-            palette.surface_hover,
-            0.75,
-        )
-    } else {
-        theme::card_backing(&palette, false)
-    };
+    // What it is painted over when there is nothing behind it worth showing.
+    // Over a photograph there is, and the material frosts against that instead
+    // — this is what the pill falls back to on a plain or generated backdrop.
+    let backing = palette.bg;
     glass::paint(
         area.painter(),
         pill,
         &palette,
-        Glass::new((height * 0.3) as u8)
+        Glass::tier(Tier::Pill)
             .strength(1.0)
             .glow(focus)
             // No `fades()`: it is a text field, not a card, and a text field
@@ -1733,7 +1743,7 @@ fn draw_quick_links(
         if hover > 0.0 {
             area.painter().rect_filled(
                 slot,
-                CornerRadius::same(9),
+                CornerRadius::same(palette.radius(Tier::Card)),
                 palette.surface_hover.gamma_multiply(hover),
             );
         }
@@ -1957,7 +1967,7 @@ fn draw_downloads(
         if hover > 0.0 {
             area.painter().rect_filled(
                 row,
-                CornerRadius::same(8),
+                CornerRadius::same(palette.radius(Tier::Row)),
                 palette.surface_hover.gamma_multiply(hover),
             );
         }
@@ -1994,11 +2004,14 @@ fn draw_downloads(
                 pos2(row.min.x + 28.0, row.max.y - 8.0),
                 vec2(row.width() - 36.0, 3.0),
             );
-            area.painter()
-                .rect_filled(track, CornerRadius::same(2), palette.border);
+            area.painter().rect_filled(
+                track,
+                CornerRadius::same(palette.radius(Tier::Hairline)),
+                palette.border,
+            );
             area.painter().rect_filled(
                 Rect::from_min_size(track.min, vec2(track.width() * fraction, track.height())),
-                CornerRadius::same(2),
+                CornerRadius::same(palette.radius(Tier::Hairline)),
                 palette.accent,
             );
         }
@@ -2051,12 +2064,15 @@ fn draw_now_playing(
     if media.duration > 0.0 {
         let track =
             Rect::from_min_size(pos2(body.min.x, body.max.y - 5.0), vec2(body.width(), 3.0));
-        area.painter()
-            .rect_filled(track, CornerRadius::same(2), palette.border);
+        area.painter().rect_filled(
+            track,
+            CornerRadius::same(palette.radius(Tier::Hairline)),
+            palette.border,
+        );
         let played = (media.position / media.duration).clamp(0.0, 1.0) as f32;
         area.painter().rect_filled(
             Rect::from_min_size(track.min, vec2(track.width() * played, track.height())),
-            CornerRadius::same(2),
+            CornerRadius::same(palette.radius(Tier::Hairline)),
             palette.accent,
         );
     }
@@ -2090,8 +2106,11 @@ fn draw_now_playing(
             if live { Sense::click() } else { Sense::hover() },
         );
         if live && response.hovered() {
-            area.painter()
-                .rect_filled(hit, CornerRadius::same(8), palette.surface_hover);
+            area.painter().rect_filled(
+                hit,
+                CornerRadius::same(palette.radius(Tier::Row)),
+                palette.surface_hover,
+            );
         }
         icons::draw_icon(
             area.painter(),
@@ -2183,15 +2202,18 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
         if hover > 0.0 {
             area.painter().rect_filled(
                 row,
-                CornerRadius::same(7),
+                CornerRadius::same(palette.radius(Tier::Control)),
                 palette.surface_hover.gamma_multiply(hover),
             );
         }
         let box_rect =
             Rect::from_center_size(pos2(row.min.x + 9.0, row.center().y), vec2(14.0, 14.0));
         if *done {
-            area.painter()
-                .rect_filled(box_rect, CornerRadius::same(4), palette.accent);
+            area.painter().rect_filled(
+                box_rect,
+                CornerRadius::same(palette.radius(Tier::Control)),
+                palette.accent,
+            );
             icons::draw_icon(
                 area.painter(),
                 box_rect.shrink(2.5),
@@ -2201,7 +2223,7 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
         } else {
             area.painter().rect_stroke(
                 box_rect,
-                CornerRadius::same(4),
+                CornerRadius::same(palette.radius(Tier::Control)),
                 Stroke::new(1.0_f32, palette.border),
                 StrokeKind::Inside,
             );
@@ -2344,7 +2366,7 @@ fn draw_workspaces(
         if hover > 0.0 || index == active {
             area.painter().rect_filled(
                 row,
-                CornerRadius::same(7),
+                CornerRadius::same(palette.radius(Tier::Control)),
                 if index == active {
                     palette.active
                 } else {
@@ -2421,14 +2443,14 @@ fn list_row(
     if hover > 0.0 {
         area.painter().rect_filled(
             row,
-            CornerRadius::same(8),
+            CornerRadius::same(palette.radius(Tier::Row)),
             palette.surface_hover.gamma_multiply(hover),
         );
     }
     let badge = Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(20.0, 20.0));
     area.painter().rect_filled(
         badge,
-        CornerRadius::same(6),
+        CornerRadius::same(palette.radius(Tier::Control)),
         palette.surface_hover.gamma_multiply(0.9),
     );
     area.painter().text(

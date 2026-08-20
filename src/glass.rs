@@ -9,15 +9,36 @@ use egui::{
     Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2,
 };
 
-use crate::theme::Palette;
+use crate::theme::{Material, Palette, Tier};
 
 /// Expo-style ease-out for interaction animations (cubic out).
 pub fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
+/// How round a surface's corners are: a tier the material decides, or a number
+/// the caller worked out for itself.
+///
+/// Naming the tier is the one to reach for. A number is right only where it is
+/// derived from something else — a pill whose corners are half its height —
+/// and a material cannot know that.
+#[derive(Clone, Copy)]
+pub enum Corner {
+    Tier(Tier),
+    Exact(u8),
+}
+
+impl Corner {
+    pub fn resolve(self, material: &Material) -> u8 {
+        match self {
+            Corner::Tier(tier) => material.radius.of(tier),
+            Corner::Exact(radius) => radius,
+        }
+    }
+}
+
 pub struct Glass {
-    pub radius: u8,
+    pub radius: Corner,
     /// Material prominence, 0..1 — drives fill, sheen, and shadow strength.
     pub strength: f32,
     /// Accent glow behind the element, 0..1 (active/focused elements).
@@ -50,7 +71,17 @@ pub struct Glass {
 }
 
 impl Glass {
+    /// A surface whose corners the material decides. Prefer this.
+    pub fn tier(tier: Tier) -> Self {
+        Self::of(Corner::Tier(tier))
+    }
+
+    /// A surface with a corner radius the caller worked out itself.
     pub fn new(radius: u8) -> Self {
+        Self::of(Corner::Exact(radius))
+    }
+
+    fn of(radius: Corner) -> Self {
         Self {
             radius,
             strength: 1.0,
@@ -181,8 +212,13 @@ fn stitch(mesh: &mut Mesh, count: u32, rows: usize) {
 
 /// The drop shadow's strength, which the card-opacity setting thins along
 /// with everything else the material paints.
-fn lift(dark: bool, strength: f32, fade: f32) -> f32 {
-    (if dark { 0.55 } else { 0.8 }) * strength * fade
+fn lift(material: &Material, dark: bool, strength: f32, fade: f32) -> f32 {
+    (if dark {
+        material.lift_dark
+    } else {
+        material.lift_light
+    }) * strength
+        * fade
 }
 
 /// Where a ring's feathered inner edge sits.
@@ -316,8 +352,13 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     if faded_away && glass.glow <= 0.0 {
         return out;
     }
-    let radius_px = f32::from(glass.radius);
-    let corner = CornerRadius::same(glass.radius);
+    let material = &palette.material;
+    // The tier a call site asked for, resolved by the material. An explicit
+    // radius still overrides it, for the handful of places where the number is
+    // derived from something else — a pill whose corners are half its height.
+    let radius = glass.radius.resolve(material);
+    let radius_px = f32::from(radius);
+    let corner = CornerRadius::same(radius);
     let dark = palette.dark;
     let strength = glass.strength.clamp(0.0, 1.0);
     let fade = if glass.fades {
@@ -332,8 +373,8 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
         out.push(shadow(
             rect,
             radius_px,
-            palette.accent.gamma_multiply(0.32 * glass.glow),
-            8.0,
+            palette.accent.gamma_multiply(material.glow * glass.glow),
+            material.glow_reach,
             Inner::Under,
         ));
     }
@@ -342,28 +383,56 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // offset ring starts outside the silhouette on the far side, which leaves
     // a bright gap between the card's edge and its shadow and turns the
     // shadow's leading edge into a second outline around the corner.
-    if glass.shadow && lift(dark, strength, fade) > 0.0 {
-        let lift = lift(dark, strength, fade);
+    if glass.shadow && lift(material, dark, strength, fade) > 0.0 {
+        let lift = lift(material, dark, strength, fade);
         out.push(shadow(
             rect,
             radius_px,
             palette.shadow.gamma_multiply(lift),
-            4.0 + radius_px * 0.45,
+            material.shadow_reach + radius_px * material.shadow_reach_radius,
             Inner::Under,
         ));
     }
 
-    // Translucent core over the chrome gradient, plus the glass wash — white
+    // What is behind this surface, blurred, if anything is. The palette
+    // carries it, so a caller that has put a picture behind the chrome gets
+    // every card, pill and menu on top of it frosted without saying anything
+    // at the call site — and a change to the recipe below reaches all of them
+    // at once, which is the point of having a material rather than a habit.
+    let frost = material
+        .frosts
+        .then(|| palette.frost_behind(rect))
+        .flatten();
+
+    // Translucent core over whatever is behind, plus the glass wash — white
     // translucency per the glassmorphism recipe, with the light theme leaning
     // on the darker core for contrast and using white for highlights only.
-    // Flattened into one fill, and onto the opaque backing when there is one.
+    //
+    // Over a blurred backdrop the core is a tint *on* the blur rather than a
+    // substitute for it, so it is thinner: a surface opaque enough to be a
+    // card in its own right hides the frost it is sitting on, and then this is
+    // an ordinary card with an expensive texture behind it.
     let core = glass
         .tint
         .unwrap_or(palette.surface)
-        .gamma_multiply(0.55 + 0.4 * strength);
-    let wash = Color32::from_white_alpha((if dark { 9.0 } else { 24.0 } * strength) as u8);
+        .gamma_multiply(if frost.is_some() {
+            material.frosted_fill + material.frosted_fill_strength * strength
+        } else {
+            material.fill + material.fill_strength * strength
+        });
+    let sheen = if dark {
+        material.sheen_dark
+    } else {
+        material.sheen_light
+    };
+    let wash = Color32::from_white_alpha((sheen * strength) as u8);
     let mut fill = over(wash, core);
-    if let Some(backing) = glass.opaque {
+    // An opaque backing is what a surface asks for when it has nothing behind
+    // it worth showing. A frosted one does, so the backing is what it would
+    // paint over.
+    if frost.is_none()
+        && let Some(backing) = glass.opaque
+    {
         fill = over(fill, backing);
     }
     // Faded *after* the backing is composited in, not before. Fading the core
@@ -378,9 +447,23 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // heavier than the straight edges beside it — one RectShape tessellates
     // both together and antialiases the silhouette once.
     let hairline = glass.border.unwrap_or_else(|| {
-        let alpha = if dark { 26.0 } else { 120.0 } * strength.max(0.6);
-        Color32::from_white_alpha(alpha as u8)
+        let edge = if dark {
+            material.edge_dark
+        } else {
+            material.edge_light
+        };
+        Color32::from_white_alpha((edge * strength.max(0.6)) as u8)
     });
+    // The blur goes under the fill, inside the same silhouette, and fades with
+    // it: at zero card opacity a surface has to disappear completely, frost
+    // included, or the setting stops meaning anything.
+    if let Some((texture, uv)) = frost {
+        out.push(
+            RectShape::filled(rect, corner, Color32::WHITE.gamma_multiply(fade))
+                .with_texture(texture, uv)
+                .into(),
+        );
+    }
     out.push(
         RectShape::new(
             rect,
