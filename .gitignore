@@ -4,3 +4,6 @@
 *.iconset/
 /dist
 .DS_Store
+
+# Scratch output from throwaway probes.
+*.raw
