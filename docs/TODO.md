@@ -69,6 +69,13 @@ Listed so nobody starts them expecting to finish. Details in
   picked to cover seventy of the seventy-seven radii in the tree, so the sweep
   is close to a find-and-replace. Until it happens, a second material only
   reaches half the application.
+- **Changing the wallpaper is a cut, not a cross-fade.** A new picture ramps up
+  from nothing while the old one is simply gone, so for the length of the fade
+  the cards are frosted against a backdrop that is barely there. A real
+  cross-fade means holding the outgoing texture and its backdrop, drawing both,
+  and ramping one down as the other comes up — so `Backdrop` would have to
+  describe two layers rather than one. Worth doing properly rather than
+  approximating.
 - **`Palette` has drifted into being a `Style`.** It began as colours. It now
   also carries `dark`, the card-opacity setting, the whole `Material` and the
   wallpaper to frost against — none of which are colours. The name is the only
