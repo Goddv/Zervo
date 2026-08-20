@@ -2532,6 +2532,12 @@ fn draw_nav_item(
 /// the point: widgets — a player, and whatever else earns a place — will live
 /// under the controls, and there is no sense adding a menu for them before
 /// there is anywhere to put them.
+/// The navigation bar's height with its widget shelf fully uncovered — the
+/// height dragging it open snaps to, and the one a gesture opens it to.
+pub fn shelf_uncovered_height(widgets: &[crate::dashboard::Placed]) -> f32 {
+    NAVBAR_ROW + crate::dashboard::open_height(widgets) + SHELF_BOTTOM
+}
+
 fn navbar_resize(
     root: &mut Ui,
     chrome: &mut ChromeContext,
@@ -2564,8 +2570,7 @@ fn navbar_resize(
     // heights worth resting at, so a release near either lands on it — the
     // shelf ends up uncovered rather than cut off mid-card. Anywhere else is
     // left alone, in case someone wants it there.
-    let uncovered =
-        NAVBAR_ROW + crate::dashboard::open_height(&chrome.settings.navbar_widgets) + SHELF_BOTTOM;
+    let uncovered = shelf_uncovered_height(&chrome.settings.navbar_widgets);
     let mut height = stored;
     if response.dragged() {
         height = (height + response.drag_delta().y).clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT);
@@ -4630,6 +4635,40 @@ fn settings_general(
     });
 }
 
+/// One swipe direction and what it does.
+fn gesture_row(
+    ui: &mut Ui,
+    label: &str,
+    hint: &str,
+    slot: &mut crate::gestures::GestureAction,
+    palette: &Palette,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(13.0).color(palette.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            egui::ComboBox::from_id_salt(("gesture", label))
+                .selected_text(slot.label())
+                .show_ui(ui, |ui| {
+                    for option in crate::gestures::GestureAction::ALL {
+                        if ui
+                            .selectable_label(*slot == option, option.label())
+                            .clicked()
+                        {
+                            *slot = option;
+                            changed = true;
+                        }
+                    }
+                });
+        });
+    });
+    if !hint.is_empty() {
+        ui.label(RichText::new(hint).size(11.0).color(palette.text_muted));
+    }
+    ui.add_space(6.0);
+    changed
+}
+
 fn settings_layout(
     ui: &mut Ui,
     chrome: &mut ChromeContext,
@@ -4707,6 +4746,60 @@ fn settings_layout(
         );
         if response.lost_focus() {
             actions.push(UiAction::SettingsChanged);
+        }
+    });
+
+    settings_section(ui, palette, "Trackpad", |ui| {
+        if widgets::toggle(
+            ui,
+            &mut chrome.settings.gestures.enabled,
+            "Two-finger swipes",
+            palette,
+        ) {
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.label(
+            RichText::new(
+                "A quick, straight flick. A slow or wandering one is a scroll and is \
+                 left alone.",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+        if chrome.settings.gestures.enabled {
+            ui.add_space(10.0);
+            let mut changed = false;
+            changed |= gesture_row(
+                ui,
+                "Swipe right",
+                "Anywhere in the window.",
+                &mut chrome.settings.gestures.right,
+                palette,
+            );
+            changed |= gesture_row(
+                ui,
+                "Swipe left",
+                "",
+                &mut chrome.settings.gestures.left,
+                palette,
+            );
+            changed |= gesture_row(
+                ui,
+                "Swipe down",
+                "Over the bar above the page — everywhere else this scrolls.",
+                &mut chrome.settings.gestures.down,
+                palette,
+            );
+            changed |= gesture_row(
+                ui,
+                "Swipe up",
+                "",
+                &mut chrome.settings.gestures.up,
+                palette,
+            );
+            if changed {
+                actions.push(UiAction::SettingsChanged);
+            }
         }
     });
 
