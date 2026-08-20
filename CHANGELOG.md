@@ -5,6 +5,48 @@
 A new tab page you arrange yourself, tabs you can drag, trackpad swipes,
 and fixes to things that looked finished and were not.
 
+### Surfaces are made of a material
+
+Zervo's chrome was glass by repetition rather than by design: `glass::shapes`
+knew the recipe, and every one of seventy-seven call sites knew a corner
+radius. That had two costs. Frosted glass could not actually frost — the
+material had nothing behind it to work with, so each caller papered over the
+gap with an opaque backing of its own, which on a wallpaper is a flat slab and
+not frosted glass. And a second look, for any other platform, would have meant
+editing all seventy-seven.
+
+So the recipe is a thing now. A **`Material`** holds every number a surface is
+built from — its fill, its sheen, its edge, how far it lifts off the page, how
+far its shadow reaches, whether it frosts what is behind it and how far that is
+blurred — along with the corner-radius tier, the row height, the control
+padding and the animation time. It hangs off the palette, the way card opacity
+already did, so it reaches every surface in the application without a single
+signature changing. `Material::GLASS` is Zervo's own, and every value in it is
+exactly what was previously written in place, so nothing looks different except
+where it now frosts.
+
+**Corners are named rather than numbered.** `Hairline`, `Control`, `Row`,
+`Card`, `Panel` and `Pill` are sizes; the material decides what each comes to.
+Those six cover seventy of the seventy-seven radii in the tree, which is what
+made a tier the right shape — the numbers were already a system, just an
+undocumented one. egui's own widgets are styled from the material too, so a
+theme reaches the stock buttons and combo boxes instead of leaving them looking
+bolted on.
+
+Nothing here changes what Zervo looks like. What it changes is that a Fluent,
+GTK, Qt or Material 3 theme is now a struct somebody writes rather than a fork
+of the drawing code — a material with `frosts: false`, no sheen, a heavier edge
+and square corners is a flat desktop toolkit, and not one line of the chrome
+has to know.
+
+**And the frost is real.** egui cannot blur what is behind a shape while it
+draws it, and it turns out not to need to: the only thing ever behind the
+chrome is a wallpaper, which is a still image. It is blurred once, when it is
+decoded, and the material samples that blurred copy through the same mapping
+the sharp one is drawn with. A caller puts a picture behind the chrome, hands
+the palette a blurred copy of it, and every card, pill and menu on top is
+frosted against it — with no change at any call site at all.
+
 ### The new tab page
 
 **It is a dashboard, and you lay it out.** The old page was a column down the
@@ -92,6 +134,12 @@ own furniture — the tab rows, the address bar, the settings sections — which
 are not cards in the sense the setting means.
 
 ### Fixes, mostly to things that looked finished and were not
+
+**Two of the four internal pages could not be typed in.** Every one of them
+shows its address in the address bar — `zervo://settings`, `zervo://newtab`,
+`zervo://history`, `zervo://downloads` — and putting either of the middle two
+back into it opened Settings, because the routing tested for "downloads" and
+took everything else as the settings page.
 
 **The extensions button had somebody else's icon.** It drew the sliders glyph,
 with a comment explaining that Phosphor's puzzle piece "is not in the vendored
