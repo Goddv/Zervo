@@ -265,10 +265,21 @@ impl ApplicationHandler<WakerEvent> for App {
             .build();
         servo.setup_logging();
 
-        let start_url = std::env::args()
+        let asked_for = std::env::args()
             .nth(1)
             .map(|arg| ui::normalize_url(&arg, settings.search_engine))
-            .and_then(|arg| Url::parse(&arg).ok())
+            .and_then(|arg| Url::parse(&arg).ok());
+        // A zervo:// address on the command line names one of Zervo's own
+        // pages, which the engine cannot load — handing it one produced a tab
+        // that sat there empty. The window opens on the homepage and the
+        // internal page is put in front of it once there is a browser to put
+        // it in.
+        let internal = asked_for
+            .as_ref()
+            .filter(|url| url.scheme() == "zervo")
+            .cloned();
+        let start_url = asked_for
+            .filter(|url| url.scheme() != "zervo")
             .or_else(|| Url::parse(&settings.homepage).ok())
             .unwrap_or_else(|| Url::parse("https://servo.org").expect("valid default URL"));
 
@@ -342,6 +353,10 @@ impl ApplicationHandler<WakerEvent> for App {
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
         });
+
+        if let (Self::Running(app), Some(url)) = (&mut *self, internal) {
+            app.apply_action(UiAction::Navigate(url.to_string()));
+        }
     }
 
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
