@@ -70,6 +70,37 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
+/// Cross one palette into another.
+///
+/// `mix` is for opaque tints and drops alpha on the floor; `shadow` carries
+/// its alpha, so a theme crossfade needs a blend that keeps it.
+pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
+    let t = t.clamp(0.0, 1.0);
+    let inv = 1.0 - t;
+    let blend = |x: Color32, y: Color32| {
+        Color32::from_rgba_premultiplied(
+            (x.r() as f32 * inv + y.r() as f32 * t) as u8,
+            (x.g() as f32 * inv + y.g() as f32 * t) as u8,
+            (x.b() as f32 * inv + y.b() as f32 * t) as u8,
+            (x.a() as f32 * inv + y.a() as f32 * t) as u8,
+        )
+    };
+    Palette {
+        // Switches once, halfway. It picks which recipe a surface uses — a
+        // white wash or a dark one — rather than being a color to interpolate.
+        dark: if t < 0.5 { a.dark } else { b.dark },
+        bg: blend(a.bg, b.bg),
+        surface: blend(a.surface, b.surface),
+        surface_hover: blend(a.surface_hover, b.surface_hover),
+        active: blend(a.active, b.active),
+        accent: blend(a.accent, b.accent),
+        text: blend(a.text, b.text),
+        text_muted: blend(a.text_muted, b.text_muted),
+        border: blend(a.border, b.border),
+        shadow: blend(a.shadow, b.shadow),
+    }
+}
+
 impl ThemeMode {
     pub const ALL: [ThemeMode; 3] = [ThemeMode::Auto, ThemeMode::Light, ThemeMode::Dark];
 
