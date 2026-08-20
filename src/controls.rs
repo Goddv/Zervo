@@ -239,11 +239,7 @@ fn panel<R>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::new(radius)
-                    .opaque(palette.bg)
-                    .border(palette.border)
-                    // A dialog the user cannot see is a fault, not a look.
-                    .no_fade(),
+                Glass::new(radius).opaque(palette.bg).border(palette.border),
             ) {
                 painter.add(shape);
             }

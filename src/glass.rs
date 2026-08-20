@@ -37,13 +37,16 @@ pub struct Glass {
     pub opaque: Option<Color32>,
     /// Hairline border color, overriding the default white translucency.
     pub border: Option<Color32>,
-    /// Exempt from the user's card-opacity setting.
+    /// Subject to the user's card-opacity setting.
     ///
-    /// For surfaces whose legibility does not survive being faded: anything
-    /// floating over a live web page, anything modal, and any card sitting on
-    /// a photograph. Everything embedded in the chrome fades — there is an
-    /// opaque window behind it, so thinning it is a look rather than a fault.
-    pub no_fade: bool,
+    /// Off by default, and deliberately: "card" means the things you arrange
+    /// and dismiss — the favourites and downloads cards, the shelf's widgets,
+    /// the new tab page's — not every surface the material happens to draw.
+    /// The chrome's own furniture, the settings sections and the tab rows
+    /// are not cards and thinning them is not what anyone means by the
+    /// setting. Opting in per surface keeps a new one from silently
+    /// disappearing on someone.
+    pub fades: bool,
 }
 
 impl Glass {
@@ -56,7 +59,7 @@ impl Glass {
             shadow: true,
             opaque: None,
             border: None,
-            no_fade: false,
+            fades: false,
         }
     }
 
@@ -72,13 +75,12 @@ impl Glass {
         self
     }
 
-    /// Ignore the user's card-opacity setting — see the field.
+    /// Follow the user's card-opacity setting — see the field.
     ///
     /// Orthogonal to `opaque`: that one decides what the surface is painted
-    /// over, this one decides whether the user is allowed to thin it. A card
-    /// over a web page or a photograph wants both.
-    pub fn no_fade(mut self) -> Self {
-        self.no_fade = true;
+    /// over, this one decides whether the user is allowed to thin it.
+    pub fn fades(mut self) -> Self {
+        self.fades = true;
         self
     }
 
@@ -310,7 +312,7 @@ fn over(top: Color32, bottom: Color32) -> Color32 {
 
 pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     let mut out = Vec::new();
-    let faded_away = glass.strength <= 0.0 || (!glass.no_fade && palette.card_opacity <= 0.0);
+    let faded_away = glass.strength <= 0.0 || (glass.fades && palette.card_opacity <= 0.0);
     if faded_away && glass.glow <= 0.0 {
         return out;
     }
@@ -318,10 +320,10 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     let corner = CornerRadius::same(glass.radius);
     let dark = palette.dark;
     let strength = glass.strength.clamp(0.0, 1.0);
-    let fade = if glass.no_fade {
-        1.0
-    } else {
+    let fade = if glass.fades {
         palette.card_opacity
+    } else {
+        1.0
     };
 
     // Accent glow halo behind active/focused elements — a falloff rather than

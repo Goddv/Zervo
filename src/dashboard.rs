@@ -648,10 +648,7 @@ fn menu<T: Copy>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::new(10)
-                    .opaque(palette.bg)
-                    .border(palette.border)
-                    .no_fade(),
+                Glass::new(10).opaque(palette.bg).border(palette.border),
             ) {
                 painter.add(shape);
             }
@@ -747,17 +744,16 @@ fn draw_widget(
     // Opaque, with the shadow left on: these stack over the content card, and
     // a translucent card in a pile does not read as a card.
     let material = match look {
-        // Both drag states ignore the card-opacity setting: a tile you are
-        // holding, and the one you are about to trade it with, have to be
-        // visible or the gesture has no feedback.
-        Look::Held => Glass::new(10).no_fade(),
+        Look::Held => Glass::new(10),
         // Lit, so it is obvious which card is being traded with.
-        Look::Target => Glass::new(10)
-            .tint(crate::theme::mix(palette.surface, palette.accent, 0.30))
-            .no_fade(),
+        Look::Target => {
+            Glass::new(10).tint(crate::theme::mix(palette.surface, palette.accent, 0.30))
+        },
         Look::Normal => Glass::new(10).strength(0.85),
     }
-    .opaque(palette.bg);
+    .opaque(palette.bg)
+    // The shelf's widgets are cards in the sense the setting means.
+    .fades();
     for shape in glass::shapes(rect, palette, material) {
         painter.add(shape);
     }
