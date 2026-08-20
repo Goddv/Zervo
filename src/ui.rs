@@ -392,13 +392,9 @@ fn paint_card_opacity_blend(
     if chrome_opacity >= 1.0 {
         return; // Opaque chrome has no seam to hide.
     }
-    let outline = glass::outline(rect, radius, 20);
     // Reach past the corner wedge — the furthest the square box sits from the
     // arc is radius * (sqrt(2) - 1).
-    let spread = radius * 0.42 + 6.0;
-    painter.add(glass::ring(&outline, spread, 8, |t| {
-        chrome.gamma_multiply((1.0 - t).powi(2))
-    }));
+    painter.add(glass::shadow(rect, radius, chrome, radius * 0.42 + 6.0));
 }
 
 /// Draw the rounded-corner masks and border over the (square) webview blit.
@@ -1062,19 +1058,26 @@ fn hover_card(
         .fixed_pos(drawn.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            // Clipped, so a half-grown card shows the top of a whole one
-            // rather than a squashed one. Widgets outside the clip are not
-            // interactive either, which is what keeps a growing card from
-            // catching clicks meant for its own top row.
-            ui.set_clip_rect(drawn);
+            // Room for the shadow, which is painted outside the card. Clipping
+            // tight to the card scissors it off with a hard rectangle and
+            // leaves a square-cornered wedge of shadow outside each rounded
+            // corner — the second corner that kept showing up in screenshots.
+            ui.set_clip_rect(drawn.expand(glass::room(12)));
             let painter = ui.painter();
+            // Drawn at `drawn`, not `card`: while it grows it is a whole
+            // rounded card of its current height, rather than a full-height
+            // one cut off square at the bottom.
             for shape in glass::shapes(
-                card,
+                drawn,
                 palette,
                 Glass::new(12).opaque(palette.bg).border(palette.border),
             ) {
                 painter.add(shape);
             }
+            // The contents keep the tight clip, so a half-grown card shows the
+            // top of a whole one rather than a squashed one — and so its
+            // widgets are not interactive before they are visible.
+            ui.set_clip_rect(drawn);
             add(ui, card);
             ui.advance_cursor_after_rect(drawn);
         });

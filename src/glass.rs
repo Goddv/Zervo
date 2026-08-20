@@ -4,7 +4,7 @@
 //! cannot backdrop-blur, but over the chrome's solid gradient the layered
 //! recipe reads the same.)
 
-use egui::epaint::Mesh;
+use egui::epaint::{Mesh, RectShape};
 use egui::{
     Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2,
 };
@@ -119,27 +119,35 @@ pub fn outline(rect: Rect, radius: f32, arc_segments: usize) -> Vec<(Pos2, Vec2)
     outline
 }
 
-/// Extrude `outline` outwards as a ring mesh, coloring each radial step with
-/// `color_at(t)` where `t` runs 0 (at the outline) to 1 (at `spread`).
-pub fn ring(
-    outline: &[(Pos2, Vec2)],
-    spread: f32,
-    steps: usize,
-    color_at: impl Fn(f32) -> Color32,
-) -> Shape {
+/// How far outside its own rect the material paints, for a given corner
+/// radius: the drop shadow's spread, or the accent glow's, whichever reaches
+/// further. Anything that clips a glass surface has to leave this much room —
+/// clip tight to the rect and the shadow is scissored off with a hard
+/// rectangle, which leaves a square-cornered wedge of it outside every rounded
+/// corner.
+pub fn room(radius: u8) -> f32 {
+    (4.0 + f32::from(radius) * 0.45).max(8.0) + 1.0
+}
+
+/// One physical pixel on a 2x display: the width the ring fades in over, so
+/// that its inner boundary is not a hard edge. See `shadow`.
+const FEATHER: f32 = 0.5;
+
+/// Extrude `outline` as a ring mesh. Each row is a radial offset from the
+/// outline — negative is inward — and the color at that offset; the mesh
+/// interpolates between consecutive rows.
+pub fn ring(outline: &[(Pos2, Vec2)], rows: &[(f32, Color32)]) -> Shape {
     let mut mesh = Mesh::default();
-    for step in 0..=steps {
-        let t = step as f32 / steps as f32;
-        let color = color_at(t);
+    for (offset, color) in rows {
         for (point, normal) in outline {
-            mesh.colored_vertex(*point + *normal * (spread * t), color);
+            mesh.colored_vertex(*point + *normal * *offset, *color);
         }
     }
     let count = outline.len() as u32;
-    for step in 0..steps as u32 {
+    for row in 0..rows.len().saturating_sub(1) as u32 {
         for index in 0..count {
             let next = (index + 1) % count;
-            let (inner, outer) = (step * count, (step + 1) * count);
+            let (inner, outer) = (row * count, (row + 1) * count);
             mesh.add_triangle(inner + index, inner + next, outer + next);
             mesh.add_triangle(inner + index, outer + next, outer + index);
         }
@@ -156,15 +164,28 @@ pub fn ring(
 /// lands *inside* the card and the falloff outside is short and abrupt.
 /// Interpolating vertex colors across a ring mesh gives a continuous falloff
 /// that starts where the card ends.
+///
+/// Both of the mesh's silhouettes are transparent, and that is the point. A
+/// mesh gets no antialiasing from the tessellator, so a boundary drawn at full
+/// strength is a hard edge, and a hard edge along a curve is a staircase —
+/// which is what a second, jagged outline around a card's corner turned out to
+/// be. The outer boundary has faded to nothing anyway; the inner one is given
+/// a row half a point inside the silhouette to fade in from, which lands under
+/// the card's own fill.
 pub fn shadow(rect: Rect, radius: f32, base: Color32, spread: f32) -> Shape {
     // One arc segment per couple of physical pixels of radius: enough that the
     // curve reads as a curve, few enough that a shadow behind every button is
     // not thousands of triangles.
     let segments = (radius * 2.0).ceil().clamp(10.0, 40.0) as usize;
-    // Quadratic falloff, close to how a real penumbra reads.
-    ring(&outline(rect, radius, segments), spread, 8, |t| {
-        base.gamma_multiply((1.0 - t).powi(2))
-    })
+    const STEPS: usize = 8;
+    let mut rows = Vec::with_capacity(STEPS + 2);
+    rows.push((-FEATHER, Color32::TRANSPARENT));
+    for step in 0..=STEPS {
+        let t = step as f32 / STEPS as f32;
+        // Quadratic falloff, close to how a real penumbra reads.
+        rows.push((spread * t, base.gamma_multiply((1.0 - t).powi(2))));
+    }
+    ring(&outline(rect, radius, segments), &rows)
 }
 
 /// Composite `top` over `bottom`, both premultiplied — the same arithmetic the
@@ -206,11 +227,14 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
         ));
     }
 
-    // Drop shadow for lift, offset a touch downward.
+    // Drop shadow for lift. Concentric with the card, not offset downward: an
+    // offset ring starts outside the silhouette on the far side, which leaves
+    // a bright gap between the card's edge and its shadow and turns the
+    // shadow's leading edge into a second outline around the corner.
     if glass.shadow {
         let lift = if dark { 0.55 } else { 0.8 } * strength;
         out.push(shadow(
-            rect.translate(vec2(0.0, 1.5)),
+            rect,
             radius_px,
             palette.shadow.gamma_multiply(lift),
             4.0 + radius_px * 0.45,
@@ -230,25 +254,28 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     if let Some(backing) = glass.opaque {
         fill = over(fill, backing);
     }
-    out.push(Shape::rect_filled(rect, corner, fill));
-
-    // Flat design: no specular sheen, no rim light, no bottom shade. Surfaces
-    // are carried by fill + hairline border alone; depth comes from the
-    // shadow and the accent glow, not from faked highlights.
-
-    // Hairline border. One stroke, never two: an inner and an outer stroke at
-    // the same radius put two antialiased curves a pixel apart, which is the
-    // faint second corner you can see on a card that has both.
+    // Fill and hairline as one shape, not two. Two rounded rects at the same
+    // radius antialias the same curve twice over, so the corner composites
+    // heavier than the straight edges beside it — one RectShape tessellates
+    // both together and antialiases the silhouette once.
     let hairline = glass.border.unwrap_or_else(|| {
         let alpha = if dark { 26.0 } else { 120.0 } * strength.max(0.6);
         Color32::from_white_alpha(alpha as u8)
     });
-    out.push(Shape::rect_stroke(
-        rect,
-        corner,
-        Stroke::new(1.0_f32, hairline),
-        StrokeKind::Inside,
-    ));
+    out.push(
+        RectShape::new(
+            rect,
+            corner,
+            fill,
+            Stroke::new(1.0_f32, hairline),
+            StrokeKind::Inside,
+        )
+        .into(),
+    );
+
+    // Flat design: no specular sheen, no rim light, no bottom shade. Surfaces
+    // are carried by fill + hairline border alone; depth comes from the
+    // shadow and the accent glow, not from faked highlights.
 
     out
 }

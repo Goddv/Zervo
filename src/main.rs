@@ -60,6 +60,9 @@ use winit::keyboard::ModifiersState;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
+/// How long the chrome takes to cross from one theme to the other.
+const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(220);
+
 use crate::app::AppState;
 use crate::keyboard::{CMD_OR_ALT, CMD_OR_CONTROL, keyboard_event_from_winit};
 use crate::settings::{NewTabPage, Settings};
@@ -122,6 +125,16 @@ struct RunningApp {
     /// made the chrome jump.
     applied_theme: (theme::ThemeMode, theme::AccentColor, bool),
     applied_icon: settings::AppIcon,
+    /// A theme change in flight: the palette it started from, and when.
+    ///
+    /// The chrome crosses over rather than snapping, because half of what the
+    /// user sees is not ours to snap. The frosted sidebar backdrop is an
+    /// NSVisualEffectView composited by the WindowServer, a frame behind our
+    /// own GL output, so an instant switch changed everything opaque on one
+    /// frame and the frost on the next — a staggered redraw, and the jolt
+    /// people reported. Crossing both over the same interval leaves no single
+    /// frame for them to disagree on.
+    theme_fade: Option<(Palette, std::time::Instant)>,
     /// File downloads (Servo has no download subsystem — we do it ourselves).
     downloads: downloads::DownloadManager,
     /// Retained frosted-glass backdrop, kept so its material can be retuned.
@@ -278,6 +291,7 @@ impl ApplicationHandler<WakerEvent> for App {
             pending_repaint_at: None,
             applied_theme,
             applied_icon,
+            theme_fade: None,
             downloads: downloads::DownloadManager::default(),
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
@@ -675,6 +689,21 @@ impl RunningApp {
         }
 
         let palette = self.palette();
+        if self.theme_fade.is_some() {
+            // egui's own style has to follow the crossfade frame by frame:
+            // stock widgets take their colors from there rather than from the
+            // palette we hand to `draw`.
+            theme::apply(&self.egui_glow.egui_ctx, &palette);
+            let done = self
+                .theme_fade
+                .as_ref()
+                .is_some_and(|(_, started)| started.elapsed() >= THEME_FADE);
+            if done {
+                self.theme_fade = None;
+            } else {
+                state.window.request_redraw();
+            }
+        }
         let active_webview = state.active_webview();
         let offscreen = state.rendering_context.clone();
         let mut ui_output = None;
@@ -1157,7 +1186,7 @@ impl RunningApp {
                 let look = (self.settings.theme, self.settings.accent, self.system_dark);
                 if look != self.applied_theme {
                     self.applied_theme = look;
-                    self.apply_theme();
+                    self.start_theme_fade();
                 }
                 #[cfg(target_os = "macos")]
                 if self.settings.app_icon != self.applied_icon {
@@ -1169,25 +1198,61 @@ impl RunningApp {
         }
     }
 
+    /// The palette to paint with — the target one, or a point on the way to it
+    /// while a theme change is crossing over.
     fn palette(&self) -> Palette {
+        let target = self.target_palette();
+        let Some((from, started)) = &self.theme_fade else {
+            return target;
+        };
+        let t = started.elapsed().as_secs_f32() / THEME_FADE.as_secs_f32();
+        if t >= 1.0 {
+            target
+        } else {
+            theme::lerp(from, &target, glass::ease_out(t))
+        }
+    }
+
+    fn target_palette(&self) -> Palette {
         theme::resolve(self.settings.theme, self.system_dark, self.settings.accent)
+    }
+
+    /// Begin crossing to whatever the settings now say, from wherever the
+    /// chrome currently is — so changing the theme twice in quick succession
+    /// carries on from the middle rather than snapping back.
+    fn start_theme_fade(&mut self) {
+        let from = self.palette();
+        self.theme_fade = Some((from, std::time::Instant::now()));
+        self.apply_platform_theme();
+        self.state.window.request_redraw();
     }
 
     /// Re-style the chrome and tell every webview the new prefers-color-scheme.
     fn apply_theme(&mut self) {
-        let palette = self.palette();
-        theme::apply(&self.egui_glow.egui_ctx, &palette);
-        self.state.set_engine_theme(palette.dark);
+        theme::apply(&self.egui_glow.egui_ctx, &self.palette());
+        self.apply_platform_theme();
+    }
+
+    /// The half of a theme change that is not egui's: the engine, the window's
+    /// appearance and the frosted backdrop. Aimed at the theme being crossed
+    /// *to*, and started at the same moment as the crossfade, so the frost has
+    /// the whole interval to get there.
+    fn apply_platform_theme(&mut self) {
+        let target = self.target_palette();
+        self.state.set_engine_theme(target.dark);
         sync_window_theme(&self.state.window, self.settings.theme);
         // The frost is appearance-adaptive on its own, but a lighter material
         // reads better behind light chrome.
         #[cfg(target_os = "macos")]
         if let Some(vibrancy) = &self._vibrancy {
-            vibrancy.set_material(if palette.dark {
-                objc2_app_kit::NSVisualEffectMaterial::Sidebar
-            } else {
-                objc2_app_kit::NSVisualEffectMaterial::HeaderView
-            });
+            vibrancy.set_material_animated(
+                if target.dark {
+                    objc2_app_kit::NSVisualEffectMaterial::Sidebar
+                } else {
+                    objc2_app_kit::NSVisualEffectMaterial::HeaderView
+                },
+                THEME_FADE.as_secs_f64(),
+            );
         }
     }
 

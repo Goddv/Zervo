@@ -21,8 +21,9 @@
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
+    NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSWindowOrderingMode,
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -32,10 +33,20 @@ pub struct Vibrancy {
 }
 
 impl Vibrancy {
-    /// Swap material, e.g. when the user toggles a "reduce transparency" style
-    /// preference or you want a different frost for light/dark.
-    pub fn set_material(&self, material: NSVisualEffectMaterial) {
+    /// Swap material, crossfading over `duration` seconds.
+    ///
+    /// A bare `setMaterial` snaps, and the WindowServer composites this view a
+    /// frame behind our own GL output — so the snap lands one frame after
+    /// everything we draw ourselves, and the frosted panel visibly changes
+    /// last. Handing the change to AppKit inside an animation group turns it
+    /// into a crossfade, which has no single frame to be out of step on.
+    pub fn set_material_animated(&self, material: NSVisualEffectMaterial, duration: f64) {
+        NSAnimationContext::beginGrouping();
+        let context = NSAnimationContext::currentContext();
+        context.setDuration(duration);
+        context.setAllowsImplicitAnimation(true);
         self.view.setMaterial(material);
+        NSAnimationContext::endGrouping();
     }
 }
 
