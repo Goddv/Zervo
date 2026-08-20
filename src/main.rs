@@ -110,6 +110,13 @@ struct RunningApp {
     content_rect_points: egui::Rect,
     /// A page-initiated dialog or menu is up.
     controls_open: bool,
+    /// The pointer went down on the chrome, so the chrome keeps it until the
+    /// button comes back up — even once it has travelled out over the page.
+    ///
+    /// Without this, dragging a tab across the window hands the move events to
+    /// the engine the moment the pointer crosses into the content rect, and
+    /// the drag never finishes because the release is never seen.
+    chrome_holds_pointer: bool,
     /// Throttles history writes: every visit marks the library dirty, and
     /// rewriting the file on each one would be a lot of churn for a browse.
     library_saved_at: std::time::Instant,
@@ -291,6 +298,7 @@ impl ApplicationHandler<WakerEvent> for App {
             webview_relative_mouse: Cell::new(Point2D::zero()),
             content_rect_points: egui::Rect::ZERO,
             controls_open: false,
+            chrome_holds_pointer: false,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
             applied_theme,
@@ -405,11 +413,42 @@ impl RunningApp {
         // covers all of them, including ones added later — the previous
         // version listed overlays by hand, and every overlay anyone forgot to
         // add sent its clicks straight through to the page underneath.
-        let over_content = self.content_rect_points.contains(cursor_points)
+        let pointer_on_page = self.content_rect_points.contains(cursor_points)
             && !self.settings_open
             // A modal dialog blocks the whole page, not just its own rect.
             && !self.controls_open
             && !self.egui_glow.egui_ctx.is_pointer_over_egui();
+
+        // Re-decided on every press rather than remembered indefinitely, so a
+        // mouse-up we never see — AppKit swallows one whenever it runs its own
+        // window-drag loop — cannot wedge the chrome on.
+        if matches!(
+            &event,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            }
+        ) {
+            self.chrome_holds_pointer = !pointer_on_page;
+        }
+        if matches!(
+            &event,
+            WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false)
+        ) {
+            self.chrome_holds_pointer = false;
+        }
+        let over_content = pointer_on_page && !self.chrome_holds_pointer;
+        if matches!(
+            &event,
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                ..
+            }
+        ) {
+            // Released after the routing decision, so the release itself still
+            // goes wherever the press went.
+            self.chrome_holds_pointer = false;
+        }
 
         let mut consumed = false;
         match &event {
@@ -1168,6 +1207,45 @@ impl RunningApp {
                 }
                 state.window.request_redraw();
             },
+            UiAction::MoveTab {
+                tab,
+                workspace,
+                index,
+            } => {
+                let mut browser = state.browser.borrow_mut();
+                if browser.move_tab(tab, workspace, index) {
+                    // Following the tab is what the gesture means. Dropping it
+                    // into a workspace you are not looking at and staying put
+                    // reads as having lost it.
+                    browser.active_workspace = workspace;
+                    browser.active_tab = Some(tab);
+                }
+                drop(browser);
+                state.window.request_redraw();
+            },
+            UiAction::GroupTabs { onto, dragged } => {
+                let mut browser = state.browser.borrow_mut();
+                let name = Self::group_name(&browser, onto, dragged);
+                let index = browser.group_tabs(name, onto, dragged);
+                browser.active_workspace = index;
+                browser.active_tab = Some(dragged);
+                // Opened for editing straight away: the group is the answer to
+                // a question the user has not been asked yet.
+                browser.workspace_edit = Some((index, browser.workspaces[index].name.clone()));
+                drop(browser);
+                state.window.request_redraw();
+            },
+            UiAction::RenameWorkspace(index, name) => {
+                let mut browser = state.browser.borrow_mut();
+                if let Some(workspace) = browser.workspaces.get_mut(index) {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        workspace.name = name.to_owned();
+                    }
+                }
+                drop(browser);
+                state.window.request_redraw();
+            },
             UiAction::NewWorkspace => {
                 let mut browser = state.browser.borrow_mut();
                 let name = format!("Workspace {}", browser.workspaces.len() + 1);
@@ -1204,6 +1282,27 @@ impl RunningApp {
 
     /// The palette to paint with — the target one, or a point on the way to it
     /// while a theme change is crossing over.
+    /// A provisional name for a group made from two tabs.
+    ///
+    /// Their shared host if they have one, since grouping two pages from the
+    /// same site is the common case and "github.com" is a better guess than
+    /// anything generic. Otherwise the numbered default, which at least says
+    /// what to replace.
+    fn group_name(browser: &state::BrowserState, onto: TabId, dragged: TabId) -> String {
+        let host = |id: TabId| {
+            browser
+                .tab(id)
+                .and_then(|tab| tab.url.split("://").nth(1))
+                .and_then(|rest| rest.split('/').next())
+                .map(|host| host.trim_start_matches("www.").to_owned())
+                .filter(|host| !host.is_empty())
+        };
+        match (host(onto), host(dragged)) {
+            (Some(a), Some(b)) if a == b => a,
+            _ => format!("Workspace {}", browser.workspaces.len() + 1),
+        }
+    }
+
     fn palette(&self) -> Palette {
         let target = self.target_palette();
         let Some((from, started)) = &self.theme_fade else {
