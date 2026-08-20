@@ -154,6 +154,9 @@ pub struct BrowserState {
     pub editing_address: bool,
     /// The favourite being renamed, and the name so far.
     pub favourite_edit: Option<(String, String)>,
+    /// The workspace being named, and the name so far. Set the moment one tab
+    /// is dropped on another, so the group opens asking what it is.
+    pub workspace_edit: Option<(usize, String)>,
     /// Search box on the history page.
     pub history_query: String,
     /// The half-typed login on the passwords page: site, username, password.
@@ -183,6 +186,7 @@ impl BrowserState {
             address_bar: initial_url.to_owned(),
             editing_address: false,
             favourite_edit: None,
+            workspace_edit: None,
             history_query: String::new(),
             password_draft: (String::new(), String::new(), String::new()),
             password_notice: String::new(),
@@ -282,6 +286,54 @@ impl BrowserState {
             .iter_mut()
             .flat_map(|workspace| workspace.tabs.iter_mut())
             .find(|tab| tab.webview.as_ref().is_some_and(|wv| wv.id() == id))
+    }
+
+    /// Move a tab to `index` in `workspace`, keeping the tab itself — and with
+    /// it the live page — intact. False if either the tab or the workspace has
+    /// gone.
+    ///
+    /// Deliberately not `remove_tab` followed by `add_tab`: `remove_tab` hands
+    /// back only the `WebView` and drops everything else about the tab, and
+    /// `add_tab` builds a fresh one. Round-tripping through them would close
+    /// the page and reopen it, losing scroll position, form state and history.
+    pub fn move_tab(&mut self, id: TabId, workspace: usize, index: usize) -> bool {
+        if workspace >= self.workspaces.len() {
+            return false;
+        }
+        let Some(from) = self
+            .workspaces
+            .iter()
+            .position(|space| space.tabs.iter().any(|tab| tab.id == id))
+        else {
+            return false;
+        };
+        let Some(at) = self.workspaces[from]
+            .tabs
+            .iter()
+            .position(|tab| tab.id == id)
+        else {
+            return false;
+        };
+        let tab = self.workspaces[from].tabs.remove(at);
+        // Within one workspace the caller's index was worked out against the
+        // list as it looked *before* the removal, so everything after the tab
+        // has since shifted down one. Without this, dragging a tab downward
+        // always lands it one slot short.
+        let mut index = index.min(self.workspaces[workspace].tabs.len());
+        if from == workspace && at < index {
+            index -= 1;
+        }
+        self.workspaces[workspace].tabs.insert(index, tab);
+        true
+    }
+
+    /// Put two tabs in a workspace of their own and return its index. The tab
+    /// that was dropped on keeps its place at the front.
+    pub fn group_tabs(&mut self, name: impl Into<String>, onto: TabId, dragged: TabId) -> usize {
+        let workspace = self.add_workspace(name);
+        self.move_tab(onto, workspace, 0);
+        self.move_tab(dragged, workspace, 1);
+        workspace
     }
 
     /// Remove a tab, returning its webview (if any) so the caller can drop it

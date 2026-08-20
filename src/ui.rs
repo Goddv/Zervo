@@ -33,6 +33,19 @@ pub enum UiAction {
     },
     CloseTab(TabId),
     TogglePin(TabId),
+    /// Dragged in the sidebar: put this tab at `index` in `workspace`.
+    MoveTab {
+        tab: TabId,
+        workspace: usize,
+        index: usize,
+    },
+    /// Dropped one tab onto another: the two become a workspace, and the
+    /// sidebar opens its name for editing.
+    GroupTabs {
+        onto: TabId,
+        dragged: TabId,
+    },
+    RenameWorkspace(usize, String),
     NewWorkspace,
     SelectWorkspace(usize),
     OpenSettings,
@@ -749,6 +762,16 @@ fn sidebar_body(
     }
 
     // ── Workspaces and tab rows.
+    //
+    // The tab being dragged lives in egui's temp memory, like the navigation
+    // bar's held item and the shelf's — it is scratch that lasts one gesture,
+    // not part of the browser model.
+    let ctx = ui.ctx().clone();
+    let drag_id = Id::new("zervo_tab_drag");
+    let dragging = ctx.data(|data| data.get_temp::<TabId>(drag_id));
+    let pointer = ctx.input(|input| input.pointer.latest_pos());
+    let editing = chrome.browser.workspace_edit.clone();
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -756,21 +779,54 @@ fn sidebar_body(
             let active_tab = chrome.browser.active_tab;
             let always_close = chrome.settings.always_show_tab_close;
 
+            // Both of these are resolved across every workspace rather than
+            // within one, and that is the whole trick. Where the tab lands is
+            // decided by the pointer, which may be over any workspace; the
+            // release is only ever seen by the row being dragged, which is in
+            // exactly one. Deciding them in the same pass means a tab dragged
+            // from one workspace to another finds its target in one iteration
+            // and its release in a different one, and the gesture silently
+            // does nothing.
+            let mut target: Option<(usize, usize, Option<TabId>)> = None;
+            let mut released = false;
+            let mut ghost: Option<(TabId, String)> = None;
+            let mut rename: Option<(usize, WorkspaceName)> = None;
+
             for (workspace_index, workspace) in chrome.browser.workspaces.iter().enumerate() {
-                workspace_header(
+                let header = workspace_header(
                     ui,
                     workspace_index,
                     &workspace.name,
                     workspace.tabs.iter().filter(|tab| !tab.pinned).count(),
                     chrome.settings.show_tab_counts,
                     workspace_index == active_workspace,
+                    editing
+                        .as_ref()
+                        .filter(|(index, _)| *index == workspace_index)
+                        .map(|(_, name)| name.as_str()),
                     &palette,
                     actions,
+                    &mut rename,
                 );
+                // A header takes the drop at the top of its list, which is the
+                // only way to aim at a workspace with no tabs in it.
+                if dragging.is_some() && pointer.is_some_and(|pos| header.contains(pos)) {
+                    target = Some((workspace_index, 0, None));
+                }
 
-                for tab in workspace.tabs.iter().filter(|tab| !tab.pinned) {
+                // Enumerated over the whole list, not the filtered one: the
+                // index is an insertion point into `workspace.tabs`, and
+                // pinned tabs are in there too even though they are drawn in
+                // the essentials grid instead.
+                for (tab_index, tab) in workspace.tabs.iter().enumerate() {
+                    if tab.pinned {
+                        continue;
+                    }
+                    if dragging == Some(tab.id) {
+                        ghost = Some((tab.id, tab.title.clone()));
+                    }
                     let selected = active_tab == Some(tab.id);
-                    let (clicked, close_clicked) = tab_row(
+                    let out = tab_row(
                         ui,
                         TabRowStyle {
                             tab_id: tab.id,
@@ -781,14 +837,29 @@ fn sidebar_body(
                             is_settings: tab.kind == TabKind::Settings,
                             always_show_close: always_close,
                             compact: chrome.settings.compact_sidebar,
+                            dragging,
                         },
                         &palette,
                         chrome.favicons.get(&tab.id),
                         actions,
                     );
-                    if close_clicked {
+                    if out.drag_started {
+                        ctx.data_mut(|data| data.insert_temp(drag_id, tab.id));
+                    }
+                    released |= out.drag_stopped;
+                    match out.drop_at {
+                        Some(DropAt::Before) => target = Some((workspace_index, tab_index, None)),
+                        Some(DropAt::After) => {
+                            target = Some((workspace_index, tab_index + 1, None))
+                        },
+                        Some(DropAt::Onto) => {
+                            target = Some((workspace_index, tab_index, Some(tab.id)))
+                        },
+                        None => {},
+                    }
+                    if out.close_clicked {
                         actions.push(UiAction::CloseTab(tab.id));
-                    } else if clicked {
+                    } else if out.clicked {
                         actions.push(UiAction::SelectTab(tab.id));
                         if workspace_index != active_workspace {
                             actions.push(UiAction::SelectWorkspace(workspace_index));
@@ -828,7 +899,80 @@ fn sidebar_body(
                         workspace: workspace_index,
                     });
                 }
+                // A drop below the last row files at the end of that
+                // workspace, which is what aiming at the empty space under it
+                // obviously means.
+                if dragging.is_some() && pointer.is_some_and(|pos| rect.contains(pos)) {
+                    target = Some((workspace_index, workspace.tabs.len(), None));
+                }
                 ui.add_space(12.0);
+            }
+
+            if let (Some(held), Some(pos)) = (dragging, pointer) {
+                // Scroll when the pointer is pressed against either end of the
+                // list, so a tab can reach a workspace that is off screen.
+                let viewport = ui.clip_rect().intersect(ui.max_rect());
+                let edge = 28.0;
+                if pos.x > viewport.min.x && pos.x < viewport.max.x {
+                    if pos.y < viewport.min.y + edge {
+                        ui.scroll_with_delta(vec2(0.0, 6.0));
+                    } else if pos.y > viewport.max.y - edge {
+                        ui.scroll_with_delta(vec2(0.0, -6.0));
+                    }
+                }
+                if let Some((id, title)) = &ghost {
+                    let height = if chrome.settings.compact_sidebar {
+                        28.0
+                    } else {
+                        34.0
+                    };
+                    paint_tab_ghost(
+                        ui.painter(),
+                        Rect::from_min_size(
+                            pos2(viewport.min.x + 6.0, pos.y - height / 2.0),
+                            vec2(viewport.width() - 12.0, height),
+                        ),
+                        title,
+                        chrome.favicons.get(id),
+                        &palette,
+                    );
+                }
+                let _ = held;
+                ctx.request_repaint();
+            }
+
+            if released {
+                ctx.data_mut(|data| data.remove::<TabId>(drag_id));
+                if let (Some(held), Some((workspace, index, onto))) = (dragging, target) {
+                    match onto {
+                        // Dropped on a tab rather than between two. Dropping a
+                        // tab on itself is the one case that means nothing.
+                        Some(onto) if onto != held => {
+                            actions.push(UiAction::GroupTabs {
+                                onto,
+                                dragged: held,
+                            });
+                        },
+                        _ => actions.push(UiAction::MoveTab {
+                            tab: held,
+                            workspace,
+                            index,
+                        }),
+                    }
+                }
+            }
+
+            if let Some((index, edit)) = rename {
+                match edit {
+                    WorkspaceName::Typing(name) => {
+                        chrome.browser.workspace_edit = Some((index, name));
+                    },
+                    WorkspaceName::Keep(name) => {
+                        chrome.browser.workspace_edit = None;
+                        actions.push(UiAction::RenameWorkspace(index, name));
+                    },
+                    WorkspaceName::Discard => chrome.browser.workspace_edit = None,
+                }
             }
         });
 }
@@ -2899,6 +3043,13 @@ fn draw_essentials_grid(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut V
 }
 
 #[expect(clippy::too_many_arguments)]
+/// What the user did to a workspace's name this frame.
+enum WorkspaceName {
+    Typing(String),
+    Keep(String),
+    Discard,
+}
+
 fn workspace_header(
     ui: &mut Ui,
     index: usize,
@@ -2906,12 +3057,14 @@ fn workspace_header(
     tab_count: usize,
     show_count: bool,
     active: bool,
+    editing: Option<&str>,
     palette: &Palette,
     actions: &mut Vec<UiAction>,
-) {
+    rename: &mut Option<(usize, WorkspaceName)>,
+) -> Rect {
     let desired = vec2(ui.available_width(), 28.0);
     let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
-    if response.clicked() {
+    if response.clicked() && editing.is_none() {
         actions.push(UiAction::SelectWorkspace(index));
     }
 
@@ -2920,20 +3073,77 @@ fn workspace_header(
         response.hovered(),
         0.12,
     ));
-    let painter = ui.painter();
     if hover_t > 0.0 {
-        painter.rect_filled(
+        ui.painter().rect_filled(
             rect,
             CornerRadius::same(8),
             palette.surface_hover.gamma_multiply(hover_t),
         );
     }
-    painter.circle_filled(
+    ui.painter().circle_filled(
         pos2(rect.min.x + 12.0, rect.center().y),
         4.0,
         theme::workspace_color(index),
     );
-    painter.text(
+
+    // Named inline rather than in a dialog. A workspace made by dropping one
+    // tab on another already exists by the time the user is asked what it is,
+    // so a modal would be asking permission for something already done — and
+    // the same tick-and-cross edit is what renaming a favourite uses.
+    if let Some(draft) = editing {
+        let mut text = draft.to_owned();
+        let field = Rect::from_min_max(
+            pos2(rect.min.x + 24.0, rect.min.y + 2.0),
+            pos2(rect.max.x - 44.0, rect.max.y - 2.0),
+        );
+        let editor = ui.put(
+            field,
+            TextEdit::singleline(&mut text)
+                .frame(Frame::NONE)
+                .font(FontId::proportional(13.0))
+                .text_color(palette.text)
+                .id(ui.id().with(("ws_name", index))),
+        );
+        editor.request_focus();
+
+        let control = |ui: &mut Ui, x: f32, icon: Icon, tint: Color32| -> bool {
+            let hit = Rect::from_center_size(pos2(x, rect.center().y), vec2(18.0, 18.0));
+            let response = ui.interact(
+                hit,
+                ui.id().with((icon as usize, "ws_edit", index)),
+                Sense::click(),
+            );
+            icons::draw_icon(
+                ui.painter(),
+                Rect::from_center_size(hit.center(), vec2(11.0, 11.0)),
+                icon,
+                if response.hovered() {
+                    tint
+                } else {
+                    palette.text_muted
+                },
+            );
+            response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+        };
+        let keep = control(ui, rect.max.x - 32.0, Icon::Check, palette.accent);
+        let discard = control(ui, rect.max.x - 12.0, Icon::Close, palette.text);
+
+        let entered = ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let escaped = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        *rename = Some((
+            index,
+            if keep || entered {
+                WorkspaceName::Keep(text)
+            } else if discard || escaped {
+                WorkspaceName::Discard
+            } else {
+                WorkspaceName::Typing(text)
+            },
+        ));
+        return rect;
+    }
+
+    ui.painter().text(
         pos2(rect.min.x + 26.0, rect.center().y),
         Align2::LEFT_CENTER,
         name,
@@ -2945,7 +3155,7 @@ fn workspace_header(
         },
     );
     if show_count {
-        painter.text(
+        ui.painter().text(
             pos2(rect.max.x - 10.0, rect.center().y),
             Align2::RIGHT_CENTER,
             tab_count.to_string(),
@@ -2953,7 +3163,15 @@ fn workspace_header(
             palette.text_muted,
         );
     }
+    // Renaming any workspace, not only a freshly made one.
+    response.clone().context_menu(|ui| {
+        if ui.button("Rename").clicked() {
+            *rename = Some((index, WorkspaceName::Typing(name.to_owned())));
+            ui.close();
+        }
+    });
     response.on_hover_cursor(CursorIcon::PointingHand);
+    rect
 }
 
 struct TabRowStyle<'a> {
@@ -2965,6 +3183,78 @@ struct TabRowStyle<'a> {
     is_settings: bool,
     always_show_close: bool,
     compact: bool,
+    /// The tab being dragged, if any — including possibly this one.
+    dragging: Option<TabId>,
+}
+
+/// Where a drop on a tab row would put the dragged tab.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DropAt {
+    Before,
+    /// On the row itself, rather than between two: the two tabs become a
+    /// workspace of their own.
+    Onto,
+    After,
+}
+
+/// What a tab row did this frame. More than the two booleans it used to
+/// return, because the sidebar now has to resolve a drag across every row in
+/// every workspace before it can act on one.
+struct TabRowOut {
+    clicked: bool,
+    close_clicked: bool,
+    drag_started: bool,
+    drag_stopped: bool,
+    /// Set while a drag is in flight and the pointer is over this row.
+    drop_at: Option<DropAt>,
+}
+
+/// The dragged row, following the pointer.
+///
+/// Deliberately less than a real row — no close button, no hover state, no
+/// tooltip. It is a token showing what is in hand, not a control.
+fn paint_tab_ghost(
+    painter: &egui::Painter,
+    rect: Rect,
+    title: &str,
+    favicon: Option<&TextureHandle>,
+    palette: &Palette,
+) {
+    for shape in glass::shapes(
+        rect,
+        palette,
+        Glass::new(8)
+            .tint(palette.active)
+            .opaque(palette.bg)
+            // It travels over the web page, so it neither thins with the
+            // card-opacity setting nor lets the page show through it.
+            .no_fade(),
+    ) {
+        painter.add(shape);
+    }
+    let icon_center = pos2(rect.min.x + 19.0, rect.center().y);
+    if let Some(texture) = favicon {
+        painter.image(
+            texture.id(),
+            Rect::from_center_size(icon_center, vec2(15.0, 15.0)),
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    } else {
+        icons::draw_icon(
+            painter,
+            Rect::from_center_size(icon_center, vec2(14.0, 14.0)),
+            Icon::Globe,
+            palette.text_muted,
+        );
+    }
+    painter.text(
+        pos2(rect.min.x + 34.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        ellipsize(title, 24),
+        FontId::proportional(13.0),
+        palette.text,
+    );
 }
 
 /// A custom-painted tab row with animated hover/selection fills, favicon or
@@ -2976,10 +3266,56 @@ fn tab_row(
     palette: &Palette,
     favicon: Option<&TextureHandle>,
     actions: &mut Vec<UiAction>,
-) -> (bool, bool) {
+) -> TabRowOut {
     let row_height = if style.compact { 28.0 } else { 34.0 };
     let desired = vec2(ui.available_width(), row_height);
-    let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
+    let (_, rect) = ui.allocate_space(desired);
+    // Sensing drag as well as click is the whole feature. egui decides between
+    // the two itself — a press only becomes a drag past 6 points of travel or
+    // 0.8 seconds held — so an ordinary click still reports as a click and no
+    // threshold of our own is needed. The id is keyed by tab identity rather
+    // than layout position for the same reason the animations below are:
+    // closing a tab above must not hand this one's interaction state over.
+    let response = ui.interact(
+        rect,
+        ui.id().with(("tab_row", style.tab_id)),
+        Sense::click_and_drag(),
+    );
+    let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
+
+    if style.dragging == Some(style.tab_id) {
+        // The row being dragged is painted last, at the pointer, by the
+        // sidebar — so it passes over the rows it is travelling across rather
+        // than under them. What is left here is the gap it came out of, which
+        // is the clearest drop affordance there is.
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        return TabRowOut {
+            clicked: false,
+            close_clicked: false,
+            drag_started: false,
+            drag_stopped: response.drag_stopped(),
+            drop_at: None,
+        };
+    }
+
+    // Three bands: the outer quarters insert above or below, the middle half
+    // groups. Half the row is a large enough target to hit deliberately, and
+    // the quarters are still 8.5 points — or 7 when the sidebar is compact.
+    let drop_at = style
+        .dragging
+        .and(pointer)
+        .filter(|pos| rect.contains(*pos))
+        .map(|pos| {
+            let t = (pos.y - rect.min.y) / rect.height();
+            if t < 0.25 {
+                DropAt::Before
+            } else if t > 0.75 {
+                DropAt::After
+            } else {
+                DropAt::Onto
+            }
+        });
+
     let close_rect =
         Rect::from_center_size(pos2(rect.max.x - 17.0, rect.center().y), vec2(20.0, 20.0));
     let close_response = ui.interact(
@@ -3098,12 +3434,54 @@ fn tab_row(
         });
     }
 
+    // The drop affordance, over everything else the row drew.
+    match drop_at {
+        Some(DropAt::Onto) => {
+            glass::paint(
+                ui.painter(),
+                rect,
+                palette,
+                Glass::new(8)
+                    .tint(palette.accent)
+                    .strength(0.55)
+                    .no_shadow()
+                    .no_fade(),
+            );
+        },
+        Some(edge) => {
+            let y = if edge == DropAt::Before {
+                rect.min.y
+            } else {
+                rect.max.y
+            };
+            ui.painter().rect_filled(
+                Rect::from_min_max(
+                    pos2(rect.min.x + 6.0, y - 1.0),
+                    pos2(rect.max.x - 6.0, y + 1.0),
+                ),
+                CornerRadius::same(1),
+                palette.accent,
+            );
+        },
+        None => {},
+    }
+
     let row_clicked = response.clicked() && !close_response.clicked();
     let close_clicked = close_response.clicked();
-    response
-        .on_hover_cursor(CursorIcon::PointingHand)
-        .on_hover_text(style.url);
-    (row_clicked, close_clicked)
+    let drag_started = response.drag_started();
+    let drag_stopped = response.drag_stopped();
+    if style.dragging.is_none() {
+        response
+            .on_hover_cursor(CursorIcon::PointingHand)
+            .on_hover_text(style.url);
+    }
+    TabRowOut {
+        clicked: row_clicked,
+        close_clicked,
+        drag_started,
+        drag_stopped,
+        drop_at,
+    }
 }
 
 /// A soft radial light blob: a triangle-fan mesh fading from `color` at the
