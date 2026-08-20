@@ -114,7 +114,7 @@ impl Tab {
 pub enum SettingsSection {
     Appearance,
     General,
-    Customize,
+    Layout,
     Passwords,
     About,
 }
@@ -123,7 +123,7 @@ impl SettingsSection {
     pub const ALL: [SettingsSection; 5] = [
         SettingsSection::Appearance,
         SettingsSection::General,
-        SettingsSection::Customize,
+        SettingsSection::Layout,
         SettingsSection::Passwords,
         SettingsSection::About,
     ];
@@ -132,7 +132,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Appearance => "Appearance",
             SettingsSection::General => "General",
-            SettingsSection::Customize => "Customize",
+            SettingsSection::Layout => "Layout",
             SettingsSection::Passwords => "Passwords",
             SettingsSection::About => "About",
         }

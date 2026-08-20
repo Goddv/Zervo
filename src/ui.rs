@@ -72,6 +72,8 @@ pub enum UiAction {
     OpenDownload(u64),
     ClearDownloads,
     RestartDownload(u64),
+    /// Put every dragged-into-place thing back where it started.
+    ResetLayout,
     /// Pointer started dragging empty chrome — move the OS window.
     DragWindow,
     /// A setting changed: persist and re-apply (theme, etc.).
@@ -613,7 +615,7 @@ pub fn finish_content_frame(
 pub const SIDEBAR_DEFAULT_WIDTH: f32 = 248.0;
 const SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SIDEBAR_MAX_WIDTH: f32 = 380.0;
-const SIDEBAR_ID: &str = "zervo_sidebar";
+pub const SIDEBAR_ID: &str = "zervo_sidebar";
 const SIDEBAR_MARGIN: Margin = Margin {
     left: 12,
     right: 10,
@@ -3968,8 +3970,8 @@ fn draw_settings_page(
                         crate::state::SettingsSection::General => {
                             settings_general(ui, chrome, &palette, actions)
                         },
-                        crate::state::SettingsSection::Customize => {
-                            settings_customize(ui, chrome, &palette, actions)
+                        crate::state::SettingsSection::Layout => {
+                            settings_layout(ui, chrome, &palette, actions)
                         },
                         crate::state::SettingsSection::Passwords => {
                             settings_passwords(ui, chrome, actions)
@@ -4096,6 +4098,42 @@ fn settings_appearance(
         );
     });
 
+    settings_section(ui, palette, "New tab background", |ui| {
+        let all = NewTabBackground::ALL;
+        let current = all
+            .iter()
+            .position(|background| *background == chrome.settings.new_tab_background);
+        // Two rows, so the labels stay readable in a narrow pane.
+        let (first, second) = all.split_at(4);
+        let first_labels: Vec<&str> = first.iter().map(|b| b.label()).collect();
+        let second_labels: Vec<&str> = second.iter().map(|b| b.label()).collect();
+        if let Some(index) =
+            widgets::segmented(ui, current.unwrap_or(usize::MAX), &first_labels, palette)
+        {
+            chrome.settings.new_tab_background = first[index];
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.add_space(6.0);
+        let offset_selected = current
+            .filter(|index| *index >= first.len())
+            .map(|index| index - first.len())
+            .unwrap_or(usize::MAX);
+        if let Some(index) = widgets::segmented(ui, offset_selected, &second_labels, palette) {
+            chrome.settings.new_tab_background = second[index];
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(if chrome.settings.new_tab_background.animated() {
+                "Animated — repaints at ~30fps while a new tab is open."
+            } else {
+                "Static — costs nothing while idle."
+            })
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+    });
+
     settings_section(ui, palette, "Transparency", |ui| {
         ui.label(
             RichText::new("Chrome opacity")
@@ -4163,6 +4201,47 @@ fn settings_general(
             });
     });
 
+    settings_section(ui, palette, "Downloads", |ui| {
+        if widgets::toggle(
+            ui,
+            &mut chrome.settings.downloads_auto,
+            "Save files without asking where",
+            palette,
+        ) {
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "Saved to {}",
+                crate::downloads::downloads_dir().display()
+            ))
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+    });
+
+    settings_section(ui, palette, "Compatibility", |ui| {
+        if widgets::toggle(
+            ui,
+            &mut chrome.settings.user_agent_compat,
+            "Present as plain Firefox",
+            palette,
+        ) {
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Servo's own user agent already claims Firefox, but keeps a Servo token \
+                 and omits Gecko — and enough sites match on exactly those to turn you \
+                 away. Takes effect on the next launch.",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+    });
+
     settings_section(ui, palette, "New tabs", |ui| {
         ui.label(
             RichText::new("Open with")
@@ -4179,77 +4258,9 @@ fn settings_general(
             actions.push(UiAction::SettingsChanged);
         }
     });
-
-    settings_section(ui, palette, "New tab background", |ui| {
-        let all = NewTabBackground::ALL;
-        let current = all
-            .iter()
-            .position(|background| *background == chrome.settings.new_tab_background);
-        // Two rows, so the labels stay readable in a narrow pane.
-        let (first, second) = all.split_at(4);
-        let first_labels: Vec<&str> = first.iter().map(|b| b.label()).collect();
-        let second_labels: Vec<&str> = second.iter().map(|b| b.label()).collect();
-        if let Some(index) =
-            widgets::segmented(ui, current.unwrap_or(usize::MAX), &first_labels, palette)
-        {
-            chrome.settings.new_tab_background = first[index];
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.add_space(6.0);
-        let offset_selected = current
-            .filter(|index| *index >= first.len())
-            .map(|index| index - first.len())
-            .unwrap_or(usize::MAX);
-        if let Some(index) = widgets::segmented(ui, offset_selected, &second_labels, palette) {
-            chrome.settings.new_tab_background = second[index];
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(if chrome.settings.new_tab_background.animated() {
-                "Animated — repaints at ~30fps while a new tab is open."
-            } else {
-                "Static — costs nothing while idle."
-            })
-            .size(11.5)
-            .color(palette.text_muted),
-        );
-    });
-
-    settings_section(ui, palette, "New tab widgets", |ui| {
-        for (value, label) in [
-            (&mut chrome.settings.newtab_clock, "Clock and date"),
-            (&mut chrome.settings.newtab_greeting, "Greeting"),
-            (&mut chrome.settings.newtab_logo, "Zervo mark"),
-            (&mut chrome.settings.newtab_search, "Search box"),
-            (
-                &mut chrome.settings.newtab_quick_links,
-                "Quick links (pinned tabs)",
-            ),
-        ] {
-            if widgets::toggle(ui, value, label, palette) {
-                actions.push(UiAction::SettingsChanged);
-            }
-        }
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Custom greeting")
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        let response = ui.add(
-            TextEdit::singleline(&mut chrome.settings.newtab_message)
-                .font(FontId::proportional(13.0))
-                .hint_text("Leave empty for the time of day")
-                .desired_width(f32::INFINITY),
-        );
-        if response.lost_focus() {
-            actions.push(UiAction::SettingsChanged);
-        }
-    });
 }
 
-fn settings_customize(
+fn settings_layout(
     ui: &mut Ui,
     chrome: &mut ChromeContext,
     palette: &Palette,
@@ -4295,6 +4306,56 @@ fn settings_customize(
             if widgets::toggle(ui, value, label, palette) {
                 actions.push(UiAction::SettingsChanged);
             }
+        }
+    });
+    settings_section(ui, palette, "New tab widgets", |ui| {
+        for (value, label) in [
+            (&mut chrome.settings.newtab_clock, "Clock and date"),
+            (&mut chrome.settings.newtab_greeting, "Greeting"),
+            (&mut chrome.settings.newtab_logo, "Zervo mark"),
+            (&mut chrome.settings.newtab_search, "Search box"),
+            (
+                &mut chrome.settings.newtab_quick_links,
+                "Quick links (pinned tabs)",
+            ),
+        ] {
+            if widgets::toggle(ui, value, label, palette) {
+                actions.push(UiAction::SettingsChanged);
+            }
+        }
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("Custom greeting")
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+        let response = ui.add(
+            TextEdit::singleline(&mut chrome.settings.newtab_message)
+                .font(FontId::proportional(13.0))
+                .hint_text("Leave empty for the time of day")
+                .desired_width(f32::INFINITY),
+        );
+        if response.lost_focus() {
+            actions.push(UiAction::SettingsChanged);
+        }
+    });
+
+    settings_section(ui, palette, "Arrangement", |ui| {
+        ui.label(
+            RichText::new(
+                "The navigation bar, its widgets, and the widths of the sidebar and \
+                 address bar are all arranged by dragging them rather than set here.",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+        ui.add_space(8.0);
+        if ui
+            .button("Reset to defaults")
+            .on_hover_text("Puts every bar button, widget and width back")
+            .clicked()
+        {
+            actions.push(UiAction::ResetLayout);
         }
     });
 }
