@@ -1219,6 +1219,7 @@ impl RunningApp {
 
     fn target_palette(&self) -> Palette {
         theme::resolve(self.settings.theme, self.system_dark, self.settings.accent)
+            .with_card_opacity(self.settings.card_opacity)
     }
 
     /// Begin crossing to whatever the settings now say, from wherever the

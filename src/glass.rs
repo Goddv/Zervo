@@ -37,6 +37,13 @@ pub struct Glass {
     pub opaque: Option<Color32>,
     /// Hairline border color, overriding the default white translucency.
     pub border: Option<Color32>,
+    /// Exempt from the user's card-opacity setting.
+    ///
+    /// For surfaces whose legibility does not survive being faded: anything
+    /// floating over a live web page, anything modal, and any card sitting on
+    /// a photograph. Everything embedded in the chrome fades — there is an
+    /// opaque window behind it, so thinning it is a look rather than a fault.
+    pub no_fade: bool,
 }
 
 impl Glass {
@@ -49,6 +56,7 @@ impl Glass {
             shadow: true,
             opaque: None,
             border: None,
+            no_fade: false,
         }
     }
 
@@ -61,6 +69,16 @@ impl Glass {
     /// Draw the hairline in a specific color rather than white translucency.
     pub fn border(mut self, color: Color32) -> Self {
         self.border = Some(color);
+        self
+    }
+
+    /// Ignore the user's card-opacity setting — see the field.
+    ///
+    /// Orthogonal to `opaque`: that one decides what the surface is painted
+    /// over, this one decides whether the user is allowed to thin it. A card
+    /// over a web page or a photograph wants both.
+    pub fn no_fade(mut self) -> Self {
+        self.no_fade = true;
         self
     }
 
@@ -157,6 +175,12 @@ fn stitch(mesh: &mut Mesh, count: u32, rows: usize) {
             mesh.add_triangle(inner + index, outer + next, outer + index);
         }
     }
+}
+
+/// The drop shadow's strength, which the card-opacity setting thins along
+/// with everything else the material paints.
+fn lift(dark: bool, strength: f32, fade: f32) -> f32 {
+    (if dark { 0.55 } else { 0.8 }) * strength * fade
 }
 
 /// Where a ring's feathered inner edge sits.
@@ -286,13 +310,19 @@ fn over(top: Color32, bottom: Color32) -> Color32 {
 
 pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     let mut out = Vec::new();
-    if glass.strength <= 0.0 && glass.glow <= 0.0 {
+    let faded_away = glass.strength <= 0.0 || (!glass.no_fade && palette.card_opacity <= 0.0);
+    if faded_away && glass.glow <= 0.0 {
         return out;
     }
     let radius_px = f32::from(glass.radius);
     let corner = CornerRadius::same(glass.radius);
     let dark = palette.dark;
     let strength = glass.strength.clamp(0.0, 1.0);
+    let fade = if glass.no_fade {
+        1.0
+    } else {
+        palette.card_opacity
+    };
 
     // Accent glow halo behind active/focused elements — a falloff rather than
     // a feathered edge, so it reads as light rather than as a colored band.
@@ -310,8 +340,8 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // offset ring starts outside the silhouette on the far side, which leaves
     // a bright gap between the card's edge and its shadow and turns the
     // shadow's leading edge into a second outline around the corner.
-    if glass.shadow {
-        let lift = if dark { 0.55 } else { 0.8 } * strength;
+    if glass.shadow && lift(dark, strength, fade) > 0.0 {
+        let lift = lift(dark, strength, fade);
         out.push(shadow(
             rect,
             radius_px,
@@ -334,6 +364,13 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     if let Some(backing) = glass.opaque {
         fill = over(fill, backing);
     }
+    // Faded *after* the backing is composited in, not before. Fading the core
+    // and the wash first and then compositing leaves the backing at full
+    // strength — the card would lose its tint and its hairline and become a
+    // flat opaque slab, right up to the point where it vanished. Scaling the
+    // finished premultiplied colour thins the whole surface continuously,
+    // backing included.
+    let fill = fill.gamma_multiply(fade);
     // Fill and hairline as one shape, not two. Two rounded rects at the same
     // radius antialias the same curve twice over, so the corner composites
     // heavier than the straight edges beside it — one RectShape tessellates
@@ -347,7 +384,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
             rect,
             corner,
             fill,
-            Stroke::new(1.0_f32, hairline),
+            Stroke::new(1.0_f32, hairline.gamma_multiply(fade)),
             StrokeKind::Inside,
         )
         .into(),
