@@ -85,13 +85,30 @@ fn fetch_once(url: &url::Url, accept: &str, limit: usize) -> Result<Hop, String>
 
     // Resolution can block for a while on a bad network, so it happens under
     // the same deadline as everything else.
-    let address = (host.as_str(), port)
+    let addresses: Vec<_> = (host.as_str(), port)
         .to_socket_addrs()
         .map_err(|error| format!("{host}: {error}"))?
-        .next()
-        .ok_or_else(|| format!("{host}: no address"))?;
-    let socket = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-        .map_err(|error| format!("{host}: {error}"))?;
+        .collect();
+    if addresses.is_empty() {
+        return Err(format!("{host}: no address"));
+    }
+    // Every address, not just the first. A host whose first record is an IPv6
+    // one, on a machine with no route to it, is otherwise unreachable — and
+    // that is a common enough shape to be worth four lines.
+    let mut refused = format!("{host}: unreachable");
+    let mut connected = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+            Ok(socket) => {
+                connected = Some(socket);
+                break;
+            },
+            Err(error) => refused = format!("{host}: {error}"),
+        }
+    }
+    let Some(socket) = connected else {
+        return Err(refused);
+    };
     socket
         .set_read_timeout(Some(READ_TIMEOUT))
         .and_then(|()| socket.set_write_timeout(Some(READ_TIMEOUT)))

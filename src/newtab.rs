@@ -47,6 +47,9 @@ const CANVAS_MAX: f32 = 1240.0;
 const HEADER: f32 = 46.0;
 /// The credit line under a photograph.
 const CREDIT: f32 = 20.0;
+/// The least a photograph is ever veiled. Below this the header controls and
+/// the credit line stop being readable on a bright picture.
+const MIN_VEIL: f32 = 0.15;
 /// Below this the grid is not worth drawing; the page shows a clock and a
 /// search box instead.
 const NARROW: f32 = 460.0;
@@ -480,7 +483,10 @@ fn paint_photo(
     // enough to carry white text there is strong enough to throw the whole
     // photograph away. Darkening only the strips that hold text keeps the
     // middle of the picture, which is the part worth having.
-    let dim = chrome.settings.wallpaper_dim.clamp(0.0, 1.0) * fade;
+    // Clamped to the same floor the slider offers rather than to zero: the
+    // settings file is a text file anyone can edit, and a card on a bright
+    // photograph with no veil under it cannot be read at all.
+    let dim = chrome.settings.wallpaper_dim.clamp(MIN_VEIL, 1.0) * fade;
     backdrop.rect_filled(content_rect, radius, theme::page_veil(&palette, dim * 0.5));
     let scrim = |height: f32, strength: f32, from_top: bool| {
         let band = if from_top {
@@ -1013,10 +1019,14 @@ fn draw_board(
     let mut carried = None;
     for (index, tile) in tiles.iter().enumerate() {
         let slot = metrics.rect(tile.at, tile.span);
-        if !slot.intersects(board.expand(ROW_HEIGHT)) {
-            continue; // Scrolled out of sight; nothing to draw or interact with.
-        }
         let mine = held == Some(index);
+        // Scrolled out of sight: nothing to draw or interact with — unless it
+        // is the card being carried, whose slot is where it *was*. Skipping
+        // that one stops its handle being interacted with, and a drag whose
+        // handle goes quiet never reports that it stopped.
+        if !mine && !slot.intersects(board.expand(ROW_HEIGHT)) {
+            continue;
+        }
         let over = pointer.is_some_and(|pos| slot.contains(pos) && board.contains(pos));
 
         if editing {
@@ -1072,6 +1082,13 @@ fn draw_board(
 
         if editing && over {
             draw_handles(area, &palette, drawn, index, changes);
+        }
+        // The resize corner outlives the hover. Dragging it outwards is how a
+        // card is made bigger, and that takes the pointer off the card it
+        // belongs to — gate this on hover alone and the handle stops being
+        // interacted with mid-drag, so the drop is never seen, the resize
+        // never lands, and the card is left stuck in resizing state.
+        if editing && (over || resizing == Some(index)) {
             draw_resizer(
                 area, &palette, &metrics, *tile, index, drawn, changes, resizing,
             );
@@ -1182,6 +1199,13 @@ fn draw_resizer(
         ctx.data_mut(|data| data.insert_temp(resize_id, index));
     }
     if resizing != Some(index) {
+        return;
+    }
+    // A drag that ended somewhere this card never heard about — the pointer
+    // left the window, or another widget took the press — would otherwise
+    // leave the card resizing for the rest of the session.
+    if !ctx.input(|input| input.pointer.any_down()) && !handle.drag_stopped() {
+        ctx.data_mut(|data| data.remove::<usize>(resize_id));
         return;
     }
     let Some(pointer) = ctx.input(|input| input.pointer.latest_pos()) else {
