@@ -113,6 +113,15 @@ struct RunningApp {
     /// Deadline for a deferred egui repaint (e.g. caret blink) — served via
     /// ControlFlow::WaitUntil instead of a max-FPS redraw loop.
     pending_repaint_at: Option<std::time::Instant>,
+    /// What `apply_theme` was last run for, and the icon last handed to the
+    /// Dock. Every settings write used to redo both, and redoing the theme
+    /// means restyling egui, retuning the window's appearance and the frosted
+    /// material, and telling every webview its prefers-color-scheme changed —
+    /// which makes the page relayout. Doing all that because someone toggled
+    /// "outline around content", or on every frame of a slider drag, is what
+    /// made the chrome jump.
+    applied_theme: (theme::ThemeMode, theme::AccentColor, bool),
+    applied_icon: settings::AppIcon,
     /// File downloads (Servo has no download subsystem — we do it ourselves).
     downloads: downloads::DownloadManager,
     /// Retained frosted-glass backdrop, kept so its material can be retuned.
@@ -251,6 +260,8 @@ impl ApplicationHandler<WakerEvent> for App {
             .expect("initial tab exists");
         state.open_tab(initial_tab, start_url);
 
+        let applied_theme = (settings.theme, settings.accent, system_dark);
+        let applied_icon = settings.app_icon;
         *self = Self::Running(RunningApp {
             state,
             egui_glow,
@@ -265,6 +276,8 @@ impl ApplicationHandler<WakerEvent> for App {
             controls_open: false,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
+            applied_theme,
+            applied_icon,
             downloads: downloads::DownloadManager::default(),
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
@@ -348,6 +361,7 @@ impl RunningApp {
             },
             WindowEvent::ThemeChanged(new_theme) => {
                 self.system_dark = matches!(new_theme, winit::window::Theme::Dark);
+                self.applied_theme = (self.settings.theme, self.settings.accent, self.system_dark);
                 self.apply_theme();
                 state.window.request_redraw();
                 return;
@@ -1138,9 +1152,18 @@ impl RunningApp {
             },
             UiAction::SettingsChanged => {
                 self.settings.save();
+                // Only redo the parts whose input actually changed — see the
+                // note on `applied_theme`.
+                let look = (self.settings.theme, self.settings.accent, self.system_dark);
+                if look != self.applied_theme {
+                    self.applied_theme = look;
+                    self.apply_theme();
+                }
                 #[cfg(target_os = "macos")]
-                set_dock_icon(self.settings.app_icon);
-                self.apply_theme();
+                if self.settings.app_icon != self.applied_icon {
+                    self.applied_icon = self.settings.app_icon;
+                    set_dock_icon(self.settings.app_icon);
+                }
                 state.window.request_redraw();
             },
         }
