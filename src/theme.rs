@@ -70,7 +70,8 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
-/// A picture behind the chrome, already blurred, for glass surfaces to frost.
+/// A picture behind the chrome, already blurred, for glass surfaces to frost
+/// themselves against.
 ///
 /// egui cannot blur what is behind a shape while it draws it, and nothing here
 /// needs it to. The only thing ever behind the chrome is a wallpaper, which is
@@ -79,7 +80,7 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 /// with. What comes out is a real backdrop blur rather than an impression of
 /// one, and it costs nothing per frame.
 #[derive(Clone, Copy)]
-pub struct Frost {
+pub struct Backdrop {
     /// A blurred copy of the picture. Small: it is blurred, so there is no
     /// detail left in it to be worth storing at size.
     pub texture: TextureId,
@@ -89,6 +90,12 @@ pub struct Frost {
     /// one uses, so the blur underneath a card lines up with the photograph
     /// beside it.
     pub uv: Rect,
+    /// How far the picture itself has arrived, 0..=1.
+    ///
+    /// A wallpaper fades in. While it is doing so the blur under a card has to
+    /// fade with it, or a card sits on an opaque frost while the photograph
+    /// beside it is still half transparent.
+    pub alpha: f32,
 }
 
 /// The corner-radius tier every rounded thing in Zervo picks from.
@@ -178,7 +185,7 @@ pub struct Material {
     pub lift_light: f32,
     /// How far a shadow reaches: a fixed part, plus a share of the radius.
     pub shadow_reach: f32,
-    pub shadow_reach_radius: f32,
+    pub shadow_reach_per_radius: f32,
     /// The accent halo behind a focused surface, and how far it reaches.
     pub glow: f32,
     pub glow_reach: f32,
@@ -216,7 +223,7 @@ impl Material {
         lift_dark: 0.55,
         lift_light: 0.8,
         shadow_reach: 4.0,
-        shadow_reach_radius: 0.45,
+        shadow_reach_per_radius: 0.45,
         glow: 0.32,
         glow_reach: 8.0,
         frosts: true,
@@ -268,7 +275,7 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         // Not a colour and not part of the theme, so it does not cross over —
         // it is whatever the setting says, on both sides of the fade.
         card_opacity: b.card_opacity,
-        frost: b.frost,
+        backdrop: b.backdrop,
         // Not a colour either. A crossfade between two *materials* would mean
         // interpolating corner radii and metrics, which is a different and
         // much larger idea than fading two palettes into each other.
@@ -296,28 +303,32 @@ impl Palette {
     /// Scoped by the caller rather than global: the wallpaper is behind the
     /// content area and nothing else, so the sidebar must not be frosted
     /// against a picture that is not behind it.
-    pub fn with_frost(mut self, frost: Option<Frost>) -> Self {
-        self.frost = frost;
+    pub fn with_backdrop(mut self, backdrop: Option<Backdrop>) -> Self {
+        self.backdrop = backdrop;
         self
     }
 
-    /// The part of the frosted backdrop that `rect` covers, if it covers any.
+    /// The part of the backdrop that `rect` sits on: where to draw it, and
+    /// which part of the picture that is.
     ///
-    /// A surface frosts only when it sits wholly inside the picture. One
-    /// hanging off an edge would sample past the texture, and clamped
-    /// sampling smears the last row of pixels down the overhang — which looks
-    /// far worse than not frosting it at all.
-    pub fn frost_behind(&self, rect: Rect) -> Option<(TextureId, Rect)> {
-        let frost = self.frost?;
-        let page = frost.rect;
+    /// The overlap, not the whole rect. Requiring a surface to be *wholly*
+    /// inside the picture is the obvious rule and the wrong one: a card
+    /// scrolled half off the top of the page, or carried past the edge under
+    /// the pointer, would stop frosting all at once — and since the fill
+    /// recipe follows the frost, it would not merely lose its blur, it would
+    /// turn into a different material between one frame and the next. Frosting
+    /// the overlap degrades continuously instead, and the uv stays in range,
+    /// which is what the containment test was protecting against: egui_glow
+    /// samples with `CLAMP_TO_EDGE`, so an out-of-range uv smears the edge row
+    /// of the picture across the overhang.
+    pub fn backdrop_under(&self, rect: Rect) -> Option<(TextureId, Rect, Rect)> {
+        let backdrop = self.backdrop?;
+        let page = backdrop.rect;
         if page.width() <= 0.0 || page.height() <= 0.0 {
             return None;
         }
-        if rect.min.x < page.min.x
-            || rect.min.y < page.min.y
-            || rect.max.x > page.max.x
-            || rect.max.y > page.max.y
-        {
+        let quad = rect.intersect(page);
+        if quad.width() <= 0.0 || quad.height() <= 0.0 {
             return None;
         }
         let across = |value: f32, low: f32, high: f32, from: f32, to: f32| {
@@ -329,21 +340,22 @@ impl Palette {
                     point.x,
                     page.min.x,
                     page.max.x,
-                    frost.uv.min.x,
-                    frost.uv.max.x,
+                    backdrop.uv.min.x,
+                    backdrop.uv.max.x,
                 ),
                 across(
                     point.y,
                     page.min.y,
                     page.max.y,
-                    frost.uv.min.y,
-                    frost.uv.max.y,
+                    backdrop.uv.min.y,
+                    backdrop.uv.max.y,
                 ),
             )
         };
         Some((
-            frost.texture,
-            Rect::from_min_max(map(rect.min), map(rect.max)),
+            backdrop.texture,
+            quad,
+            Rect::from_min_max(map(quad.min), map(quad.max)),
         ))
     }
 
@@ -400,13 +412,16 @@ pub struct Palette {
     pub material: Material,
     /// What is behind the chrome, blurred, if anything is.
     ///
+    /// The backdrop, not the frost: `material.frosts` says whether surfaces
+    /// frost at all, and this is the thing they frost against.
+    ///
     /// Here for the same reason `card_opacity` is: frosted glass is the
     /// material every surface in Zervo is made of, so the thing it frosts has
     /// to reach every surface without nine call sites being edited to pass it.
     /// A caller draws something behind the chrome, hands the palette a blurred
     /// copy of it, and every card, pill and menu drawn on top is frosted
     /// against it — with no change at the call site at all.
-    pub frost: Option<Frost>,
+    pub backdrop: Option<Backdrop>,
 }
 
 // Colour architecture inspired by Zen Browser's public design tokens: the chrome is neutral gray bases
@@ -482,7 +497,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
             card_opacity: 1.0,
             material: Material::GLASS,
-            frost: None,
+            backdrop: None,
         }
     } else {
         Palette {
@@ -498,7 +513,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
             card_opacity: 1.0,
             material: Material::GLASS,
-            frost: None,
+            backdrop: None,
         }
     };
     // The active-tab tint follows the accent.
@@ -582,4 +597,101 @@ pub fn apply(ctx: &Context, palette: &Palette) {
     visuals.widgets.open.weak_bg_fill = palette.surface_hover;
 
     ctx.set_global_style(style);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Rect, TextureId, pos2};
+
+    /// A page at 100,100 → 900,700 showing the middle half of a picture.
+    fn palette_with_backdrop() -> Palette {
+        let mut palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        palette.backdrop = Some(Backdrop {
+            texture: TextureId::default(),
+            rect: Rect::from_min_max(pos2(100.0, 100.0), pos2(900.0, 700.0)),
+            uv: Rect::from_min_max(pos2(0.25, 0.25), pos2(0.75, 0.75)),
+            alpha: 1.0,
+        });
+        palette
+    }
+
+    #[test]
+    fn a_surface_on_the_page_frosts_over_all_of_itself() {
+        let palette = palette_with_backdrop();
+        let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
+        let (_, quad, uv) = palette.backdrop_under(card).expect("card is on the page");
+        assert_eq!(
+            quad, card,
+            "a card wholly on the page frosts over all of it"
+        );
+        // 300 is a quarter of the way across 100..900, and the picture shows
+        // 0.25..0.75, so a quarter of the way in is 0.375.
+        assert!((uv.min.x - 0.375).abs() < 1e-5, "uv.min.x was {}", uv.min.x);
+        assert!((uv.max.x - 0.5).abs() < 1e-5, "uv.max.x was {}", uv.max.x);
+    }
+
+    /// The bug this was written for: a card scrolled half off the top of the
+    /// page, or carried past its edge under the pointer, used to stop frosting
+    /// altogether — and because the fill recipe followed the frost, it did not
+    /// merely lose its blur, it changed material between one frame and the
+    /// next.
+    #[test]
+    fn a_surface_hanging_off_the_page_still_frosts_over_the_part_that_is_on_it() {
+        let palette = palette_with_backdrop();
+        let page = palette.backdrop.unwrap().rect;
+        for card in [
+            Rect::from_min_max(pos2(300.0, 40.0), pos2(500.0, 300.0)), // off the top
+            Rect::from_min_max(pos2(300.0, 600.0), pos2(500.0, 950.0)), // off the bottom
+            Rect::from_min_max(pos2(20.0, 200.0), pos2(300.0, 400.0)), // off the left
+            Rect::from_min_max(pos2(800.0, 200.0), pos2(1200.0, 400.0)), // off the right
+        ] {
+            let (_, quad, uv) = palette
+                .backdrop_under(card)
+                .expect("part of the card is still on the page");
+            assert_eq!(quad, card.intersect(page), "frosts exactly the overlap");
+            // Which is what keeps the uv in range: egui samples with
+            // CLAMP_TO_EDGE, so an out-of-range uv smears the picture's edge
+            // row across the overhang.
+            let picture = palette.backdrop.unwrap().uv;
+            assert!(
+                uv.min.x >= picture.min.x - 1e-5
+                    && uv.min.y >= picture.min.y - 1e-5
+                    && uv.max.x <= picture.max.x + 1e-5
+                    && uv.max.y <= picture.max.y + 1e-5,
+                "uv {uv:?} escaped the picture {picture:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_surface_nowhere_near_the_page_does_not_frost() {
+        let palette = palette_with_backdrop();
+        let elsewhere = Rect::from_min_max(pos2(0.0, 0.0), pos2(90.0, 90.0));
+        assert!(palette.backdrop_under(elsewhere).is_none());
+    }
+
+    #[test]
+    fn nothing_frosts_without_a_backdrop() {
+        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
+        assert!(palette.backdrop_under(card).is_none());
+    }
+
+    /// Every tier has to resolve to something; a material that forgot one
+    /// would give a surface square corners with no other sign.
+    #[test]
+    fn every_radius_tier_resolves() {
+        let radii = Material::GLASS.radius;
+        for tier in [
+            Tier::Hairline,
+            Tier::Control,
+            Tier::Row,
+            Tier::Card,
+            Tier::Panel,
+            Tier::Pill,
+        ] {
+            assert!(radii.of(tier) > 0, "{tier:?} resolved to nothing");
+        }
+    }
 }

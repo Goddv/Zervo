@@ -19,26 +19,29 @@ pub fn ease_out(t: f32) -> f32 {
 /// How round a surface's corners are: a tier the material decides, or a number
 /// the caller worked out for itself.
 ///
+/// Named for what it is rather than where it is — a corner is a place, this is
+/// a length, and `CornerRadius` is already egui's word for the four of them.
+///
 /// Naming the tier is the one to reach for. A number is right only where it is
 /// derived from something else — a pill whose corners are half its height —
 /// and a material cannot know that.
 #[derive(Clone, Copy)]
-pub enum Corner {
+pub enum Radius {
     Tier(Tier),
     Exact(u8),
 }
 
-impl Corner {
+impl Radius {
     pub fn resolve(self, material: &Material) -> u8 {
         match self {
-            Corner::Tier(tier) => material.radius.of(tier),
-            Corner::Exact(radius) => radius,
+            Radius::Tier(tier) => material.radius.of(tier),
+            Radius::Exact(radius) => radius,
         }
     }
 }
 
 pub struct Glass {
-    pub radius: Corner,
+    pub radius: Radius,
     /// Material prominence, 0..1 — drives fill, sheen, and shadow strength.
     pub strength: f32,
     /// Accent glow behind the element, 0..1 (active/focused elements).
@@ -73,15 +76,15 @@ pub struct Glass {
 impl Glass {
     /// A surface whose corners the material decides. Prefer this.
     pub fn tier(tier: Tier) -> Self {
-        Self::of(Corner::Tier(tier))
+        Self::of(Radius::Tier(tier))
     }
 
     /// A surface with a corner radius the caller worked out itself.
     pub fn new(radius: u8) -> Self {
-        Self::of(Corner::Exact(radius))
+        Self::of(Radius::Exact(radius))
     }
 
-    fn of(radius: Corner) -> Self {
+    fn of(radius: Radius) -> Self {
         Self {
             radius,
             strength: 1.0,
@@ -389,7 +392,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
             rect,
             radius_px,
             palette.shadow.gamma_multiply(lift),
-            material.shadow_reach + radius_px * material.shadow_reach_radius,
+            material.shadow_reach + radius_px * material.shadow_reach_per_radius,
             Inner::Under,
         ));
     }
@@ -399,9 +402,9 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // every card, pill and menu on top of it frosted without saying anything
     // at the call site — and a change to the recipe below reaches all of them
     // at once, which is the point of having a material rather than a habit.
-    let frost = material
+    let backdrop = material
         .frosts
-        .then(|| palette.frost_behind(rect))
+        .then(|| palette.backdrop_under(rect))
         .flatten();
 
     // Translucent core over whatever is behind, plus the glass wash — white
@@ -415,7 +418,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     let core = glass
         .tint
         .unwrap_or(palette.surface)
-        .gamma_multiply(if frost.is_some() {
+        .gamma_multiply(if backdrop.is_some() {
             material.frosted_fill + material.frosted_fill_strength * strength
         } else {
             material.fill + material.fill_strength * strength
@@ -430,7 +433,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // An opaque backing is what a surface asks for when it has nothing behind
     // it worth showing. A frosted one does, so the backing is what it would
     // paint over.
-    if frost.is_none()
+    if backdrop.is_none()
         && let Some(backing) = glass.opaque
     {
         fill = over(fill, backing);
@@ -455,11 +458,20 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
         Color32::from_white_alpha((edge * strength.max(0.6)) as u8)
     });
     // The blur goes under the fill, inside the same silhouette, and fades with
-    // it: at zero card opacity a surface has to disappear completely, frost
-    // included, or the setting stops meaning anything.
-    if let Some((texture, uv)) = frost {
+    // it: at zero card opacity a surface has to disappear completely, blur
+    // included, or the setting stops meaning anything. It also fades with the
+    // backdrop's own arrival, so a card is never sitting on a solid blur of a
+    // picture that has not finished appearing.
+    //
+    // `quad` is the part of the surface the backdrop actually reaches, which
+    // is the whole of it except where the surface hangs off the edge of the
+    // picture. It keeps the surface's corner radius: on the three sides that
+    // are not cut it is the surface's own edge, and the cut side is inside the
+    // surface where a rounded corner costs nothing to be slightly wrong.
+    if let Some((texture, quad, uv)) = backdrop {
+        let arrival = palette.backdrop.map_or(1.0, |backdrop| backdrop.alpha);
         out.push(
-            RectShape::filled(rect, corner, Color32::WHITE.gamma_multiply(fade))
+            RectShape::filled(quad, corner, Color32::WHITE.gamma_multiply(fade * arrival))
                 .with_texture(texture, uv)
                 .into(),
         );
