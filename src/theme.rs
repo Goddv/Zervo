@@ -3,7 +3,7 @@
 //! is set to Auto). Icon and text colors always derive from the active
 //! palette, so glyphs compose correctly on both light and dark chrome.
 
-use egui::{Color32, Context, CornerRadius, Margin, Stroke, Vec2};
+use egui::{Color32, Context, CornerRadius, Margin, Shadow, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,6 +219,23 @@ pub fn apply(ctx: &Context, palette: &Palette) {
 
     visuals.selection.bg_fill = palette.active;
     visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
+
+    // Tooltips and context menus are drawn by egui itself, from these fields
+    // rather than from the palette — so left alone they keep egui's defaults:
+    // a 6pt radius, a flat gray border, and a shadow offset six points right
+    // and ten down whose linear ramp bands. Beside Zervo's own cards, which
+    // are 10-12pt with an accent-tinted hairline and a symmetric halo, they
+    // read as belonging to a different application.
+    visuals.window_corner_radius = CornerRadius::same(12);
+    visuals.menu_corner_radius = CornerRadius::same(10);
+    visuals.window_stroke = Stroke::new(1.0_f32, palette.border);
+    visuals.window_shadow = Shadow {
+        offset: [0, 2],
+        blur: 14,
+        spread: 0,
+        color: palette.shadow,
+    };
+    visuals.popup_shadow = visuals.window_shadow;
 
     let rounding = CornerRadius::same(8);
     for widget in [

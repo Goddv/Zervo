@@ -143,8 +143,13 @@ pub fn ring(outline: &[(Pos2, Vec2)], rows: &[(f32, Color32)]) -> Shape {
             mesh.colored_vertex(*point + *normal * *offset, *color);
         }
     }
-    let count = outline.len() as u32;
-    for row in 0..rows.len().saturating_sub(1) as u32 {
+    stitch(&mut mesh, outline.len() as u32, rows.len());
+    Shape::mesh(mesh)
+}
+
+/// Join consecutive rows of `count` vertices each into quads.
+fn stitch(mesh: &mut Mesh, count: u32, rows: usize) {
+    for row in 0..rows.saturating_sub(1) as u32 {
         for index in 0..count {
             let next = (index + 1) % count;
             let (inner, outer) = (row * count, (row + 1) * count);
@@ -152,7 +157,38 @@ pub fn ring(outline: &[(Pos2, Vec2)], rows: &[(f32, Color32)]) -> Shape {
             mesh.add_triangle(inner + index, outer + next, outer + index);
         }
     }
-    Shape::mesh(mesh)
+}
+
+/// Where a ring's feathered inner edge sits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Inner {
+    /// Half a point inside the silhouette, where the caller's own fill covers
+    /// it. The right choice whenever the caller paints the surface itself.
+    Under,
+    /// Flush with the silhouette, so the mesh never reaches inside it. For a
+    /// surface whose interior belongs to something else — the content card,
+    /// where the web page owns every pixel inside the rounded rect and a row
+    /// drawn over it fringes the page all the way round.
+    Outside,
+}
+
+/// The radial offsets and alphas of a quadratic falloff, feathered at the
+/// inner end so the mesh has no hard boundary. See `shadow`.
+fn falloff(spread: f32, inner: Inner) -> Vec<(f32, f32)> {
+    const STEPS: usize = 8;
+    let start = match inner {
+        Inner::Under => -FEATHER,
+        Inner::Outside => 0.0,
+    };
+    let peak = start + FEATHER;
+    let mut rows = Vec::with_capacity(STEPS + 2);
+    rows.push((start, 0.0));
+    for step in 0..=STEPS {
+        let t = step as f32 / STEPS as f32;
+        // Quadratic falloff, close to how a real penumbra reads.
+        rows.push((peak + (spread - peak).max(0.0) * t, (1.0 - t).powi(2)));
+    }
+    rows
 }
 
 /// A soft shadow hugging a rounded rect, as one mesh.
@@ -169,23 +205,65 @@ pub fn ring(outline: &[(Pos2, Vec2)], rows: &[(f32, Color32)]) -> Shape {
 /// mesh gets no antialiasing from the tessellator, so a boundary drawn at full
 /// strength is a hard edge, and a hard edge along a curve is a staircase —
 /// which is what a second, jagged outline around a card's corner turned out to
-/// be. The outer boundary has faded to nothing anyway; the inner one is given
-/// a row half a point inside the silhouette to fade in from, which lands under
-/// the card's own fill.
-pub fn shadow(rect: Rect, radius: f32, base: Color32, spread: f32) -> Shape {
-    // One arc segment per couple of physical pixels of radius: enough that the
-    // curve reads as a curve, few enough that a shadow behind every button is
-    // not thousands of triangles.
-    let segments = (radius * 2.0).ceil().clamp(10.0, 40.0) as usize;
-    const STEPS: usize = 8;
-    let mut rows = Vec::with_capacity(STEPS + 2);
-    rows.push((-FEATHER, Color32::TRANSPARENT));
-    for step in 0..=STEPS {
-        let t = step as f32 / STEPS as f32;
-        // Quadratic falloff, close to how a real penumbra reads.
-        rows.push((spread * t, base.gamma_multiply((1.0 - t).powi(2))));
+/// be. The outer boundary has faded to nothing anyway; `inner` says where to
+/// put the row the inner one fades from.
+pub fn shadow(rect: Rect, radius: f32, base: Color32, spread: f32, inner: Inner) -> Shape {
+    let rows: Vec<_> = falloff(spread, inner)
+        .into_iter()
+        .map(|(offset, alpha)| (offset, base.gamma_multiply(alpha)))
+        .collect();
+    ring(&outline(rect, radius, segments(radius)), &rows)
+}
+
+/// A ring whose color is sampled per vertex rather than per row, for a surface
+/// sitting on something that is itself a gradient.
+///
+/// `hold` keeps the ring at full strength for that many points past the
+/// outline before the falloff starts.
+pub fn shadow_tinted(
+    rect: Rect,
+    radius: f32,
+    spread: f32,
+    hold: f32,
+    inner: Inner,
+    color_at: impl Fn(Pos2) -> Color32,
+) -> Shape {
+    let outline = outline(rect, radius, segments(radius));
+    let mut rows = falloff((spread - hold).max(0.0), inner);
+    // Push everything from the peak outward past the hold, and repeat the peak
+    // at the outline so the held stretch is flat rather than sloping.
+    let peak = match inner {
+        Inner::Under => 0.0,
+        Inner::Outside => FEATHER,
+    };
+    for row in &mut rows {
+        if row.0 >= peak {
+            row.0 += hold;
+        }
     }
-    ring(&outline(rect, radius, segments), &rows)
+    rows.insert(
+        rows.iter()
+            .position(|row| row.0 >= peak + hold)
+            .unwrap_or(1),
+        (peak, 1.0),
+    );
+
+    let mut mesh = Mesh::default();
+    for (offset, alpha) in &rows {
+        for (point, normal) in &outline {
+            let at = *point + *normal * *offset;
+            mesh.colored_vertex(at, color_at(at).gamma_multiply(*alpha));
+        }
+    }
+    stitch(&mut mesh, outline.len() as u32, rows.len());
+    Shape::mesh(mesh)
+}
+
+/// One arc segment per couple of physical pixels of radius: enough that the
+/// curve reads as a curve, few enough that a shadow behind every button is not
+/// thousands of triangles.
+fn segments(radius: f32) -> usize {
+    (radius * 2.0).ceil().clamp(10.0, 40.0) as usize
 }
 
 /// Composite `top` over `bottom`, both premultiplied — the same arithmetic the
@@ -224,6 +302,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
             radius_px,
             palette.accent.gamma_multiply(0.32 * glass.glow),
             8.0,
+            Inner::Under,
         ));
     }
 
@@ -238,6 +317,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
             radius_px,
             palette.shadow.gamma_multiply(lift),
             4.0 + radius_px * 0.45,
+            Inner::Under,
         ));
     }
 
