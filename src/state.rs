@@ -165,8 +165,13 @@ pub struct BrowserState {
     pub password_notice: String,
     /// One-shot request for the address bar to grab keyboard focus (⌘L).
     pub focus_address: bool,
-    /// Text in the zervo://newtab page's centered search box.
+    /// Text in the zervo://newtab page's search box.
     pub newtab_query: String,
+    /// The half-typed line on the new tab page's to-do card.
+    pub newtab_task_draft: String,
+    /// The new tab page is being arranged. Session state on purpose: nobody
+    /// wants to open a browser and find it still in edit mode from yesterday.
+    pub newtab_editing: bool,
     /// Which settings category the settings page is showing.
     pub settings_section: SettingsSection,
     /// Sidebar hidden (session state, toggled from the chrome).
@@ -192,6 +197,8 @@ impl BrowserState {
             password_notice: String::new(),
             focus_address: false,
             newtab_query: String::new(),
+            newtab_task_draft: String::new(),
+            newtab_editing: false,
             settings_section: SettingsSection::Appearance,
             sidebar_collapsed: false,
             next_tab_id: 0,

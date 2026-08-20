@@ -20,9 +20,12 @@ mod dashboard;
 mod downloads;
 mod gestures;
 mod glass;
+mod grid;
 mod icons;
 mod keyboard;
 mod library;
+mod net;
+mod newtab;
 mod passwords;
 mod phosphor;
 // macOS has its own paths inline, using the AppKit bindings it already has.
@@ -34,6 +37,7 @@ mod theme;
 mod ui;
 #[cfg(target_os = "macos")]
 mod vibrancy;
+mod wallpaper;
 mod widgets;
 
 use std::cell::{Cell, RefCell};
@@ -157,6 +161,13 @@ struct RunningApp {
     theme_fade: Option<(Palette, std::time::Instant)>,
     /// File downloads (Servo has no download subsystem — we do it ourselves).
     downloads: downloads::DownloadManager,
+    /// The new tab page's photograph: where it comes from, and what is known
+    /// about the one currently up.
+    wallpaper: wallpaper::Wallpaper,
+    /// The uploaded texture for it. Held here rather than in the manager
+    /// because making one needs an egui context, and the manager runs on a
+    /// thread that has none.
+    wallpaper_texture: Option<egui::TextureHandle>,
     /// Retained frosted-glass backdrop, kept so its material can be retuned.
     #[cfg(target_os = "macos")]
     _vibrancy: Option<vibrancy::Vibrancy>,
@@ -299,6 +310,10 @@ impl ApplicationHandler<WakerEvent> for App {
 
         let applied_theme = (settings.theme, settings.accent, system_dark);
         let applied_icon = settings.app_icon;
+        // Whatever was cached last time, decoded on a thread so a launch never
+        // waits on a photograph.
+        let mut wallpaper = wallpaper::Wallpaper::default();
+        wallpaper.restore();
         *self = Self::Running(RunningApp {
             state,
             egui_glow,
@@ -319,6 +334,8 @@ impl ApplicationHandler<WakerEvent> for App {
             applied_icon,
             theme_fade: None,
             downloads: downloads::DownloadManager::default(),
+            wallpaper,
+            wallpaper_texture: None,
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
         });
@@ -781,6 +798,32 @@ impl RunningApp {
             self.refresh_favicons();
         }
 
+        // The wallpaper: collect anything the fetch thread finished, and start
+        // a new one when the cadence says so. Both are cheap when there is
+        // nothing to do, which is almost always.
+        // Collected whatever the page is showing: a result left sitting in the
+        // channel would keep the loop waking up for it forever.
+        if self.wallpaper.poll()
+            && let Some(image) = self.wallpaper.take_image()
+        {
+            // Mipmapped, because a two-thousand-pixel photograph drawn into a
+            // nine-hundred-point window is a minification, and bilinear
+            // minification of a photograph is what makes one shimmer.
+            self.wallpaper_texture = Some(self.egui_glow.egui_ctx.load_texture(
+                "zervo-wallpaper",
+                image,
+                egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
+            ));
+        }
+        if self.settings.new_tab_background == settings::NewTabBackground::Photo
+            && self.wallpaper.due(
+                &self.settings.wallpaper_source,
+                self.settings.wallpaper_cadence,
+            )
+        {
+            self.wallpaper.fetch(&self.settings.wallpaper_source);
+        }
+
         let palette = self.palette();
         if self.theme_fade.is_some() {
             // egui's own style has to follow the crossfade frame by frame:
@@ -804,6 +847,12 @@ impl RunningApp {
         // Move UI-facing state out of `self` for the closure; restored below.
         let mut settings = self.settings.clone();
         let favicons = std::mem::take(&mut self.favicons);
+        let wallpaper = wallpaper::View {
+            texture: self.wallpaper_texture.as_ref(),
+            credit: self.wallpaper.credit(),
+            error: self.wallpaper.error.as_deref(),
+            loading: self.wallpaper.is_loading(),
+        };
 
         self.egui_glow.run(&state.window, |root| {
             let mut browser = state.browser.borrow_mut();
@@ -821,6 +870,7 @@ impl RunningApp {
                 palette,
                 favicons: &favicons,
                 downloads: &self.downloads,
+                wallpaper,
             };
             let output = ui::draw(root, &mut chrome);
             drop(browser);
@@ -897,6 +947,15 @@ impl RunningApp {
         }
         // Ambient animations (aurora new-tab page) tick at ~30fps via timed
         // wakes rather than a max-FPS redraw loop.
+        // Nothing else will wake the loop when a fetch finishes on its own
+        // thread, so while one is running the page checks back.
+        if self.wallpaper.is_loading() {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+            self.pending_repaint_at = Some(
+                self.pending_repaint_at
+                    .map_or(deadline, |at| at.min(deadline)),
+            );
+        }
         if ambient {
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(33);
             self.pending_repaint_at = Some(
@@ -1210,11 +1269,31 @@ impl RunningApp {
                     downloads::open_file(&item.path);
                 }
             },
+            UiAction::ShuffleWallpaper => {
+                // Asking for a picture is also asking to see one, so the page
+                // switches to photographs if it was not already showing them.
+                self.settings.new_tab_background = settings::NewTabBackground::Photo;
+                self.settings.save();
+                self.wallpaper.fetch(&self.settings.wallpaper_source);
+                state.window.request_redraw();
+            },
+            UiAction::PickWallpaper => {
+                if let Some(path) = state.pick_file() {
+                    self.settings.wallpaper_source =
+                        wallpaper::Source::File(path.to_string_lossy().into_owned());
+                    self.settings.new_tab_background = settings::NewTabBackground::Photo;
+                    self.settings.save();
+                    self.wallpaper.fetch(&self.settings.wallpaper_source);
+                }
+                state.window.request_redraw();
+            },
             UiAction::ResetLayout => {
                 let settings = &mut self.settings;
                 settings.navbar_left = ui::NavItem::default_left();
                 settings.navbar_right = ui::NavItem::default_right();
                 settings.navbar_widgets = dashboard::Placed::defaults();
+                settings.newtab_tiles = newtab::Tile::defaults();
+                settings.newtab_world_clocks = newtab::Zone::defaults();
                 settings.navbar_height = ui::NAVBAR_DEFAULT_HEIGHT;
                 settings.address_pill_width = ui::ADDRESS_PILL_DEFAULT_WIDTH;
                 settings.sidebar_width = ui::SIDEBAR_DEFAULT_WIDTH;

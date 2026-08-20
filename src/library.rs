@@ -19,6 +19,25 @@ pub struct Favourite {
     pub title: String,
 }
 
+/// One line on the new tab page's to-do card.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Task {
+    pub text: String,
+    pub done: bool,
+}
+
+/// A site the history has been seen enough of to rank. Built from the visit
+/// log rather than stored, so it never disagrees with it.
+#[derive(Clone, Debug)]
+pub struct Site {
+    pub host: String,
+    /// The most recent URL on that host, which is what a click opens.
+    pub url: String,
+    pub title: String,
+    pub visits: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Visit {
     pub url: String,
@@ -61,9 +80,23 @@ impl Bucket {
 pub struct Library {
     pub favourites: Vec<Favourite>,
     pub history: Vec<Visit>,
+    /// The new tab page's scratchpad.
+    pub note: String,
+    /// The new tab page's to-do card.
+    pub tasks: Vec<Task>,
     /// Set when something changed and the file needs writing.
     #[serde(skip)]
     dirty: bool,
+    /// Most-visited sites, worked out from the history and kept until the
+    /// history moves. Twenty thousand visits is not much to walk, but walking
+    /// them thirty times a second while the new tab page animates is.
+    #[serde(skip)]
+    ranked: Vec<Site>,
+    /// Whether `ranked` reflects the history as it stands. Not `ranked
+    /// .is_empty()`: a history of nothing but addresses with no host in them
+    /// ranks to nothing, and that answer is worth keeping too.
+    #[serde(skip)]
+    ranked_built: bool,
 }
 
 impl Library {
@@ -111,6 +144,7 @@ impl Library {
             if !title.is_empty() && last.title != title {
                 last.title = title.to_owned();
                 self.dirty = true;
+                self.ranked_built = false;
             }
             return;
         }
@@ -124,18 +158,85 @@ impl Library {
             self.history.drain(..excess);
         }
         self.dirty = true;
+        self.ranked_built = false;
     }
 
     pub fn forget(&mut self, index: usize) {
         if index < self.history.len() {
             self.history.remove(index);
             self.dirty = true;
+            self.ranked_built = false;
         }
     }
 
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.dirty = true;
+        self.ranked_built = false;
+    }
+
+    /// The sites visited most, newest URL each, best first.
+    ///
+    /// Grouped by host: twenty visits to twenty pages of one site is one site
+    /// worth a tile, not twenty. Recomputed only when the history has moved.
+    pub fn top_sites(&mut self, limit: usize) -> &[Site] {
+        if !self.ranked_built {
+            self.ranked_built = true;
+            let mut order: Vec<String> = Vec::new();
+            let mut by_host: HashMap<String, Site> = HashMap::new();
+            for visit in &self.history {
+                let Some(host) = host_of(&visit.url) else {
+                    continue;
+                };
+                match by_host.get_mut(&host) {
+                    Some(site) => {
+                        site.visits += 1;
+                        // Later visits win: the newest URL is the live one, and
+                        // the title arrives after the URL does.
+                        site.url = visit.url.clone();
+                        if !visit.title.is_empty() {
+                            site.title = visit.title.clone();
+                        }
+                    },
+                    None => {
+                        order.push(host.clone());
+                        by_host.insert(
+                            host.clone(),
+                            Site {
+                                host,
+                                url: visit.url.clone(),
+                                title: visit.title.clone(),
+                                visits: 1,
+                            },
+                        );
+                    },
+                }
+            }
+            let mut ranked: Vec<Site> = order
+                .into_iter()
+                .filter_map(|host| by_host.remove(&host))
+                .collect();
+            // A stable sort, so a tie keeps the order the history put them in:
+            // the site seen more recently comes first.
+            ranked.sort_by_key(|site| std::cmp::Reverse(site.visits));
+            self.ranked = ranked;
+        }
+        &self.ranked[..limit.min(self.ranked.len())]
+    }
+
+    /// The last pages visited, newest first, one row per URL.
+    pub fn recent(&self, limit: usize) -> Vec<&Visit> {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for visit in self.history.iter().rev() {
+            if seen.insert(visit.url.as_str()) {
+                out.push(visit);
+            }
+            if out.len() >= limit {
+                break;
+            }
+        }
+        out
     }
 
     /// History newest first, filtered by `query`, grouped into buckets in the
@@ -216,6 +317,55 @@ impl Library {
         self.favourites.retain(|entry| entry.url != url);
         self.dirty = true;
     }
+
+    // ── The new tab page's own scraps
+
+    /// The scratchpad, to edit in place.
+    ///
+    /// Pair it with [`Library::changed`] when an edit lands: a text field hands
+    /// back a borrow rather than an event, so nothing here can tell on its own
+    /// that the string moved.
+    pub fn note_mut(&mut self) -> &mut String {
+        &mut self.note
+    }
+
+    /// Something was edited through a borrow; write the file out.
+    pub fn changed(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn add_task(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.tasks.push(Task {
+            text: text.to_owned(),
+            done: false,
+        });
+        self.dirty = true;
+    }
+
+    pub fn toggle_task(&mut self, index: usize) {
+        if let Some(task) = self.tasks.get_mut(index) {
+            task.done = !task.done;
+            self.dirty = true;
+        }
+    }
+
+    pub fn remove_task(&mut self, index: usize) {
+        if index < self.tasks.len() {
+            self.tasks.remove(index);
+            self.dirty = true;
+        }
+    }
+}
+
+/// The host part of a URL, lowercased and without a leading `www.` — what
+/// makes two addresses read as the same site.
+fn host_of(url: &str) -> Option<String> {
+    let host = url::Url::parse(url).ok()?.host_str()?.to_lowercase();
+    Some(host.strip_prefix("www.").unwrap_or(&host).to_owned())
 }
 
 fn path() -> Option<std::path::PathBuf> {

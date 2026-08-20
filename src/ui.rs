@@ -12,8 +12,6 @@ use egui::{
     RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, TextureHandle, Ui, pos2, vec2,
 };
 
-use chrono::Timelike;
-
 use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
 use crate::settings::{AppIcon, NewTabBackground, NewTabPage, SearchEngine, Settings};
@@ -85,6 +83,10 @@ pub enum UiAction {
     OpenDownload(u64),
     ClearDownloads,
     RestartDownload(u64),
+    /// Fetch another wallpaper from whichever source is chosen.
+    ShuffleWallpaper,
+    /// Choose a picture from this machine instead.
+    PickWallpaper,
     /// Put every dragged-into-place thing back where it started.
     ResetLayout,
     /// Pointer started dragging empty chrome — move the OS window.
@@ -124,6 +126,8 @@ pub struct ChromeContext<'a> {
     pub palette: Palette,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
     pub downloads: &'a crate::downloads::DownloadManager,
+    /// The new tab page's photograph, and whatever is known about it.
+    pub wallpaper: crate::wallpaper::View<'a>,
 }
 
 /// Draw the chrome into the root `Ui` handed to us by `EguiGlow::run`. The
@@ -172,7 +176,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             draw_settings_page(root, chrome, content_rect, &mut actions);
         },
         Some(TabKind::NewTab) => {
-            ambient = draw_newtab_page(root, chrome, content_rect, &mut actions);
+            ambient = crate::newtab::draw(root, chrome, content_rect, &mut actions);
         },
         Some(TabKind::Downloads) => {
             draw_downloads_page(root, chrome, content_rect, &mut actions);
@@ -224,7 +228,7 @@ fn snap_rect(rect: Rect, pixels_per_point: f32) -> Rect {
 }
 
 /// A subtle vertical gradient, used to give the chrome surfaces depth.
-fn vertical_gradient(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
+pub fn vertical_gradient(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
     let mut mesh = Mesh::default();
     mesh.colored_vertex(rect.left_top(), top);
     mesh.colored_vertex(rect.right_top(), top);
@@ -1937,7 +1941,7 @@ fn draw_downloads_card(
 }
 
 /// A saved page's name, falling back to its host when it has no title.
-fn display_name<'a>(title: &'a str, url: &'a str) -> &'a str {
+pub fn display_name<'a>(title: &'a str, url: &'a str) -> &'a str {
     if !title.is_empty() {
         return title;
     }
@@ -1948,7 +1952,7 @@ fn display_name<'a>(title: &'a str, url: &'a str) -> &'a str {
 }
 
 /// Stands in for a favicon, which is not stored anywhere yet.
-fn initial(title: &str, url: &str) -> String {
+pub fn initial(title: &str, url: &str) -> String {
     display_name(title, url)
         .chars()
         .find(|c| c.is_alphanumeric())
@@ -2102,6 +2106,18 @@ impl NavItem {
 /// One button's worth of width in the bar.
 fn nav_item_width() -> f32 {
     NAVBAR_ICON + 12.0
+}
+
+/// How far the navigation bar's shelf is uncovered, in points.
+///
+/// Zero unless the bar is up and has been dragged taller than its one row of
+/// controls. The new tab page reads this to hold its wallpaper still while the
+/// shelf takes space off the top of the page.
+pub fn shelf_reveal(browser: &BrowserState, settings: &Settings) -> f32 {
+    if !browser.sidebar_collapsed {
+        return 0.0;
+    }
+    settings.navbar_height.clamp(NAVBAR_ROW, NAVBAR_MAX_HEIGHT) - NAVBAR_ROW
 }
 
 fn draw_navbar(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
@@ -3530,7 +3546,7 @@ fn soft_blob(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: Co
 
 /// The Zervo "Z" mark, drawn as a stroked path (same geometry as the app
 /// icon: straight bars, curved diagonal).
-fn draw_zervo_mark(painter: &egui::Painter, center: egui::Pos2, height: f32, color: Color32) {
+pub fn draw_zervo_mark(painter: &egui::Painter, center: egui::Pos2, height: f32, color: Color32) {
     let scale = height / 364.0;
     let map = |x: f32, y: f32| {
         pos2(
@@ -3565,7 +3581,7 @@ fn hashed_unit(seed: u32) -> f32 {
 }
 
 /// Paint the selected new tab backdrop. Returns true if it animates.
-fn paint_newtab_background(
+pub fn paint_newtab_background(
     root: &Ui,
     painter: &egui::Painter,
     content_rect: Rect,
@@ -3580,7 +3596,9 @@ fn paint_newtab_background(
     match background {
         NewTabBackground::Plain => false,
 
-        NewTabBackground::Gradient => {
+        // Reached only while a photograph is still being fetched, or when the
+        // fetch failed: a fade is a kinder thing to wait on than a flat void.
+        NewTabBackground::Photo | NewTabBackground::Gradient => {
             vertical_gradient(
                 painter,
                 content_rect,
@@ -3722,254 +3740,6 @@ fn paint_newtab_background(
             }
             false
         },
-    }
-}
-
-/// Time-of-day greeting, or the user's own message when they set one.
-fn newtab_greeting(settings: &Settings) -> String {
-    if !settings.newtab_message.trim().is_empty() {
-        return settings.newtab_message.trim().to_owned();
-    }
-    let hour = chrono::Local::now().hour();
-    match hour {
-        5..=11 => "Good morning",
-        12..=17 => "Good afternoon",
-        18..=21 => "Good evening",
-        _ => "Good night",
-    }
-    .to_owned()
-}
-
-/// Returns true while the ambient animation is running (caller schedules
-/// timed repaints).
-fn draw_newtab_page(
-    root: &mut Ui,
-    chrome: &mut ChromeContext,
-    content_rect: Rect,
-    actions: &mut Vec<UiAction>,
-) -> bool {
-    let palette = chrome.palette;
-    let painter = root
-        .ctx()
-        .layer_painter(egui::LayerId::background())
-        .with_clip_rect(content_rect);
-
-    // Deep base: darker than the chrome in dark mode, airy in light mode.
-    let base = if palette.dark {
-        theme::mix(palette.bg, Color32::BLACK, 0.35)
-    } else {
-        theme::mix(palette.bg, Color32::WHITE, 0.45)
-    };
-    painter.rect_filled(
-        content_rect,
-        CornerRadius::same(theme::CONTENT_RADIUS as u8),
-        base,
-    );
-
-    let ambient = paint_newtab_background(
-        root,
-        &painter,
-        content_rect,
-        &palette,
-        chrome.settings.new_tab_background,
-        base,
-    );
-
-    // ── Widgets, stacked around the centre of the page.
-    let center = content_rect.center();
-    let text_color = if palette.dark {
-        Color32::from_white_alpha(228)
-    } else {
-        palette.text
-    };
-
-    if chrome.settings.newtab_clock {
-        let now = chrono::Local::now();
-        painter.text(
-            pos2(center.x, content_rect.min.y + content_rect.height() * 0.17),
-            Align2::CENTER_CENTER,
-            now.format("%H:%M").to_string(),
-            FontId::proportional(58.0),
-            text_color,
-        );
-        painter.text(
-            pos2(
-                center.x,
-                content_rect.min.y + content_rect.height() * 0.17 + 44.0,
-            ),
-            Align2::CENTER_CENTER,
-            now.format("%A, %e %B").to_string().replace("  ", " "),
-            FontId::proportional(14.0),
-            palette.text_muted,
-        );
-    }
-
-    if chrome.settings.newtab_greeting {
-        painter.text(
-            pos2(center.x, center.y - 132.0),
-            Align2::CENTER_CENTER,
-            newtab_greeting(chrome.settings),
-            FontId::proportional(21.0),
-            text_color,
-        );
-    }
-
-    if chrome.settings.newtab_logo {
-        let mark_color = if palette.dark {
-            Color32::from_white_alpha(200)
-        } else {
-            theme::mix(palette.text, palette.accent, 0.35)
-        };
-        draw_zervo_mark(&painter, pos2(center.x, center.y - 66.0), 62.0, mark_color);
-    }
-
-    if chrome.settings.newtab_search {
-        let pill_width = (content_rect.width() - 120.0).clamp(240.0, 520.0);
-        let pill_rect =
-            Rect::from_center_size(pos2(center.x, center.y + 12.0), vec2(pill_width, 46.0));
-        glass::paint(root.painter(), pill_rect, &palette, Glass::new(14));
-
-        let mut inner = root.new_child(
-            egui::UiBuilder::new()
-                .max_rect(pill_rect.shrink2(vec2(16.0, 0.0)))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        let search_rect = Rect::from_center_size(
-            pos2(inner.max_rect().min.x + 8.0, pill_rect.center().y),
-            vec2(17.0, 17.0),
-        );
-        icons::draw_icon(
-            inner.painter(),
-            search_rect,
-            Icon::Search,
-            palette.text_muted,
-        );
-        inner.add_space(24.0);
-        let hint = format!(
-            "Search with {} or enter address…",
-            chrome.settings.search_engine.label()
-        );
-        let editor = TextEdit::singleline(&mut chrome.browser.newtab_query)
-            .frame(Frame::NONE)
-            .font(FontId::proportional(15.0))
-            .text_color(palette.text)
-            .vertical_align(egui::Align::Center)
-            .hint_text(RichText::new(hint).color(palette.text_muted))
-            .desired_width(inner.available_width() - 8.0);
-        let response = inner.add(editor);
-        if response.lost_focus()
-            && inner.input(|input| input.key_pressed(Key::Enter))
-            && !chrome.browser.newtab_query.trim().is_empty()
-        {
-            let target = normalize_url(&chrome.browser.newtab_query, chrome.settings.search_engine);
-            chrome.browser.newtab_query.clear();
-            actions.push(UiAction::Navigate(target));
-        }
-    }
-
-    if chrome.settings.newtab_quick_links {
-        draw_newtab_quick_links(root, chrome, content_rect, actions);
-    }
-
-    ambient
-}
-
-/// Pinned tabs as shortcut tiles under the search pill.
-fn draw_newtab_quick_links(
-    root: &mut Ui,
-    chrome: &mut ChromeContext,
-    content_rect: Rect,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    struct Link {
-        tab_id: TabId,
-        workspace: usize,
-        title: String,
-    }
-    let links: Vec<Link> = chrome
-        .browser
-        .workspaces
-        .iter()
-        .enumerate()
-        .flat_map(|(workspace, space)| {
-            space
-                .tabs
-                .iter()
-                .filter(|tab| tab.pinned)
-                .map(move |tab| Link {
-                    tab_id: tab.id,
-                    workspace,
-                    title: tab.title.clone(),
-                })
-        })
-        .take(8)
-        .collect();
-    if links.is_empty() {
-        return;
-    }
-
-    let tile = vec2(76.0, 72.0);
-    let gap = 10.0;
-    let total = links.len() as f32 * tile.x + (links.len() as f32 - 1.0) * gap;
-    let row = Rect::from_center_size(
-        pos2(content_rect.center().x, content_rect.center().y + 110.0),
-        vec2(total, tile.y),
-    );
-    if row.min.x < content_rect.min.x + 12.0 {
-        return; // Not enough room; the sidebar essentials still have them.
-    }
-
-    let mut ui = root.new_child(
-        egui::UiBuilder::new()
-            .max_rect(row)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    ui.spacing_mut().item_spacing.x = gap;
-    for link in links {
-        let (rect, response) = ui.allocate_exact_size(tile, Sense::click());
-        let hover = glass::ease_out(ui.ctx().animate_bool_with_time(
-            ui.id().with(("quick_link", link.tab_id)),
-            response.hovered(),
-            0.12,
-        ));
-        glass::paint(
-            ui.painter(),
-            rect,
-            &palette,
-            Glass::new(12).strength(0.5 + 0.5 * hover).no_shadow(),
-        );
-        let icon_center = pos2(rect.center().x, rect.min.y + 26.0);
-        if let Some(texture) = chrome.favicons.get(&link.tab_id) {
-            ui.painter().image(
-                texture.id(),
-                Rect::from_center_size(icon_center, vec2(22.0, 22.0)),
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        } else {
-            icons::draw_icon(
-                ui.painter(),
-                Rect::from_center_size(icon_center, vec2(19.0, 19.0)),
-                Icon::Globe,
-                palette.text_muted,
-            );
-        }
-        ui.painter().text(
-            pos2(rect.center().x, rect.max.y - 14.0),
-            Align2::CENTER_CENTER,
-            truncate(&link.title, 10),
-            FontId::proportional(11.0),
-            palette.text_muted,
-        );
-        if response
-            .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text(&link.title)
-            .clicked()
-        {
-            actions.push(UiAction::SelectTab(link.tab_id));
-            actions.push(UiAction::SelectWorkspace(link.workspace));
-        }
     }
 }
 
@@ -4740,22 +4510,16 @@ fn settings_layout(
             }
         }
     });
-    settings_section(ui, palette, "New tab widgets", |ui| {
-        for (value, label) in [
-            (&mut chrome.settings.newtab_clock, "Clock and date"),
-            (&mut chrome.settings.newtab_greeting, "Greeting"),
-            (&mut chrome.settings.newtab_logo, "Zervo mark"),
-            (&mut chrome.settings.newtab_search, "Search box"),
-            (
-                &mut chrome.settings.newtab_quick_links,
-                "Quick links (pinned tabs)",
-            ),
-        ] {
-            if widgets::toggle(ui, value, label, palette) {
-                actions.push(UiAction::SettingsChanged);
-            }
-        }
-        ui.add_space(8.0);
+    settings_section(ui, palette, "New tab page", |ui| {
+        ui.label(
+            RichText::new(
+                "The cards are arranged on the page itself — press Customise there to \
+                 move, resize and remove them.",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+        ui.add_space(10.0);
         ui.label(
             RichText::new("Custom greeting")
                 .size(12.0)
@@ -4768,8 +4532,183 @@ fn settings_layout(
                 .desired_width(f32::INFINITY),
         );
         if response.lost_focus() {
-            actions.push(UiAction::SettingsChanged);
+            actions.push(UiAction::PersistSettings);
         }
+    });
+
+    settings_section(ui, palette, "World clocks", |ui| {
+        let mut remove = None;
+        for (index, zone) in chrome.settings.newtab_world_clocks.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&zone.label).size(13.0).color(palette.text));
+                ui.label(
+                    RichText::new(&zone.name)
+                        .size(11.5)
+                        .color(palette.text_muted),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icons::icon_button(ui, Icon::Close, 13.0, palette, true)
+                        .on_hover_text("Take this city off")
+                        .clicked()
+                    {
+                        remove = Some(index);
+                    }
+                });
+            });
+        }
+        if let Some(index) = remove {
+            chrome.settings.newtab_world_clocks.remove(index);
+            actions.push(UiAction::PersistSettings);
+        }
+        if chrome.settings.newtab_world_clocks.is_empty() {
+            ui.label(
+                RichText::new("No cities — the card says so rather than showing nothing.")
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
+        }
+        ui.add_space(6.0);
+        egui::ComboBox::from_id_salt("zervo_world_clock_add")
+            .selected_text("Add a city…")
+            .width(220.0)
+            .show_ui(ui, |ui| {
+                for (label, name) in crate::newtab::Zone::CATALOGUE {
+                    let already = chrome
+                        .settings
+                        .newtab_world_clocks
+                        .iter()
+                        .any(|zone| zone.name == name);
+                    if already {
+                        continue;
+                    }
+                    if ui.selectable_label(false, label).clicked() {
+                        chrome
+                            .settings
+                            .newtab_world_clocks
+                            .push(crate::newtab::Zone {
+                                label: label.to_owned(),
+                                name: name.to_owned(),
+                            });
+                        actions.push(UiAction::PersistSettings);
+                    }
+                }
+            });
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Each clock reads the zone from the compiled-in IANA table, so daylight \
+                 saving is right without anyone maintaining it.",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+    });
+
+    settings_section(ui, palette, "Wallpaper", |ui| {
+        use crate::wallpaper::{Cadence, Source, Subject};
+        let photo = chrome.settings.new_tab_background == NewTabBackground::Photo;
+        let mut wants_photo = photo;
+        if widgets::toggle(ui, &mut wants_photo, "Show a photograph", palette) {
+            chrome.settings.new_tab_background = if wants_photo {
+                NewTabBackground::Photo
+            } else {
+                NewTabBackground::Aurora
+            };
+            actions.push(UiAction::PersistSettings);
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Pictures come from Wikimedia Commons and Openverse, which publish under \
+                 licences that allow this. Neither needs an account. The credit line under \
+                 the page is part of the licence, so it is always drawn.",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+
+        ui.add_space(10.0);
+        ui.label(RichText::new("Source").size(12.0).color(palette.text_muted));
+        let mut sources: Vec<(String, Source)> =
+            vec![("Commons picture of the day".to_owned(), Source::Commons)];
+        sources.extend(Subject::ALL.iter().map(|subject| {
+            (
+                format!("Openverse — {}", subject.label().to_lowercase()),
+                Source::Openverse(*subject),
+            )
+        }));
+        let selected = sources
+            .iter()
+            .find(|(_, source)| *source == chrome.settings.wallpaper_source)
+            .map(|(label, _)| label.clone())
+            .unwrap_or_else(|| chrome.settings.wallpaper_source.label());
+        egui::ComboBox::from_id_salt("zervo_wallpaper_source")
+            .selected_text(selected)
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for (label, source) in sources {
+                    if ui
+                        .selectable_label(chrome.settings.wallpaper_source == source, label)
+                        .clicked()
+                    {
+                        chrome.settings.wallpaper_source = source;
+                        actions.push(UiAction::ShuffleWallpaper);
+                    }
+                }
+            });
+
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new("Change it")
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+        let cadences = Cadence::ALL;
+        let labels: Vec<&str> = cadences.iter().map(|cadence| cadence.label()).collect();
+        let current = cadences
+            .iter()
+            .position(|cadence| *cadence == chrome.settings.wallpaper_cadence)
+            .unwrap_or(0);
+        if let Some(index) = widgets::segmented(ui, current, &labels, palette) {
+            chrome.settings.wallpaper_cadence = cadences[index];
+            actions.push(UiAction::PersistSettings);
+        }
+
+        ui.add_space(10.0);
+        ui.label(RichText::new("Veil").size(12.0).color(palette.text_muted));
+        if widgets::slider(ui, &mut chrome.settings.wallpaper_dim, 0.15..=0.9, palette) {
+            actions.push(UiAction::PersistSettings);
+        }
+        ui.label(
+            RichText::new(format!(
+                "{:.0}% — how far the picture is dimmed so the cards stay readable on it.",
+                chrome.settings.wallpaper_dim * 100.0
+            ))
+            .size(11.5)
+            .color(palette.text_muted),
+        );
+
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            if ui.button("Another picture").clicked() {
+                actions.push(UiAction::ShuffleWallpaper);
+            }
+            if ui.button("Choose a file…").clicked() {
+                actions.push(UiAction::PickWallpaper);
+            }
+        });
+        ui.add_space(4.0);
+        let credit = chrome.wallpaper.credit;
+        let note = if let Some(why) = chrome.wallpaper.error {
+            format!("The last attempt failed: {why}")
+        } else if chrome.wallpaper.loading {
+            "Fetching one…".to_owned()
+        } else if chrome.wallpaper.texture.is_some() {
+            format!("Showing {} — from {}.", credit.line(), credit.source)
+        } else {
+            "Nothing fetched yet.".to_owned()
+        };
+        ui.label(RichText::new(note).size(11.5).color(palette.text_muted));
     });
 
     settings_section(ui, palette, "Trackpad", |ui| {

@@ -51,6 +51,24 @@ Internal pages (`zervo://settings`, `zervo://newtab`, `zervo://downloads`) are
 tabs with no `WebView` at all; they are drawn by egui in the content rect, and
 the blit is skipped.
 
+## The new tab page
+
+`newtab.rs` draws it: cards on a twelve-column grid, arranged by dragging them
+in edit mode and remembered in the settings. `grid.rs` holds the arithmetic —
+where a card of a given size and position lands, what it collides with, which
+cell the pointer is over, and where the first free space is. The navigation
+bar's shelf still carries its own copy of the same sums in `dashboard.rs`; it
+could adopt `grid.rs`, and should.
+
+Behind the cards it can put a photograph. `wallpaper.rs` fetches one from
+Wikimedia Commons or Openverse on a thread of its own, decodes and downscales
+it there too, and hands back an `egui::ColorImage`; `main.rs` uploads that as a
+texture, because making one needs a context the thread does not have. The
+transport is `net.rs`, which is HTTP/1.1 over the rustls Zervo already links —
+GET, redirects, a counted or chunked body, a hard byte ceiling, and nothing
+else. Everything a wallpaper needs to say about its licence travels with it and
+is drawn under the page.
+
 ## State and events
 
 `ui.rs` is pure: it draws from `BrowserState` + `Settings` and returns a list of

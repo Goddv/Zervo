@@ -1,0 +1,685 @@
+//! Photographs for the new tab page, from sources that publish under licences
+//! which allow it.
+//!
+//! Two of them, and neither wants an API key: Wikimedia Commons' picture of
+//! the day, which is a curated archive going back years, and Openverse, which
+//! indexes openly-licensed photographs and can be asked for a subject. A third
+//! "source" is a file the user picked, which needs no network at all.
+//!
+//! Everything happens on a thread of its own. A wallpaper is never worth
+//! stalling a frame for, and the page has something to show either way — so
+//! the fetch, the decode and the downscale all run off the main thread and the
+//! result is collected whenever the page next draws.
+//!
+//! The credit line is not decoration. Most of what comes back is CC BY or CC
+//! BY-SA, which are licences with a condition attached, so the title, the
+//! photographer and the licence travel with the picture and are drawn with it.
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+
+/// Where a photograph comes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Source {
+    /// Wikimedia Commons' picture of the day, from a day picked at random.
+    #[default]
+    Commons,
+    /// Openverse, searched for a subject.
+    Openverse(Subject),
+    /// A file on this machine.
+    File(String),
+}
+
+impl Source {
+    pub fn label(&self) -> String {
+        match self {
+            Source::Commons => "Wikimedia Commons".to_owned(),
+            Source::Openverse(subject) => format!("Openverse — {}", subject.label().to_lowercase()),
+            Source::File(path) => Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "A file".to_owned()),
+        }
+    }
+}
+
+/// What to ask Openverse for. A short list of subjects that photograph well at
+/// the size of a window, rather than a free-text box nobody would fill in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Subject {
+    Landscape,
+    Mountains,
+    Coast,
+    Forest,
+    Sky,
+    Night,
+    City,
+    Texture,
+}
+
+impl Subject {
+    pub const ALL: [Subject; 8] = [
+        Subject::Landscape,
+        Subject::Mountains,
+        Subject::Coast,
+        Subject::Forest,
+        Subject::Sky,
+        Subject::Night,
+        Subject::City,
+        Subject::Texture,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Subject::Landscape => "Landscape",
+            Subject::Mountains => "Mountains",
+            Subject::Coast => "Coast",
+            Subject::Forest => "Forest",
+            Subject::Sky => "Sky",
+            Subject::Night => "Night",
+            Subject::City => "City",
+            Subject::Texture => "Texture",
+        }
+    }
+
+    /// The search Openverse actually runs. Two words beat one: "landscape"
+    /// alone returns a great deal of landscape *painting*.
+    fn query(self) -> &'static str {
+        match self {
+            Subject::Landscape => "landscape+photograph+scenery",
+            Subject::Mountains => "mountain+range+peaks",
+            Subject::Coast => "coast+sea+shoreline",
+            Subject::Forest => "forest+trees+woodland",
+            Subject::Sky => "sky+clouds+horizon",
+            Subject::Night => "night+sky+stars",
+            Subject::City => "city+skyline+architecture",
+            Subject::Texture => "abstract+texture+pattern",
+        }
+    }
+}
+
+/// How often a new photograph is fetched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Cadence {
+    /// Only when asked.
+    Manual,
+    Launch,
+    Hourly,
+    Daily,
+}
+
+impl Cadence {
+    pub const ALL: [Cadence; 4] = [
+        Cadence::Manual,
+        Cadence::Launch,
+        Cadence::Hourly,
+        Cadence::Daily,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Cadence::Manual => "Manually",
+            Cadence::Launch => "Each launch",
+            Cadence::Hourly => "Hourly",
+            Cadence::Daily => "Daily",
+        }
+    }
+
+    fn interval(self) -> Option<Duration> {
+        match self {
+            Cadence::Manual | Cadence::Launch => None,
+            Cadence::Hourly => Some(Duration::from_secs(60 * 60)),
+            Cadence::Daily => Some(Duration::from_secs(24 * 60 * 60)),
+        }
+    }
+}
+
+/// A photograph, and what has to be said about it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Credit {
+    pub title: String,
+    pub author: String,
+    pub licence: String,
+    /// Where it came from, so the credit can be followed back.
+    pub page: String,
+    /// Which source produced it, for the settings page to show.
+    pub source: String,
+}
+
+impl Credit {
+    /// The one line drawn over the picture. Everything the licences ask for,
+    /// in the order a person reads it.
+    pub fn line(&self) -> String {
+        let mut line = if self.title.is_empty() {
+            "Untitled".to_owned()
+        } else {
+            self.title.clone()
+        };
+        if !self.author.is_empty() {
+            line.push_str(" · ");
+            line.push_str(&self.author);
+        }
+        if !self.licence.is_empty() {
+            line.push_str(" · ");
+            line.push_str(&self.licence);
+        }
+        line
+    }
+}
+
+/// What the page needs in order to draw a wallpaper: the texture if there is
+/// one, the credit that has to be drawn with it, and whether anything is still
+/// happening. Always handed over, even with nothing in it — a page that has to
+/// say "nothing fetched yet" needs to be told that too.
+#[derive(Clone, Copy)]
+pub struct View<'a> {
+    pub texture: Option<&'a egui::TextureHandle>,
+    pub credit: &'a Credit,
+    pub error: Option<&'a str>,
+    pub loading: bool,
+}
+
+/// What the fetch thread hands back.
+struct Fetched {
+    credit: Credit,
+    image: egui::ColorImage,
+    /// Where the bytes were cached, so the next launch has a picture before
+    /// the network does anything.
+    cached: Option<PathBuf>,
+}
+
+#[derive(Default)]
+pub struct Wallpaper {
+    credit: Credit,
+    /// The decoded picture, waiting for the main thread to make it a texture.
+    pending: Option<egui::ColorImage>,
+    inbox: Option<Receiver<Result<Fetched, String>>>,
+    fetched_at: Option<SystemTime>,
+    /// What went wrong last time, shown in the settings rather than swallowed.
+    pub error: Option<String>,
+    /// Set once per launch, so `Each launch` means once.
+    launched: bool,
+}
+
+impl Wallpaper {
+    /// Pick up whatever was cached last time, decoding it on a thread so a
+    /// launch never waits on a photograph.
+    pub fn restore(&mut self) {
+        let Some((credit, path, at)) = read_manifest() else {
+            return;
+        };
+        self.credit = credit.clone();
+        self.fetched_at = at;
+        let (sender, receiver) = channel();
+        self.inbox = Some(receiver);
+        std::thread::spawn(move || {
+            let outcome = std::fs::read(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| decode(&bytes))
+                .map(|image| Fetched {
+                    credit,
+                    image,
+                    cached: None,
+                });
+            let _ = sender.send(outcome);
+        });
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.inbox.is_some()
+    }
+
+    pub fn credit(&self) -> &Credit {
+        &self.credit
+    }
+
+    /// True when `cadence` says this source is due for a new picture. A file
+    /// the user chose is never due: it is the picture they asked for.
+    pub fn due(&self, source: &Source, cadence: Cadence) -> bool {
+        if self.is_loading() || matches!(source, Source::File(_)) {
+            return false;
+        }
+        match cadence {
+            Cadence::Manual => false,
+            Cadence::Launch => !self.launched,
+            _ => match (cadence.interval(), self.fetched_at) {
+                (Some(interval), Some(at)) => at.elapsed().unwrap_or(interval) >= interval,
+                (Some(_), None) => true,
+                (None, _) => false,
+            },
+        }
+    }
+
+    /// Start fetching. Returns without waiting; call [`Wallpaper::poll`] until
+    /// it reports something arrived.
+    pub fn fetch(&mut self, source: &Source) {
+        if self.is_loading() {
+            return;
+        }
+        self.launched = true;
+        self.error = None;
+        let source = source.clone();
+        let (sender, receiver) = channel();
+        self.inbox = Some(receiver);
+        std::thread::spawn(move || {
+            let _ = sender.send(load(&source));
+        });
+    }
+
+    /// Collect a finished fetch. True when anything changed and the page
+    /// should be redrawn.
+    pub fn poll(&mut self) -> bool {
+        let Some(inbox) = &self.inbox else {
+            return false;
+        };
+        match inbox.try_recv() {
+            Ok(Ok(fetched)) => {
+                self.inbox = None;
+                self.credit = fetched.credit.clone();
+                self.pending = Some(fetched.image);
+                if let Some(path) = fetched.cached {
+                    self.fetched_at = Some(SystemTime::now());
+                    write_manifest(&fetched.credit, &path, self.fetched_at);
+                }
+                true
+            },
+            Ok(Err(why)) => {
+                self.inbox = None;
+                log::warn!("Wallpaper: {why}");
+                self.error = Some(why);
+                true
+            },
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.inbox = None;
+                self.error = Some("the fetch gave up".to_owned());
+                true
+            },
+        }
+    }
+
+    /// Take the decoded picture, for the caller to upload as a texture. The
+    /// upload needs an egui context, which is why this module does not do it.
+    pub fn take_image(&mut self) -> Option<egui::ColorImage> {
+        self.pending.take()
+    }
+}
+
+// ── Fetching ───────────────────────────────────────────────────────────────
+
+/// A photograph big enough to fill a window without a second of it being
+/// spent on pixels nobody sees.
+const WANT_WIDTH: u32 = 1920;
+/// The longest side a texture is allowed. Beyond this the extra detail costs
+/// video memory and buys nothing at window sizes.
+const MAX_SIDE: u32 = 2048;
+/// A picture this large is a mistake somewhere.
+const MAX_BYTES: usize = 24 * 1024 * 1024;
+/// Metadata is small; a megabyte of it is not metadata.
+const MAX_JSON: usize = 4 * 1024 * 1024;
+
+fn load(source: &Source) -> Result<Fetched, String> {
+    match source {
+        Source::File(path) => {
+            let bytes = std::fs::read(path).map_err(|error| format!("{path}: {error}"))?;
+            let image = decode(&bytes)?;
+            Ok(Fetched {
+                credit: Credit {
+                    title: Path::new(path)
+                        .file_stem()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    source: "This machine".to_owned(),
+                    ..Credit::default()
+                },
+                image,
+                cached: None,
+            })
+        },
+        Source::Commons => commons(),
+        Source::Openverse(subject) => openverse(*subject),
+    }
+}
+
+/// Wikimedia Commons' picture of the day, from a day picked at random out of
+/// the last ten years. Today's would be the same picture for everyone all day;
+/// the archive is the interesting part.
+fn commons() -> Result<Fetched, String> {
+    let mut last = String::from("no picture of the day");
+    // A handful of days have no picture in the feed. Try a few rather than
+    // report a failure the user cannot act on.
+    for attempt in 0..4_u32 {
+        let (year, month, day) = random_day(attempt);
+        let feed = format!(
+            "https://api.wikimedia.org/feed/v1/wikipedia/en/featured/{year}/{month:02}/{day:02}"
+        );
+        let response = match crate::net::get(&feed, "application/json", MAX_JSON) {
+            Ok(response) => response,
+            Err(why) => {
+                last = why;
+                continue;
+            },
+        };
+        let json: serde_json::Value = match serde_json::from_slice(&response.body) {
+            Ok(json) => json,
+            Err(error) => {
+                last = error.to_string();
+                continue;
+            },
+        };
+        let Some(image) = json.get("image") else {
+            continue;
+        };
+        let title = text(image.get("title")).replace("File:", "");
+        let credit = Credit {
+            title: pretty_title(&title),
+            author: strip_markup(&text(image.pointer("/artist/text"))),
+            licence: text(image.pointer("/license/type")),
+            page: text(image.get("file_page")),
+            source: "Wikimedia Commons".to_owned(),
+        };
+
+        // `Special:FilePath` resizes for us and redirects to the file store.
+        // Failing that, the feed's own thumbnail is small but always there.
+        let sized = file_path_url(&title);
+        let fallback = text(image.pointer("/thumbnail/source"));
+        for candidate in [sized, (!fallback.is_empty()).then_some(fallback)]
+            .into_iter()
+            .flatten()
+        {
+            match picture(&candidate) {
+                Ok((bytes, from)) => return finish(credit, &bytes, &from),
+                Err(why) => last = why,
+            }
+        }
+    }
+    Err(last)
+}
+
+/// Openverse, asked for a subject and given one of the answers.
+fn openverse(subject: Subject) -> Result<Fetched, String> {
+    // Openverse pages twenty at a time; a page picked at random out of the
+    // first few is variety enough without asking for a page that is not there.
+    let page = 1 + (random_u32(0) % 4);
+    let query = format!(
+        "https://api.openverse.org/v1/images/?q={}&license_type=all-cc\
+         &aspect_ratio=wide&size=large&page_size=20&mature=false&page={page}",
+        subject.query()
+    );
+    let response = crate::net::get(&query, "application/json", MAX_JSON)?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&response.body).map_err(|error| error.to_string())?;
+    let results = json
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Openverse returned nothing".to_owned())?;
+
+    // Wide, large, small enough to be worth the transfer, and a format the
+    // decoder actually has.
+    let usable: Vec<&serde_json::Value> = results
+        .iter()
+        .filter(|item| {
+            let width = item.get("width").and_then(serde_json::Value::as_u64);
+            let size = item.get("filesize").and_then(serde_json::Value::as_u64);
+            let kind = text(item.get("filetype")).to_lowercase();
+            let url = text(item.get("url"));
+            width.is_some_and(|width| width >= 1600)
+                && size.is_none_or(|size| size as usize <= MAX_BYTES)
+                && matches!(kind.as_str(), "jpg" | "jpeg" | "png")
+                && url.starts_with("https://")
+        })
+        .collect();
+    if usable.is_empty() {
+        return Err(format!("nothing usable for {}", subject.label()));
+    }
+
+    let mut last = String::from("nothing downloaded");
+    // Try a few of them: an index can outlive the file it points at.
+    let start = random_u32(1) as usize % usable.len();
+    for offset in 0..usable.len().min(4) {
+        let item = usable[(start + offset) % usable.len()];
+        let url = text(item.get("url"));
+        let credit = Credit {
+            // Openverse passes a provider's title through as it found it, and
+            // some providers store HTML in that field. It lands in a credit
+            // line drawn as plain text, so a `<div class='fn'>` arrives on
+            // screen exactly as written unless it is taken out here.
+            title: strip_markup(&text(item.get("title"))),
+            author: strip_markup(&text(item.get("creator"))),
+            licence: licence_name(
+                &text(item.get("license")),
+                &text(item.get("license_version")),
+            ),
+            page: text(item.get("foreign_landing_url")),
+            source: "Openverse".to_owned(),
+        };
+        match picture(&url) {
+            Ok((bytes, from)) => return finish(credit, &bytes, &from),
+            Err(why) => last = why,
+        }
+    }
+    Err(last)
+}
+
+/// Fetch something that had better be a photograph.
+///
+/// The content type is checked before the decoder sees it: a host that has
+/// mislaid a file answers with an HTML error page, and "unsupported image
+/// format" is a much worse thing to read than "that was not a picture".
+fn picture(url: &str) -> Result<(Vec<u8>, String), String> {
+    let response = crate::net::get(url, "image/jpeg,image/png", MAX_BYTES)?;
+    if !response.content_type.starts_with("image/") {
+        return Err(format!("{url} answered with {}", response.content_type));
+    }
+    Ok((response.body, response.url))
+}
+
+/// Cache the bytes, decode them, and hand both back.
+fn finish(credit: Credit, bytes: &[u8], from: &str) -> Result<Fetched, String> {
+    let image = decode(bytes)?;
+    let cached = cache(bytes, from);
+    Ok(Fetched {
+        credit,
+        image,
+        cached,
+    })
+}
+
+/// Decode and downscale, both on this thread. A six-megapixel photograph is
+/// several hundred milliseconds of work; doing it where the frames are drawn
+/// would be a visible stall for something nobody asked to wait for.
+fn decode(bytes: &[u8]) -> Result<egui::ColorImage, String> {
+    let decoded = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
+    let longest = width.max(height);
+    let decoded = if longest > MAX_SIDE {
+        let scale = MAX_SIDE as f32 / longest as f32;
+        decoded.resize(
+            ((width as f32 * scale) as u32).max(1),
+            ((height as f32 * scale) as u32).max(1),
+            image::imageops::FilterType::CatmullRom,
+        )
+    } else {
+        decoded
+    };
+    let rgba = decoded.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    if size[0] == 0 || size[1] == 0 {
+        return Err("the picture has no pixels".to_owned());
+    }
+    Ok(egui::ColorImage::from_rgba_unmultiplied(size, &rgba))
+}
+
+// ── The cache on disk ──────────────────────────────────────────────────────
+
+fn cache_dir() -> Option<PathBuf> {
+    Some(crate::settings::data_dir()?.join("wallpapers"))
+}
+
+/// Write the picture beside the settings, so the next launch has something to
+/// show before the network has said anything.
+fn cache(bytes: &[u8], from: &str) -> Option<PathBuf> {
+    let extension = if from.to_lowercase().contains(".png") {
+        "png"
+    } else {
+        "jpg"
+    };
+    let directory = cache_dir()?;
+    std::fs::create_dir_all(&directory).ok()?;
+    let path = directory.join(format!("current.{extension}"));
+    std::fs::write(&path, bytes).ok()?;
+    // The other extension is now a stale copy of a picture nobody will see.
+    let stale = directory.join(if extension == "png" {
+        "current.jpg"
+    } else {
+        "current.png"
+    });
+    let _ = std::fs::remove_file(stale);
+    Some(path)
+}
+
+#[derive(Serialize, Deserialize)]
+struct Manifest {
+    credit: Credit,
+    path: String,
+    /// Unix seconds, so the file stays readable and the cadence survives a
+    /// restart.
+    at: Option<i64>,
+}
+
+fn manifest_path() -> Option<PathBuf> {
+    Some(cache_dir()?.join("current.json"))
+}
+
+fn write_manifest(credit: &Credit, path: &Path, at: Option<SystemTime>) {
+    let Some(target) = manifest_path() else {
+        return;
+    };
+    let manifest = Manifest {
+        credit: credit.clone(),
+        path: path.to_string_lossy().into_owned(),
+        at: at
+            .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+            .map(|since| since.as_secs() as i64),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&manifest) {
+        let _ = std::fs::write(target, json);
+    }
+}
+
+fn read_manifest() -> Option<(Credit, PathBuf, Option<SystemTime>)> {
+    let contents = std::fs::read_to_string(manifest_path()?).ok()?;
+    let manifest: Manifest = serde_json::from_str(&contents).ok()?;
+    let path = PathBuf::from(manifest.path);
+    if !path.exists() {
+        return None;
+    }
+    let at = manifest
+        .at
+        .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds.max(0) as u64));
+    Some((manifest.credit, path, at))
+}
+
+// ── Small helpers ──────────────────────────────────────────────────────────
+
+fn text(value: Option<&serde_json::Value>) -> String {
+    value
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+/// Both sources hand back HTML in fields that are drawn as plain text: Commons
+/// renders its artist field from wiki markup — a link, sometimes a whole
+/// gallery — and Openverse passes a provider's title through untouched. Take
+/// the first line and drop the tags: a credit is a name, not a document.
+fn strip_markup(html: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for character in html.chars() {
+        match character {
+            '<' => inside = true,
+            '>' => inside = false,
+            '\n' | '\r' if !inside => break,
+            _ if !inside => out.push(character),
+            _ => {},
+        }
+    }
+    let out = out
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ");
+    crate::ui::ellipsize(
+        out.split_whitespace().collect::<Vec<_>>().join(" ").trim(),
+        70,
+    )
+}
+
+/// Commons file names are the caption nobody wrote: underscores, a date, a
+/// camera's serial number. Make them read like a title.
+fn pretty_title(file: &str) -> String {
+    let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+    crate::ui::ellipsize(stem.replace('_', " ").trim(), 70)
+}
+
+/// Openverse reports a licence as a code and a version; the licences want
+/// their names.
+fn licence_name(code: &str, version: &str) -> String {
+    let code = code.to_uppercase();
+    let name = match code.as_str() {
+        "" => return String::new(),
+        "CC0" => "CC0".to_owned(),
+        "PDM" => return "Public domain".to_owned(),
+        other => format!("CC {other}"),
+    };
+    if version.is_empty() {
+        name
+    } else {
+        format!("{name} {version}")
+    }
+}
+
+/// `Special:FilePath` takes a file name and a width and redirects to the right
+/// thumbnail, which saves knowing how the file store lays its paths out.
+fn file_path_url(title: &str) -> Option<String> {
+    let mut url = url::Url::parse("https://commons.wikimedia.org/wiki/Special:FilePath").ok()?;
+    url.path_segments_mut().ok()?.push(title);
+    url.set_query(Some(&format!("width={WANT_WIDTH}")));
+    Some(url.to_string())
+}
+
+/// A day out of the last ten years, as (year, month, day).
+///
+/// Cheap and not uniform across month lengths — the 29th of a short month
+/// simply has no picture and the caller tries again — but it needs no random
+/// number generator and it never repeats within a session.
+fn random_day(salt: u32) -> (i32, u32, u32) {
+    let now = chrono::Local::now().date_naive();
+    let span = 365 * 10;
+    let back = (random_u32(salt) % span) as i64;
+    let day = now - chrono::Duration::days(back + 1);
+    use chrono::Datelike as _;
+    (day.year(), day.month(), day.day())
+}
+
+/// Enough randomness to pick a picture with. Not enough for anything else.
+fn random_u32(salt: u32) -> u32 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.subsec_nanos() ^ since.as_secs() as u32)
+        .unwrap_or(0);
+    let mut value = nanos.wrapping_add(salt.wrapping_mul(2_654_435_761));
+    // One round of a well-known integer mix, which spreads the low bits the
+    // modulo above would otherwise be reading straight off the clock.
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x7feb_352d);
+    value ^= value >> 15;
+    value = value.wrapping_mul(0x846c_a68b);
+    value ^ (value >> 16)
+}
