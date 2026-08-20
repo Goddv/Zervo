@@ -38,7 +38,11 @@ people do not write it twice.
 - **More widgets, and a way to write them.** The shelf takes any grid-placed
   widget; there are three. Notes, a downloads strip and a page-actions row are
   obvious next ones.
-- **Tab drag-to-reorder**, and dragging between workspaces.
+- **Three- and four-finger swipes.** Two-finger ones are in. winit surfaces
+  neither of the others, so they need an AppKit event monitor, and macOS
+  assigns them to Mission Control by default — so they would arrive only for
+  people who have changed a system setting. Worth doing with that stated
+  plainly, not worth pretending otherwise.
 
 ## Wanted, but blocked on the engine
 
