@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+Fixes, mostly to things that looked finished and were not.
+
+**Overlays swallow their own clicks.** The favourites card, the downloads card
+and anything else floating over a page relied on a hand-maintained list of
+rectangles to decide whether a click belonged to the chrome or the page. Every
+overlay anyone forgot to add to that list sent its clicks straight through, so
+the favourites card opened, showed you your favourites, and then handed your
+click to the web page underneath. Asking egui which layer is under the pointer
+covers all of them, including ones added later.
+
+**Favourite renames save.** A rename committed only on Enter and on losing
+focus, so an edit and a click elsewhere lost it. There is a ✓ to keep it and an
+✗ to drop it, and Enter and Escape still do the same.
+
+**Downloads have a card of their own**, opening on hover like the favourites
+one: stop, start again, reveal in the file manager, open. Pause and continue are
+drawn and disabled, with a note saying why — Servo streams a response to disk
+with no way to suspend it, so a pause button that silently cancelled would be a
+lie. Right-click gives copy link, copy file name, show in folder, open, start
+again and remove.
+
+**Every setting is in the category it belongs to.** Several appearance settings
+were sitting under General; Customize is now Layout; the downloads and
+compatibility toggles were only reachable by editing the file. There is a reset
+that puts the navigation bar, the widgets and the sidebar back the way they
+started.
+
+**Cards have one shadow and one edge.** Each floating card painted an opaque
+backing and then the glass material over it, which put the material's drop
+shadow *inside* the card, showing through as a dark rim — worst at the corners.
+They also stacked four rounded rects at the same radius, so antialiased corner
+pixels composited four times and a corner came out harder than the edges beside
+it. The material does both jobs now, and the shadow is the content card's: a
+ring with a quadratic falloff rather than epaint's edge feathering, which is not
+a drop shadow and was the banding.
+
+**Changing a setting no longer jolts the window.** Every settings write
+reapplied the whole theme — restyle egui, reset the window appearance, retune
+the frosted material, and tell every webview its `prefers-color-scheme` had
+changed, which makes the page relayout — plus a fresh Dock icon. For "outline
+around content", and once per frame while dragging a slider. It now happens when
+the theme actually changes.
+
 ## 0.3.3 — 19 August 2026
 
 Windows, and with it a build for every platform Zervo targets.

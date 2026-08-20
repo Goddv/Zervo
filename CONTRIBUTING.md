@@ -26,14 +26,17 @@ the one genuinely surprising thing in the codebase.
 
 ## Good first issues
 
+[docs/TODO.md](docs/TODO.md) is the working queue and the better place to pick
+from. The easiest starts on it:
+
+- **Try the Linux or Windows build and say what happened.** They have never been
+  run. No Rust required.
 - Session restore (workspaces and tabs across launches).
+- Clearing cookies and site data from Settings — the engine calls exist.
+- A favicon cache on disk, so history and favourites show icons.
+- The link target on hover, in the usual bottom-left overlay.
 - Tab drag-to-reorder, and dragging between workspaces.
-- `alert()` / `confirm()` / `prompt()` dialogs — the engine already offers them
-  through `show_embedder_control`; Zervo currently auto-answers them.
-- IME support (`EmbedderControl::InputMethod`).
-- Linux and Windows: everything except `vibrancy.rs`, the Dock icon and the
-  bundling scripts is portable.
-- Find-in-page, zoom UI, history.
+- A new widget for the shelf: `dashboard.rs` takes any grid-placed widget.
 
 ## Engine bugs
 
