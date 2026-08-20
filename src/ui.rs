@@ -365,12 +365,17 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) 
 }
 
 /// A soft shadow hugging the content card.
+///
+/// `Outside`, unlike every other surface: what is inside this silhouette is
+/// the web page, blitted pixel for pixel, and a feather row drawn over it
+/// leaves a dark fringe around the whole page.
 fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: &Palette) {
     painter.add(glass::shadow(
         rect,
         radius,
         palette.shadow.gamma_multiply(0.9),
         9.0,
+        glass::Inner::Outside,
     ));
 }
 
@@ -383,18 +388,35 @@ fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: 
 /// along the card's rounded edge and fading back out moves that transition
 /// onto the rounded silhouette, where it belongs, and softens it.
 fn paint_card_opacity_blend(
+    root: &Ui,
     painter: &egui::Painter,
     rect: Rect,
     radius: f32,
-    chrome: Color32,
+    palette: &Palette,
+    top_glow: f32,
     chrome_opacity: f32,
 ) {
     if chrome_opacity >= 1.0 {
         return; // Opaque chrome has no seam to hide.
     }
-    // Reach past the corner wedge — the furthest the square box sits from the
-    // arc is radius * (sqrt(2) - 1).
-    painter.add(glass::shadow(rect, radius, chrome, radius * 0.42 + 6.0));
+    // The square box has to be *covered*, not merely approached. Its furthest
+    // point from the arc is radius * (sqrt(2) - 1) at each corner, and a
+    // falloff that begins at the silhouette has decayed to a third of its
+    // strength by the time it gets there — which is why the box stayed
+    // faintly visible as a right angle outside every rounded corner. So the
+    // ring holds full chrome out to the wedge and only then fades.
+    let wedge = radius * (std::f32::consts::SQRT_2 - 1.0);
+    painter.add(glass::shadow_tinted(
+        rect,
+        radius,
+        wedge + radius * 0.42 + 6.0,
+        wedge,
+        glass::Inner::Outside,
+        // Per vertex, not once for the whole ring: the chrome is a gradient,
+        // and a ring painted in the colour from the card's centre is far too
+        // dark along the top, where the glow strip is brightest.
+        |at| chrome_color_at(root, at.y, palette, top_glow),
+    ));
 }
 
 /// Draw the rounded-corner masks and border over the (square) webview blit.
@@ -518,8 +540,13 @@ pub fn finish_content_frame(
             arc_edges.push((true_arc, chrome_color_at(root, corner.y, palette, top_glow)));
         }
         fan_painter.add(Shape::mesh(mesh));
+        // One physical pixel wide, so it feathers the mesh edge and no more.
+        // At 1.4 points it was nearly three pixels, laid half over the page —
+        // a chrome-coloured bite out of the page along the arcs but not along
+        // the straight edges, which read as a chip just past each corner.
+        let hairline = 1.0 / root.pixels_per_point();
         for (arc, colour) in arc_edges {
-            fan_painter.add(Shape::line(arc, Stroke::new(1.4_f32, colour)));
+            fan_painter.add(Shape::line(arc, Stroke::new(hairline, colour)));
         }
     }
 
@@ -528,10 +555,12 @@ pub fn finish_content_frame(
     // content rect and leaves unshadowed patches in the corners.
     // Opacity blend first, so the shadow lies on top of it.
     paint_card_opacity_blend(
+        root,
         &painter,
         content_rect,
         radius,
-        chrome_color_at(root, content_rect.center().y, palette, top_glow),
+        palette,
+        top_glow,
         chrome_opacity,
     );
     paint_card_shadow(&painter, content_rect, radius, palette);

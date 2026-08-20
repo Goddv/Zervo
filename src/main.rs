@@ -194,7 +194,11 @@ impl ApplicationHandler<WakerEvent> for App {
             window_rendering_context.glow_gl_api(),
             None,
             None,
-            false,
+            // Dithering. The chrome's glow strip ramps across 280 points with
+            // only about twenty 8-bit steps in it, which is one step every
+            // dozen pixels or so — visible banding, and this is the mechanism
+            // egui ships to break it up.
+            true,
         );
 
         let settings = settings::load();
