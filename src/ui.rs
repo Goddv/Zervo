@@ -89,9 +89,6 @@ pub struct UiOutput {
     /// True while a page-initiated dialog or menu is up; the chrome owns the
     /// pointer over the content area for as long as it is.
     pub controls_open: bool,
-    /// Window-space rect of the autohide sidebar while it is revealed.
-    /// Pointer events over it must not be forwarded to the webview.
-    pub chrome_overlay: Option<egui::Rect>,
     /// True while an ambient animation is on screen (aurora new-tab page):
     /// the caller schedules ~30fps timed wakes instead of the idle cadence.
     pub ambient: bool,
@@ -174,7 +171,9 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         Some(TabKind::Settings | TabKind::NewTab | TabKind::Downloads | TabKind::History)
     );
 
-    let chrome_overlay = draw_sidebar_peek(root, chrome, &mut actions, peek);
+    // Whether it is showing no longer needs reporting: egui is asked directly
+    // which layer the pointer is over.
+    let _ = draw_sidebar_peek(root, chrome, &mut actions, peek);
 
     // Page-initiated UI last, over everything else it might overlap.
     let origin = chrome
@@ -194,7 +193,6 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         content_rect,
         settings_open,
         controls_open,
-        chrome_overlay,
         ambient,
     }
 }
@@ -1122,7 +1120,6 @@ fn draw_favourites_card(
         card.min,
         vec2(card.width(), (card.height() * grow).max(1.0)),
     );
-    let settled = grow > 0.98;
 
     let palette = chrome.palette;
     let favourites: Vec<(String, String)> = chrome
@@ -1140,9 +1137,6 @@ fn draw_favourites_card(
         .order(egui::Order::Foreground)
         .fixed_pos(drawn.min)
         .constrain(false)
-        // Not interactive until it has arrived: a growing card under the
-        // pointer steals clicks meant for what is behind it.
-        .interactable(settled)
         .show(&ctx, |ui| {
             ui.set_clip_rect(drawn);
             let painter = ui.painter();
@@ -1156,11 +1150,6 @@ fn draw_favourites_card(
                 Stroke::new(1.0_f32, palette.border),
                 StrokeKind::Inside,
             );
-            if !settled {
-                ui.advance_cursor_after_rect(drawn);
-                return;
-            }
-
             // ── Header: what this is, and how to show it.
             let header =
                 Rect::from_min_size(card.min + vec2(12.0, 8.0), vec2(card.width() - 24.0, 20.0));
