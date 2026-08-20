@@ -178,15 +178,25 @@ impl Credit {
 #[derive(Clone, Copy)]
 pub struct View<'a> {
     pub texture: Option<&'a egui::TextureHandle>,
+    /// The blurred copy, handed to the palette so every surface over the
+    /// picture is frosted against it.
+    pub frost: Option<&'a egui::TextureHandle>,
     pub credit: &'a Credit,
     pub error: Option<&'a str>,
     pub loading: bool,
 }
 
+/// A decoded wallpaper: the picture, and a blurred copy of it.
+pub struct Decoded {
+    pub sharp: egui::ColorImage,
+    /// What every glass surface drawn over the picture frosts itself against.
+    pub frost: egui::ColorImage,
+}
+
 /// What the fetch thread hands back.
 struct Fetched {
     credit: Credit,
-    image: egui::ColorImage,
+    image: Decoded,
     /// Where the bytes were cached, so the next launch has a picture before
     /// the network does anything.
     cached: Option<PathBuf>,
@@ -196,7 +206,7 @@ struct Fetched {
 pub struct Wallpaper {
     credit: Credit,
     /// The decoded picture, waiting for the main thread to make it a texture.
-    pending: Option<egui::ColorImage>,
+    pending: Option<Decoded>,
     inbox: Option<Receiver<Result<Fetched, String>>>,
     fetched_at: Option<SystemTime>,
     /// What went wrong last time, shown in the settings rather than swallowed.
@@ -304,7 +314,7 @@ impl Wallpaper {
 
     /// Take the decoded picture, for the caller to upload as a texture. The
     /// upload needs an egui context, which is why this module does not do it.
-    pub fn take_image(&mut self) -> Option<egui::ColorImage> {
+    pub fn take_image(&mut self) -> Option<Decoded> {
         self.pending.take()
     }
 }
@@ -317,6 +327,19 @@ const WANT_WIDTH: u32 = 1920;
 /// The longest side a texture is allowed. Beyond this the extra detail costs
 /// video memory and buys nothing at window sizes.
 const MAX_SIDE: u32 = 2048;
+/// The longest side of the blurred copy the chrome frosts itself against.
+///
+/// Small on purpose. It is about to be blurred past the point where any of
+/// that detail survives, and the card drawn on top scales it back up — where
+/// the texture sampler's own bilinear filtering smooths it further, for free.
+/// Storing it at full size would be storing a megabyte of information that has
+/// already been thrown away.
+const FROST_SIDE: u32 = 360;
+/// How far the frost is blurred, in pixels of the small copy. At this size it
+/// is equivalent to about a sixty-pixel blur of the original. The material's,
+/// since how frosted frosted glass is is a property of the material and not of
+/// the fetcher — this thread simply has no palette to ask.
+const FROST_BLUR: f32 = crate::theme::Material::GLASS.blur;
 /// A picture this large is a mistake somewhere.
 const MAX_BYTES: usize = 24 * 1024 * 1024;
 /// Metadata is small; a megabyte of it is not metadata.
@@ -492,26 +515,42 @@ fn finish(credit: Credit, bytes: &[u8], from: &str) -> Result<Fetched, String> {
 /// Decode and downscale, both on this thread. A six-megapixel photograph is
 /// several hundred milliseconds of work; doing it where the frames are drawn
 /// would be a visible stall for something nobody asked to wait for.
-fn decode(bytes: &[u8]) -> Result<egui::ColorImage, String> {
+fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     let decoded = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
     let (width, height) = (decoded.width().max(1), decoded.height().max(1));
-    let longest = width.max(height);
-    let decoded = if longest > MAX_SIDE {
-        let scale = MAX_SIDE as f32 / longest as f32;
-        decoded.resize(
+    let fit = |longest_allowed: u32| {
+        let longest = width.max(height);
+        let scale = (longest_allowed as f32 / longest as f32).min(1.0);
+        (
             ((width as f32 * scale) as u32).max(1),
             ((height as f32 * scale) as u32).max(1),
-            image::imageops::FilterType::CatmullRom,
         )
-    } else {
-        decoded
     };
-    let rgba = decoded.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    if size[0] == 0 || size[1] == 0 {
-        return Err("the picture has no pixels".to_owned());
-    }
-    Ok(egui::ColorImage::from_rgba_unmultiplied(size, &rgba))
+
+    let (sharp_w, sharp_h) = fit(MAX_SIDE);
+    let sharp = if sharp_w < width || sharp_h < height {
+        decoded.resize_exact(sharp_w, sharp_h, image::imageops::FilterType::CatmullRom)
+    } else {
+        decoded.clone()
+    };
+
+    // The blurred copy, from the original rather than from the downscaled one:
+    // going straight to a small size with a decent filter is most of the blur
+    // already, and doing it in one step is both faster and cleaner than
+    // blurring two thousand pixels.
+    let (frost_w, frost_h) = fit(FROST_SIDE);
+    let small = decoded
+        .resize_exact(frost_w, frost_h, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+    let blurred = image::imageops::fast_blur(&small, FROST_BLUR);
+
+    let as_image = |rgba: image::RgbaImage| {
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        (size[0] > 0 && size[1] > 0).then(|| egui::ColorImage::from_rgba_unmultiplied(size, &rgba))
+    };
+    let sharp = as_image(sharp.to_rgba8()).ok_or("the picture has no pixels")?;
+    let frost = as_image(blurred).ok_or("the picture has no pixels")?;
+    Ok(Decoded { sharp, frost })
 }
 
 // ── The cache on disk ──────────────────────────────────────────────────────

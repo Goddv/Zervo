@@ -11,8 +11,9 @@ use egui::{
 use crate::glass;
 use crate::theme::{self, Palette};
 
-/// Row height shared by every control, so stacked settings line up.
-const ROW_HEIGHT: f32 = 30.0;
+/// Row height shared by every control, so stacked settings line up. The
+/// material's, so a theme that wants roomier controls says so once.
+const ROW_HEIGHT: f32 = crate::theme::Material::GLASS.row_height;
 
 /// An iOS-style switch with a label. Returns true when toggled.
 pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str, palette: &Palette) -> bool {

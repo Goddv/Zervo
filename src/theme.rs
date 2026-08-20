@@ -3,7 +3,7 @@
 //! is set to Auto). Icon and text colors always derive from the active
 //! palette, so glyphs compose correctly on both light and dark chrome.
 
-use egui::{Color32, Context, CornerRadius, Margin, Shadow, Stroke, Vec2};
+use egui::{Color32, Context, CornerRadius, Margin, Rect, Shadow, Stroke, TextureId, Vec2, pos2};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +70,173 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
+/// A picture behind the chrome, already blurred, for glass surfaces to frost.
+///
+/// egui cannot blur what is behind a shape while it draws it, and nothing here
+/// needs it to. The only thing ever behind the chrome is a wallpaper, which is
+/// a still image — so it is blurred once, when it is decoded, and the material
+/// samples that blurred copy through the same mapping the sharp one is drawn
+/// with. What comes out is a real backdrop blur rather than an impression of
+/// one, and it costs nothing per frame.
+#[derive(Clone, Copy)]
+pub struct Frost {
+    /// A blurred copy of the picture. Small: it is blurred, so there is no
+    /// detail left in it to be worth storing at size.
+    pub texture: TextureId,
+    /// Where the sharp picture is drawn, in screen points.
+    pub rect: Rect,
+    /// The part of the picture that `rect` shows — the same window the sharp
+    /// one uses, so the blur underneath a card lines up with the photograph
+    /// beside it.
+    pub uv: Rect,
+}
+
+/// The corner-radius tier every rounded thing in Zervo picks from.
+///
+/// Sizes, not numbers. A card is a card whatever the material thinks a card's
+/// corners should look like, so a call site names the tier and the material
+/// decides — which is what makes a square-cornered Fluent theme or a heavily
+/// rounded Material 3 one a change to six values rather than to eighty call
+/// sites.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tier {
+    /// Progress tracks, the bar's grabber — things a couple of points tall.
+    Hairline,
+    /// Small hit targets, up to about twenty-four points.
+    Control,
+    /// Rows, ghost-button hovers, tab rows. The commonest by far.
+    Row,
+    /// Ordinary cards: settings sections, widgets, menus, tiles.
+    Card,
+    /// Page-sized surfaces, and the floating content card.
+    Panel,
+    /// Search boxes and anything else that reads as a pill.
+    Pill,
+}
+
+/// What each tier comes to, in points.
+#[derive(Clone, Copy)]
+pub struct Radii {
+    pub hairline: u8,
+    pub control: u8,
+    pub row: u8,
+    pub card: u8,
+    pub panel: u8,
+    pub pill: u8,
+}
+
+impl Radii {
+    pub const fn of(&self, tier: Tier) -> u8 {
+        match tier {
+            Tier::Hairline => self.hairline,
+            Tier::Control => self.control,
+            Tier::Row => self.row,
+            Tier::Card => self.card,
+            Tier::Panel => self.panel,
+            Tier::Pill => self.pill,
+        }
+    }
+}
+
+/// What Zervo's surfaces are made of.
+///
+/// A theme is a palette and a material: the palette says what colour things
+/// are, the material says how they are built. Every surface the chrome draws
+/// asks the material rather than deciding for itself, so a new material is a
+/// new look for the whole application and nothing else has to change — the
+/// same cards, the same rows, the same dialogs, built to a different recipe.
+///
+/// This is the seam a Fluent, GTK, Qt or Material 3 theme would be written
+/// against. None of the numbers below are glass-specific: a material with
+/// `frosts: false`, no sheen, a heavier edge and square corners is a flat
+/// desktop toolkit, and the code that draws the chrome does not change.
+#[derive(Clone, Copy)]
+pub struct Material {
+    pub name: &'static str,
+
+    // ── What a surface is filled with
+    /// How much of a surface's own colour it carries at rest, and how much
+    /// more at full strength.
+    pub fill: f32,
+    pub fill_strength: f32,
+    /// The same pair over a blurred backdrop, where the fill is a tint on the
+    /// blur rather than a substitute for it.
+    pub frosted_fill: f32,
+    pub frosted_fill_strength: f32,
+    /// The white sheen laid over the fill, out of 255, in the dark theme and
+    /// the light one. Zero for a material that does not do glassiness.
+    pub sheen_dark: f32,
+    pub sheen_light: f32,
+
+    // ── Its edge
+    /// The hairline along a surface's edge, out of 255, dark and light.
+    pub edge_dark: f32,
+    pub edge_light: f32,
+
+    // ── How far off the page it sits
+    pub lift_dark: f32,
+    pub lift_light: f32,
+    /// How far a shadow reaches: a fixed part, plus a share of the radius.
+    pub shadow_reach: f32,
+    pub shadow_reach_radius: f32,
+    /// The accent halo behind a focused surface, and how far it reaches.
+    pub glow: f32,
+    pub glow_reach: f32,
+
+    // ── Whether it frosts what is behind it
+    pub frosts: bool,
+    /// How far a backdrop is blurred before anything is frosted against it,
+    /// in pixels of the small copy that is kept for the purpose.
+    pub blur: f32,
+
+    // ── Shape and metrics
+    pub radius: Radii,
+    /// The height of a settings row, a menu row, a list row.
+    pub row_height: f32,
+    /// Padding inside a button, and the gap between stacked controls.
+    pub control_padding: Vec2,
+    pub item_spacing: Vec2,
+    /// How long a hover, a selection or a fade takes to settle.
+    pub animation: f32,
+}
+
+impl Material {
+    /// Zervo's own: layered translucency, a hairline edge, a soft shadow, and
+    /// a real blur of whatever is behind.
+    pub const GLASS: Material = Material {
+        name: "Glass",
+        fill: 0.55,
+        fill_strength: 0.4,
+        frosted_fill: 0.58,
+        frosted_fill_strength: 0.16,
+        sheen_dark: 9.0,
+        sheen_light: 24.0,
+        edge_dark: 26.0,
+        edge_light: 120.0,
+        lift_dark: 0.55,
+        lift_light: 0.8,
+        shadow_reach: 4.0,
+        shadow_reach_radius: 0.45,
+        glow: 0.32,
+        glow_reach: 8.0,
+        frosts: true,
+        blur: 10.0,
+        radius: Radii {
+            hairline: 2,
+            control: 7,
+            row: 8,
+            card: 10,
+            panel: 12,
+            pill: 14,
+        },
+        row_height: 30.0,
+        control_padding: Vec2::new(9.0, 5.0),
+        item_spacing: Vec2::new(8.0, 5.0),
+        // The default 0.1s reads as flicker; glass should settle, not pop.
+        animation: 0.14,
+    };
+}
+
 /// Cross one palette into another.
 ///
 /// `mix` is for opaque tints and drops alpha on the floor; `shadow` carries
@@ -101,6 +268,11 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         // Not a colour and not part of the theme, so it does not cross over —
         // it is whatever the setting says, on both sides of the fade.
         card_opacity: b.card_opacity,
+        frost: b.frost,
+        // Not a colour either. A crossfade between two *materials* would mean
+        // interpolating corner radii and metrics, which is a different and
+        // much larger idea than fading two palettes into each other.
+        material: b.material,
     }
 }
 
@@ -111,6 +283,70 @@ impl Palette {
     /// NaN is possible — the value is deserialised from settings.json — and it
     /// would reach `Color32::gamma_multiply`, which debug-asserts on a
     /// non-finite factor and would then panic once per surface per frame.
+    /// How round a surface of this size is, per the material.
+    ///
+    /// The way to spell a corner radius. A number written at a call site is a
+    /// number a theme cannot change.
+    pub fn radius(&self, tier: Tier) -> u8 {
+        self.material.radius.of(tier)
+    }
+
+    /// Put a blurred backdrop behind every glass surface that sits on it.
+    ///
+    /// Scoped by the caller rather than global: the wallpaper is behind the
+    /// content area and nothing else, so the sidebar must not be frosted
+    /// against a picture that is not behind it.
+    pub fn with_frost(mut self, frost: Option<Frost>) -> Self {
+        self.frost = frost;
+        self
+    }
+
+    /// The part of the frosted backdrop that `rect` covers, if it covers any.
+    ///
+    /// A surface frosts only when it sits wholly inside the picture. One
+    /// hanging off an edge would sample past the texture, and clamped
+    /// sampling smears the last row of pixels down the overhang — which looks
+    /// far worse than not frosting it at all.
+    pub fn frost_behind(&self, rect: Rect) -> Option<(TextureId, Rect)> {
+        let frost = self.frost?;
+        let page = frost.rect;
+        if page.width() <= 0.0 || page.height() <= 0.0 {
+            return None;
+        }
+        if rect.min.x < page.min.x
+            || rect.min.y < page.min.y
+            || rect.max.x > page.max.x
+            || rect.max.y > page.max.y
+        {
+            return None;
+        }
+        let across = |value: f32, low: f32, high: f32, from: f32, to: f32| {
+            from + (to - from) * ((value - low) / (high - low))
+        };
+        let map = |point: egui::Pos2| {
+            pos2(
+                across(
+                    point.x,
+                    page.min.x,
+                    page.max.x,
+                    frost.uv.min.x,
+                    frost.uv.max.x,
+                ),
+                across(
+                    point.y,
+                    page.min.y,
+                    page.max.y,
+                    frost.uv.min.y,
+                    frost.uv.max.y,
+                ),
+            )
+        };
+        Some((
+            frost.texture,
+            Rect::from_min_max(map(rect.min), map(rect.max)),
+        ))
+    }
+
     pub fn with_card_opacity(mut self, opacity: f32) -> Self {
         self.card_opacity = if opacity.is_finite() {
             opacity.clamp(0.0, 1.0)
@@ -159,6 +395,18 @@ pub struct Palette {
     /// and main.rs stamps the setting on, the same way `dark` is a fact about
     /// the theme rather than a colour.
     pub card_opacity: f32,
+    /// What surfaces are made of: corner radii, fills, edges, shadows, the
+    /// lot. See [`Material`].
+    pub material: Material,
+    /// What is behind the chrome, blurred, if anything is.
+    ///
+    /// Here for the same reason `card_opacity` is: frosted glass is the
+    /// material every surface in Zervo is made of, so the thing it frosts has
+    /// to reach every surface without nine call sites being edited to pass it.
+    /// A caller draws something behind the chrome, hands the palette a blurred
+    /// copy of it, and every card, pill and menu drawn on top is frosted
+    /// against it — with no change at the call site at all.
+    pub frost: Option<Frost>,
 }
 
 // Colour architecture inspired by Zen Browser's public design tokens: the chrome is neutral gray bases
@@ -168,7 +416,7 @@ pub struct Palette {
 
 /// Corner radius of the floating web-content card, in points.
 /// Largest element gets the largest radius in the size-tiered system.
-pub const CONTENT_RADIUS: f32 = 12.0;
+pub const CONTENT_RADIUS: f32 = Material::GLASS.radius.panel as f32;
 /// Gap between the chrome panels and the web-content card, in points.
 pub const CONTENT_MARGIN: f32 = 8.0;
 
@@ -213,17 +461,6 @@ pub fn page_veil(palette: &Palette, amount: f32) -> Color32 {
     )
 }
 
-/// What a card is backed with. Over a photograph it is the page's own base, so
-/// the card sits on the same material as the veil; over the chrome it is the
-/// window background, as everywhere else.
-pub fn card_backing(palette: &Palette, over_photo: bool) -> Color32 {
-    if over_photo {
-        mix(page_base(palette), palette.surface, 0.35)
-    } else {
-        palette.bg
-    }
-}
-
 pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palette {
     let dark = match mode {
         ThemeMode::Dark => true,
@@ -244,6 +481,8 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
             card_opacity: 1.0,
+            material: Material::GLASS,
+            frost: None,
         }
     } else {
         Palette {
@@ -258,6 +497,8 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             border: Color32::from_rgb(204, 204, 204),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
             card_opacity: 1.0,
+            material: Material::GLASS,
+            frost: None,
         }
     };
     // The active-tab tint follows the accent.
@@ -268,11 +509,16 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
 pub fn apply(ctx: &Context, palette: &Palette) {
     let mut style = (*ctx.global_style()).clone();
 
-    style.spacing.item_spacing = Vec2::new(8.0, 5.0);
-    style.spacing.button_padding = Vec2::new(9.0, 5.0);
-    style.spacing.window_margin = Margin::same(8);
-    // The default 0.1s reads as flicker; glass should settle, not pop.
-    style.animation_time = 0.14;
+    // egui's own widgets — buttons, combo boxes, tooltips, the scrollbars —
+    // are styled from the material too, so a theme that changes what a control
+    // looks like changes the stock ones with it rather than leaving them
+    // looking like a different application bolted on.
+    let material = &palette.material;
+    style.spacing.item_spacing = material.item_spacing;
+    style.spacing.button_padding = material.control_padding;
+    style.spacing.window_margin = Margin::same(material.radius.row as i8);
+    // egui's default 0.1s reads as flicker; a surface should settle, not pop.
+    style.animation_time = material.animation;
 
     let visuals = &mut style.visuals;
     *visuals = if palette.dark {
@@ -306,7 +552,7 @@ pub fn apply(ctx: &Context, palette: &Palette) {
     };
     visuals.popup_shadow = visuals.window_shadow;
 
-    let rounding = CornerRadius::same(8);
+    let rounding = CornerRadius::same(material.radius.row);
     for widget in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,

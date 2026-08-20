@@ -4926,6 +4926,14 @@ fn settings_about(ui: &mut Ui, palette: &Palette) {
                 .size(12.0)
                 .color(palette.text_muted),
         );
+        ui.label(
+            RichText::new(format!(
+                "Material: {} — corner radii, fills, edges and shadows all come from it.",
+                palette.material.name
+            ))
+            .size(12.0)
+            .color(palette.text_muted),
+        );
     });
 }
 

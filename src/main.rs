@@ -164,10 +164,12 @@ struct RunningApp {
     /// The new tab page's photograph: where it comes from, and what is known
     /// about the one currently up.
     wallpaper: wallpaper::Wallpaper,
-    /// The uploaded texture for it. Held here rather than in the manager
-    /// because making one needs an egui context, and the manager runs on a
-    /// thread that has none.
+    /// The uploaded textures for it: the picture, and the blurred copy every
+    /// glass surface over it is frosted against. Held here rather than in the
+    /// manager because making one needs an egui context, and the manager runs
+    /// on a thread that has none.
     wallpaper_texture: Option<egui::TextureHandle>,
+    wallpaper_frost: Option<egui::TextureHandle>,
     /// Retained frosted-glass backdrop, kept so its material can be retuned.
     #[cfg(target_os = "macos")]
     _vibrancy: Option<vibrancy::Vibrancy>,
@@ -336,6 +338,7 @@ impl ApplicationHandler<WakerEvent> for App {
             downloads: downloads::DownloadManager::default(),
             wallpaper,
             wallpaper_texture: None,
+            wallpaper_frost: None,
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
         });
@@ -811,8 +814,16 @@ impl RunningApp {
             // minification of a photograph is what makes one shimmer.
             self.wallpaper_texture = Some(self.egui_glow.egui_ctx.load_texture(
                 "zervo-wallpaper",
-                image,
+                image.sharp,
                 egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
+            ));
+            // The frost is the other way round: a small picture magnified,
+            // where plain bilinear filtering is exactly what is wanted, since
+            // smoothing between its pixels is more blur.
+            self.wallpaper_frost = Some(self.egui_glow.egui_ctx.load_texture(
+                "zervo-wallpaper-frost",
+                image.frost,
+                egui::TextureOptions::LINEAR,
             ));
         }
         if self.settings.new_tab_background == settings::NewTabBackground::Photo
@@ -849,6 +860,7 @@ impl RunningApp {
         let favicons = std::mem::take(&mut self.favicons);
         let wallpaper = wallpaper::View {
             texture: self.wallpaper_texture.as_ref(),
+            frost: self.wallpaper_frost.as_ref(),
             credit: self.wallpaper.credit(),
             error: self.wallpaper.error.as_deref(),
             loading: self.wallpaper.is_loading(),
@@ -1005,10 +1017,19 @@ impl RunningApp {
                 let Ok(url) = Url::parse(&address) else {
                     return;
                 };
-                // zervo:// URLs are internal pages, never engine loads.
+                // zervo:// URLs are internal pages, never engine loads. All
+                // four of them: every one is shown in the address bar, so
+                // every one has to be something you can type back into it.
+                // History and the new tab page both used to open Settings.
                 if url.scheme() == "zervo" {
-                    if url.as_str().contains("downloads") {
+                    let page = url.as_str();
+                    if page.contains("downloads") {
                         self.apply_action(UiAction::OpenDownloads);
+                    } else if page.contains("history") {
+                        self.apply_action(UiAction::OpenHistory);
+                    } else if page.contains("newtab") {
+                        let workspace = state.browser.borrow().active_workspace;
+                        self.apply_action(UiAction::NewTab { workspace });
                     } else {
                         self.apply_action(UiAction::OpenSettings);
                     }
