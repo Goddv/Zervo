@@ -187,6 +187,8 @@ pub struct Settings {
     /// float over a web page or a photograph ignore it, because a modal you
     /// cannot see is a fault rather than a look.
     pub card_opacity: f32,
+    /// Trackpad swipes bound to chrome actions.
+    pub gestures: crate::gestures::Gestures,
 
     // ── New tab page widgets.
     pub newtab_clock: bool,
@@ -231,6 +233,7 @@ impl Default for Settings {
             content_border: true,
             chrome_opacity: 0.85,
             card_opacity: 1.0,
+            gestures: crate::gestures::Gestures::default(),
             newtab_clock: true,
             newtab_greeting: true,
             newtab_quick_links: true,

@@ -18,6 +18,7 @@ mod app;
 mod controls;
 mod dashboard;
 mod downloads;
+mod gestures;
 mod glass;
 mod icons;
 mod keyboard;
@@ -110,6 +111,8 @@ struct RunningApp {
     content_rect_points: egui::Rect,
     /// A page-initiated dialog or menu is up.
     controls_open: bool,
+    /// Accumulates scroll events into trackpad swipes.
+    swipe: gestures::Recognizer,
     /// The pointer went down on the chrome, so the chrome keeps it until the
     /// button comes back up — even once it has travelled out over the page.
     ///
@@ -298,6 +301,7 @@ impl ApplicationHandler<WakerEvent> for App {
             webview_relative_mouse: Cell::new(Point2D::zero()),
             content_rect_points: egui::Rect::ZERO,
             controls_open: false,
+            swipe: gestures::Recognizer::default(),
             chrome_holds_pointer: false,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
@@ -437,6 +441,35 @@ impl RunningApp {
         ) {
             self.chrome_holds_pointer = false;
         }
+        if let WindowEvent::MouseWheel { delta, phase, .. } = &event
+            && self.settings.gestures.enabled
+        {
+            let step = match delta {
+                MouseScrollDelta::LineDelta(dx, dy) => egui::vec2(dx * 38.0, dy * 38.0),
+                MouseScrollDelta::PixelDelta(pixels) => {
+                    egui::vec2(pixels.x as f32, pixels.y as f32)
+                },
+            };
+            // Fed in points, so the thresholds mean the same thing on a
+            // Retina display as anywhere else.
+            let scale = self.egui_glow.egui_ctx.pixels_per_point().max(0.1);
+            if let Some(direction) =
+                self.swipe
+                    .feed(step / scale, *phase, std::time::Instant::now())
+            {
+                // Up and down are scrolling everywhere except the strip above
+                // the page, which has nothing to scroll.
+                let vertical_ok = cursor_points.y < self.content_rect_points.min.y;
+                let horizontal = matches!(
+                    direction,
+                    gestures::Direction::Left | gestures::Direction::Right
+                );
+                if horizontal || vertical_ok {
+                    self.apply_gesture(self.settings.gestures.action(direction));
+                }
+            }
+        }
+
         let over_content = pointer_on_page && !self.chrome_holds_pointer;
         if matches!(
             &event,
@@ -1282,6 +1315,47 @@ impl RunningApp {
 
     /// The palette to paint with — the target one, or a point on the way to it
     /// while a theme change is crossing over.
+    /// Run a bound swipe. Dispatched from the event handler rather than from a
+    /// frame, so unlike every other caller of these actions it has to ask for
+    /// the repaint itself.
+    fn apply_gesture(&mut self, action: gestures::GestureAction) {
+        use gestures::GestureAction as Action;
+        let state = self.state.clone();
+        match action {
+            Action::None => return,
+            Action::Back => self.apply_action(ui::UiAction::Back),
+            Action::Forward => self.apply_action(ui::UiAction::Forward),
+            Action::ToggleSidebar => self.apply_action(ui::UiAction::ToggleSidebar),
+            Action::NewTab => {
+                let workspace = state.browser.borrow().active_workspace;
+                self.apply_action(ui::UiAction::NewTab { workspace });
+            },
+            Action::NextWorkspace | Action::PreviousWorkspace => {
+                let mut browser = state.browser.borrow_mut();
+                let count = browser.workspaces.len();
+                if count > 1 {
+                    let step = if matches!(action, Action::NextWorkspace) {
+                        1
+                    } else {
+                        count - 1
+                    };
+                    browser.active_workspace = (browser.active_workspace + step) % count;
+                }
+            },
+            Action::ToggleShelf => {
+                let uncovered = ui::shelf_uncovered_height(&self.settings.navbar_widgets);
+                self.settings.navbar_height =
+                    if self.settings.navbar_height > ui::NAVBAR_DEFAULT_HEIGHT + 10.0 {
+                        ui::NAVBAR_DEFAULT_HEIGHT
+                    } else {
+                        uncovered
+                    };
+                self.settings.save();
+            },
+        }
+        state.window.request_redraw();
+    }
+
     /// A provisional name for a group made from two tabs.
     ///
     /// Their shared host if they have one, since grouping two pages from the
