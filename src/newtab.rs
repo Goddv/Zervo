@@ -307,11 +307,12 @@ pub fn draw(
     // frosts itself against it — the cards, the search box, the header pills,
     // and anything anyone adds later — without one of them being told to.
     let restore = chrome.palette;
-    if let (Some(uv), Some(frost)) = (painted, chrome.wallpaper.frost) {
-        chrome.palette = chrome.palette.with_frost(Some(theme::Frost {
+    if let (Some((uv, arrival)), Some(frost)) = (painted, chrome.wallpaper.frost) {
+        chrome.palette = chrome.palette.with_backdrop(Some(theme::Backdrop {
             texture: frost.id(),
             rect: content_rect,
             uv,
+            alpha: arrival,
         }));
     }
     if !over_photo {
@@ -467,20 +468,33 @@ fn paint_photo(
     content_rect: Rect,
     radius: CornerRadius,
     ambient: &mut bool,
-) -> Option<Rect> {
+) -> Option<(Rect, f32)> {
     let texture = chrome.wallpaper.texture?;
     let palette = chrome.palette;
     // Fade in, keyed on the texture: a new picture appearing all at once is
     // the one moment this page draws attention to itself.
-    let fade = glass::ease_out(root.ctx().animate_bool_with_time(
-        Id::new("zervo_newtab_photo").with(texture.id()),
-        true,
-        0.5,
-    ));
+    // Fading in, keyed on a *stable* id with the texture as the trigger.
+    // Keying the animation on `texture.id()` reads better and does nothing at
+    // all: epaint never reuses a texture id, and egui hands back the target
+    // value immediately for an id it has not seen before — so every wallpaper
+    // arrived at full strength on its first frame and none of them ever faded.
+    let seen = Id::new("zervo_newtab_photo");
+    let ramp = seen.with("fade");
+    let ctx = root.ctx();
+    if ctx.data(|data| data.get_temp::<egui::TextureId>(seen)) != Some(texture.id()) {
+        ctx.data_mut(|data| data.insert_temp(seen, texture.id()));
+        ctx.animate_value_with_time(ramp, 0.0, 0.0);
+    }
+    let fade = glass::ease_out(ctx.animate_value_with_time(ramp, 1.0, 0.5));
+    // Asked for before the early return, not after. On the first frame of a
+    // new picture the ramp is at exactly zero, and returning without setting
+    // this meant nothing scheduled the repaint that would have advanced it —
+    // so the fade did not merely fail to run, the wallpaper never appeared at
+    // all. A frame that draws nothing still has to ask for the next one.
+    *ambient |= fade < 1.0;
     if fade <= 0.0 {
         return None;
     }
-    *ambient |= fade < 1.0;
 
     // The picture is fitted to the page at its *full* height and then cropped
     // as the widget shelf takes space off the top, rather than refitted to
@@ -550,7 +564,7 @@ fn paint_photo(
     };
     scrim(HEADER * 3.4, dim * 0.75, true);
     scrim(CREDIT * 6.0, dim * 0.65, false);
-    Some(uv)
+    Some((uv, fade))
 }
 
 /// The uv rectangle that makes an image cover `target` without distorting it,

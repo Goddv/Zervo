@@ -47,6 +47,15 @@ the sharp one is drawn with. A caller puts a picture behind the chrome, hands
 the palette a blurred copy of it, and every card, pill and menu on top is
 frosted against it — with no change at any call site at all.
 
+A surface frosts over the part of it that is actually on the picture, rather
+than only when all of it is. Asking for the whole surface is the obvious rule
+and the wrong one: a card scrolled half off the top of the page, or carried
+past its edge under the pointer, would stop frosting all at once — and since
+the fill recipe follows the frost, it would not merely lose its blur, it would
+change material between one frame and the next. It is the overlap now, so it
+degrades continuously, and the first automated tests in the repository cover
+the four directions a surface can hang off an edge in.
+
 ### The new tab page
 
 **It is a dashboard, and you lay it out.** The old page was a column down the
@@ -134,6 +143,15 @@ own furniture — the tab rows, the address bar, the settings sections — which
 are not cards in the sense the setting means.
 
 ### Fixes, mostly to things that looked finished and were not
+
+**The wallpaper never appeared at all in some cases, and never faded in in
+any of them.** The fade-in was keyed on the texture's own id, and epaint never
+reuses one — so egui, asked to animate an id it had not seen, returned the
+finished value immediately and every picture arrived at full strength. The
+worse half was underneath: when the ramp did start at zero, the page returned
+early without asking for another frame, so nothing advanced it and the
+wallpaper stayed invisible for the life of the tab. A frame that draws nothing
+still has to ask for the next one.
 
 **Two of the four internal pages could not be typed in.** Every one of them
 shows its address in the address bar — `zervo://settings`, `zervo://newtab`,
