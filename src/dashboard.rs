@@ -613,14 +613,15 @@ fn draw_resize_handle(root: &mut Ui, palette: &Palette, rect: Rect) {
 
 /// Whether the pointer is over whichever menu is up, so a press elsewhere can
 /// dismiss it.
-fn over_menu(ctx: &egui::Context) -> bool {
+pub fn over_menu(ctx: &egui::Context) -> bool {
     ctx.data(|data| data.get_temp::<Rect>(Id::new("zervo_menu_rect")))
         .zip(ctx.input(|input| input.pointer.interact_pos()))
         .is_some_and(|(rect, pos)| rect.contains(pos))
 }
 
-/// A floating list, used for both menus.
-fn menu<T: Copy>(
+/// A floating list, used for every menu the chrome draws itself: the shelf's
+/// two, and the new tab page's.
+pub fn menu<T: Copy>(
     root: &mut Ui,
     palette: &Palette,
     id: &str,

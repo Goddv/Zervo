@@ -14,8 +14,36 @@ engine bump or a chrome change, walk this list.
       Changing one does not make the chrome or the page jolt.
 - [ ] Theme: Auto/Light/Dark switch cleanly, including the titlebar; accent
       colours retint the chrome; pages see `prefers-color-scheme`.
-- [ ] New tab page: each of the seven backgrounds; animated ones do not pin
+- [ ] New tab page: each of the eight backdrops; the animated ones do not pin
       the CPU when the window is idle.
+
+## New tab page
+- [ ] Customise: cards gain an edge, a drag mark, a ✕ and a resize corner;
+      Done puts them back. Outside edit mode a card's own links and buttons
+      work and the card does not move.
+- [ ] Drag a card by its middle and by a far corner: it follows the pointer
+      from the point it was grabbed, not from its centre, and lands where the
+      outline says.
+- [ ] Resize from the corner by whole cells; the preview matches the result.
+- [ ] Add card: every kind can be added, lands somewhere free, and shows an
+      empty state rather than a blank rectangle when it has nothing.
+- [ ] Reset restores the default arrangement.
+- [ ] Shrink the window until the grid gives way to the compact clock and
+      search box, and widen it again.
+- [ ] Fill more rows than fit: the page scrolls, and a card scrolled off the
+      top does not spill over the header.
+- [ ] Two cards of the same kind side by side: no egui "widget ID" banner.
+- [ ] Wallpaper → each source fetches; the credit line names the picture, the
+      photographer and the licence, and clicking it opens the source page.
+- [ ] Wallpaper → Choose a file… takes a local picture.
+- [ ] Pull the network cable and shuffle: the page keeps its backdrop and
+      Settings → Wallpaper says what failed.
+- [ ] With a photograph up, collapse the sidebar and drag the bar taller: the
+      picture does not rescale, and drifts down more slowly than the page.
+- [ ] Over a bright photograph in the light theme: the header pills, the
+      credit line and every card are readable, and no card has a bright rim
+      along its underside.
+- [ ] The note and the to-do list survive a restart.
 
 ## Navigation bar (sidebar collapsed)
 - [ ] The address pill stays centred on the window as it is resized, and drags

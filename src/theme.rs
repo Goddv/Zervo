@@ -186,6 +186,44 @@ pub fn workspace_color(index: usize) -> Color32 {
     WORKSPACE_COLORS[index % WORKSPACE_COLORS.len()]
 }
 
+/// The base the new tab page is painted on: deeper than the chrome in the dark
+/// theme, airier in the light one. The page is the one surface with nothing
+/// behind it, so it can afford to be further from the chrome than a panel can.
+pub fn page_base(palette: &Palette) -> Color32 {
+    if palette.dark {
+        mix(palette.bg, Color32::BLACK, 0.35)
+    } else {
+        mix(palette.bg, Color32::WHITE, 0.45)
+    }
+}
+
+/// The veil laid over a photograph, at `amount` of its full strength.
+///
+/// The same colour as the page itself, so a wallpaper reads as the page seen
+/// through frosted glass rather than as a picture with a grey sheet on it.
+/// Some veil is always there: a card has to be legible on a snowfield as well
+/// as on a night sky, and no photograph is worth an unreadable page.
+pub fn page_veil(palette: &Palette, amount: f32) -> Color32 {
+    let base = page_base(palette);
+    Color32::from_rgba_unmultiplied(
+        base.r(),
+        base.g(),
+        base.b(),
+        (amount.clamp(0.0, 1.0) * 255.0) as u8,
+    )
+}
+
+/// What a card is backed with. Over a photograph it is the page's own base, so
+/// the card sits on the same material as the veil; over the chrome it is the
+/// window background, as everywhere else.
+pub fn card_backing(palette: &Palette, over_photo: bool) -> Color32 {
+    if over_photo {
+        mix(page_base(palette), palette.surface, 0.35)
+    } else {
+        palette.bg
+    }
+}
+
 pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palette {
     let dark = match mode {
         ThemeMode::Dark => true,

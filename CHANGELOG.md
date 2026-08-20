@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+A new tab page you arrange yourself, tabs you can drag, trackpad swipes,
+and fixes to things that looked finished and were not.
+
+### The new tab page
+
+**It is a dashboard, and you lay it out.** The old page was a column down the
+middle — a clock, a greeting, a mark, a search box, a row of pinned tabs — and
+five checkboxes in Settings to turn each of them off. Everything is a card on a
+twelve-column grid now: drag one where you want it, drag its corner to resize
+it by whole cells, and take it off with the ✕. Press **Customise** in the
+page's header to arrange it and **Done** when you have finished; outside edit
+mode the cards are ordinary, so clicking a link opens it rather than picking
+the card up.
+
+Dragging only works in edit mode on purpose. A page where every card is always
+draggable has to guess whether a press on a link meant *open that* or *pick
+this up*, and it guesses wrong often enough to be worse than a button.
+
+Twelve columns, always. The cells narrow with the window rather than the grid
+losing columns, so a card at column nine is at column nine in any window and an
+arrangement survives a resize. If you fill more rows than the window shows, the
+page scrolls.
+
+**Thirteen kinds of card**, and most of them show something the browser already
+knew: your pinned tabs, the sites you visit most, what you looked at recently,
+your favourites, your downloads, your workspaces, and what the page is playing.
+The rest are a search box, a clock, world clocks, the Zervo mark, a note, and a
+to-do list. Every one of them has something to say when it is empty, because a
+blank rectangle looks broken and "nothing here yet" does not.
+
+**Wallpapers, from places that let you have them.** The page can put a
+photograph behind the cards, fetched from Wikimedia Commons' picture of the day
+— a day picked at random out of the last ten years, so it is the archive rather
+than today's — or from Openverse, searched for one of eight subjects. Neither
+wants an account, both publish under licences that allow this, and you can
+point it at a file of your own instead. Change it manually, once a launch,
+hourly or daily.
+
+The credit line along the bottom is not decoration. Most of what comes back is
+CC BY or CC BY-SA, which are licences with a condition attached, so the title,
+the photographer and the licence travel with the picture and are drawn with it.
+Clicking it opens the page it came from. There is no setting to turn it off.
+
+Fetching, decoding and downscaling all happen on a thread of their own — a
+wallpaper is never worth stalling a frame for — and the last one is cached
+beside your settings, so a launch has something to show before the network has
+said anything.
+
+**The photograph holds still when the widget shelf opens.** Dragging the
+navigation bar taller takes space off the top of the page. Refitting the
+picture to what is left rescales it on every frame of the drag, which reads as
+the wallpaper breathing; it is cropped instead, and allowed to drift down at
+half the rate the page does, so the shelf reads as a bar sliding over a
+wallpaper behind it rather than the whole page moving as one sheet.
+
+**A veil at the edges rather than over everything.** The two things on the page
+not drawn inside a card — the header controls and the credit line — sit at the
+top and bottom edges, and a veil strong enough to carry white text everywhere
+is strong enough to throw the photograph away. Only the strips holding text are
+darkened, so the middle of the picture survives. The four header controls sit
+on small pills of their own besides, because a bare word on somebody else's
+photograph is a control nobody can find.
+
+**A note and a to-do list**, kept in the library beside your favourites rather
+than in your settings, because they are your writing and not your preferences.
+
+**World clocks that know about summer time.** Pick cities in Settings › Layout;
+each face reads its zone from the compiled-in IANA table, so London says BST in
+August without anyone maintaining it.
+
 **Tabs move.** Drag one up or down its list to reorder it, or into another
 workspace entirely — the page comes with it, still loaded, rather than being
 closed and reopened. Drop a tab *onto* another instead of between two and the
@@ -22,6 +92,21 @@ own furniture — the tab rows, the address bar, the settings sections — which
 are not cards in the sense the setting means.
 
 ### Fixes, mostly to things that looked finished and were not
+
+**Cards had a bright rim along their underside.** The glass material offsets a
+card's shadow a point and a half downwards, and then extrudes the shadow
+*outwards* from that offset outline — which left the strip between the outline
+and the card's real bottom edge painted by neither. Over the chrome that is
+invisible: the gap shows the same grey the shadow was darkening. Over the new
+tab page's wallpaper it was a bright crescent hugging the bottom of every card.
+The outline is inset past the offset now, so it sits on or inside the edge the
+whole way round and the card covers whatever tucks underneath.
+
+**The extensions button had somebody else's icon.** It drew the sliders glyph,
+with a comment explaining that Phosphor's puzzle piece "is not in the vendored
+subset". The vendored font is the complete Phosphor regular face — 1544 glyphs
+— and the puzzle piece was in it all along; the subset the comment meant was
+the list of constants, not the font.
 
 **Overlays swallow their own clicks.** The favourites card, the downloads card
 and anything else floating over a page relied on a hand-maintained list of

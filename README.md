@@ -40,8 +40,12 @@ so some sites will not work. See [Limitations](#limitations).
   list; history is searchable and grouped by how long ago.
 - **Saved logins**, kept in the system keychain rather than in Zervo's own files.
 - **Frosted chrome.** Real macOS vibrancy behind an adjustable-opacity chrome.
-- **A new tab page** with seven backgrounds (three animated) and toggleable
-  widgets — clock, greeting, quick links, search.
+- **A new tab page you arrange.** Thirteen kinds of card on a twelve-column
+  grid — clock, world clocks, search, pinned tabs, most-visited, recent,
+  favourites, downloads, now playing, a note, a to-do list, workspaces, the
+  mark. Press Customise to drag, resize and remove them. Behind them, either
+  one of seven generated backdrops (three animated) or a photograph fetched
+  from Wikimedia Commons or Openverse, credited as its licence asks.
 - **Themed.** Light/dark/auto following the system, five accent colours that
   retint the whole chrome, and the accent is propagated into the engine so
   pages see the matching `prefers-color-scheme`.

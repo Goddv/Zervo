@@ -83,6 +83,8 @@ pub enum NewTabPage {
 /// Background treatment of the zervo://newtab page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NewTabBackground {
+    /// A photograph, from whichever source `wallpaper_source` names.
+    Photo,
     /// Slow ambient drift of accent-tinted light blobs.
     Aurora,
     /// Flowing sine bands.
@@ -99,7 +101,8 @@ pub enum NewTabBackground {
 }
 
 impl NewTabBackground {
-    pub const ALL: [NewTabBackground; 7] = [
+    pub const ALL: [NewTabBackground; 8] = [
+        NewTabBackground::Photo,
         NewTabBackground::Aurora,
         NewTabBackground::Waves,
         NewTabBackground::Particles,
@@ -111,6 +114,7 @@ impl NewTabBackground {
 
     pub fn label(&self) -> &'static str {
         match self {
+            NewTabBackground::Photo => "Photo",
             NewTabBackground::Aurora => "Aurora",
             NewTabBackground::Waves => "Waves",
             NewTabBackground::Particles => "Particles",
@@ -190,15 +194,22 @@ pub struct Settings {
     /// Trackpad swipes bound to chrome actions.
     pub gestures: crate::gestures::Gestures,
 
-    // ── New tab page widgets.
-    pub newtab_clock: bool,
-    pub newtab_greeting: bool,
-    /// Pinned tabs shown as shortcut tiles on the new tab page.
-    pub newtab_quick_links: bool,
-    pub newtab_search: bool,
-    pub newtab_logo: bool,
+    // ── The new tab page.
+    /// The cards on the page, and where each one sits. Arranged by dragging
+    /// them rather than set here, which is why there is no list of toggles.
+    pub newtab_tiles: Vec<crate::newtab::Tile>,
+    /// The cities on the world-clocks card.
+    pub newtab_world_clocks: Vec<crate::newtab::Zone>,
     /// Overrides the time-of-day greeting when non-empty.
     pub newtab_message: String,
+    /// Where the page's photograph comes from.
+    pub wallpaper_source: crate::wallpaper::Source,
+    /// How often a new one is fetched.
+    pub wallpaper_cadence: crate::wallpaper::Cadence,
+    /// How far the photograph is veiled so the cards read on it, 0..=1. Never
+    /// zero: a card on a bright photograph with no veil under it cannot be
+    /// read, whatever the photograph.
+    pub wallpaper_dim: f32,
 
     /// Dock icon variant.
     pub app_icon: AppIcon,
@@ -234,12 +245,12 @@ impl Default for Settings {
             chrome_opacity: 0.85,
             card_opacity: 1.0,
             gestures: crate::gestures::Gestures::default(),
-            newtab_clock: true,
-            newtab_greeting: true,
-            newtab_quick_links: true,
-            newtab_search: true,
-            newtab_logo: true,
+            newtab_tiles: crate::newtab::Tile::defaults(),
+            newtab_world_clocks: crate::newtab::Zone::defaults(),
             newtab_message: String::new(),
+            wallpaper_source: crate::wallpaper::Source::Commons,
+            wallpaper_cadence: crate::wallpaper::Cadence::Daily,
+            wallpaper_dim: 0.55,
             app_icon: AppIcon::Default,
         }
     }
