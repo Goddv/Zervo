@@ -93,15 +93,6 @@ are not cards in the sense the setting means.
 
 ### Fixes, mostly to things that looked finished and were not
 
-**Cards had a bright rim along their underside.** The glass material offsets a
-card's shadow a point and a half downwards, and then extrudes the shadow
-*outwards* from that offset outline — which left the strip between the outline
-and the card's real bottom edge painted by neither. Over the chrome that is
-invisible: the gap shows the same grey the shadow was darkening. Over the new
-tab page's wallpaper it was a bright crescent hugging the bottom of every card.
-The outline is inset past the offset now, so it sits on or inside the edge the
-whole way round and the card covers whatever tucks underneath.
-
 **The extensions button had somebody else's icon.** It drew the sliders glyph,
 with a comment explaining that Phosphor's puzzle piece "is not in the vendored
 subset". The vendored font is the complete Phosphor regular face — 1544 glyphs
