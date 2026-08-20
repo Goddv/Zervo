@@ -2,7 +2,26 @@
 
 ## Unreleased
 
-Fixes, mostly to things that looked finished and were not.
+**Tabs move.** Drag one up or down its list to reorder it, or into another
+workspace entirely — the page comes with it, still loaded, rather than being
+closed and reopened. Drop a tab *onto* another instead of between two and the
+pair become a workspace of their own, which opens asking what to call it. It
+guesses at the two tabs' shared host first, since grouping two pages from the
+same site is the common case.
+
+**Trackpad swipes**, bound in Settings to back, forward, the sidebar, the
+widget shelf, the next or previous workspace, or a new tab. A quick straight
+flick is a gesture; a slow or wandering one is a scroll and is left alone.
+Two-finger vertical is only read over the bar above the page, because
+everywhere else it is how you scroll.
+
+**Card opacity**, a second slider beside chrome opacity. It reaches the
+favourites and downloads cards, the widget shelf and the new tab page's cards,
+and it goes all the way to nothing. It deliberately does not reach the chrome's
+own furniture — the tab rows, the address bar, the settings sections — which
+are not cards in the sense the setting means.
+
+### Fixes, mostly to things that looked finished and were not
 
 **Overlays swallow their own clicks.** The favourites card, the downloads card
 and anything else floating over a page relied on a hand-maintained list of
