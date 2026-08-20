@@ -387,10 +387,16 @@ impl Ink {
         }
     }
 
-    /// Draw text, lifted off a photograph by a shadow when there is one. A
-    /// white caption on a picture that turns out to be a snowfield is
-    /// unreadable otherwise, and no veil strong enough to fix that leaves the
-    /// picture worth having.
+    /// Draw text, lifted off a photograph by a halo when there is one.
+    ///
+    /// A white caption on a picture that turns out to be a beach in sunlight
+    /// is unreadable otherwise, and no veil strong enough to fix that leaves
+    /// the picture worth having. A single offset shadow is not enough either:
+    /// at one pixel it vanishes under a sixty-point clock, and at the size
+    /// that clock needs it stops reading as a shadow and starts reading as a
+    /// second, blurry clock. Four diagonal passes scaled to the type size make
+    /// a halo instead, which is what the text actually wants — and there are
+    /// only ever a handful of strings on this page drawn outside a card.
     fn write(
         &self,
         painter: &egui::Painter,
@@ -402,13 +408,31 @@ impl Ink {
     ) {
         let text = text.to_string();
         if self.photo {
-            painter.text(
-                pos + vec2(0.0, 1.0),
-                align,
-                &text,
-                font.clone(),
-                Color32::from_black_alpha(150),
-            );
+            let spread = (font.size * 0.045).clamp(1.0, 2.5);
+            // Eight points rather than four, each fainter. Four corners at
+            // full strength stack into a hard ring that reads as an outline
+            // around the letters; eight overlapping at a third of the alpha
+            // build up near the glyph and thin out from it, which is a halo.
+            let halo = Color32::from_black_alpha(58);
+            const COMPASS: [(f32, f32); 8] = [
+                (0.0, -1.0),
+                (0.7, -0.7),
+                (1.0, 0.0),
+                (0.7, 0.7),
+                (0.0, 1.0),
+                (-0.7, 0.7),
+                (-1.0, 0.0),
+                (-0.7, -0.7),
+            ];
+            for (x, y) in COMPASS {
+                painter.text(
+                    pos + vec2(x * spread, y * spread),
+                    align,
+                    &text,
+                    font.clone(),
+                    halo,
+                );
+            }
         }
         painter.text(pos, align, text, font, color);
     }
@@ -715,6 +739,10 @@ fn header_button(
 
     // No shadow: four of these sit shoulder to shoulder, and a drop shadow
     // each would bleed onto the neighbour.
+    // No `fades()`: these pills exist for one reason, which is that the four
+    // controls have to be readable on somebody else's photograph. Letting the
+    // card-opacity setting thin them away puts back the exact bug they were
+    // added to fix, and they are buttons rather than cards besides.
     let mut material = Glass::new(9)
         .strength(0.7 + 0.3 * hover.max(on))
         .no_shadow()
@@ -1313,7 +1341,7 @@ fn draw_tile(
     // when it needs an edge to be grabbed by.
     let framed = !tile.card.bare() || editing;
     if framed && tile.card != Card::Search {
-        let material = if carried {
+        let mut material = if carried {
             Glass::new(10)
         } else if editing {
             Glass::new(10)
@@ -1323,6 +1351,16 @@ fn draw_tile(
             Glass::new(10).strength(if ink.photo { 0.95 } else { 0.85 })
         }
         .opaque(theme::card_backing(&palette, ink.photo));
+        // The card-opacity setting reaches these: they are the page's cards,
+        // and thinning them — over a photograph especially — is the point of
+        // the setting. Not while the page is being arranged, though: the edge
+        // that says where a card ends is part of this material, and arranging
+        // cards whose edges have been turned off is arranging nothing. Edit
+        // mode is a state you are in for a moment, not one the browser is
+        // left sitting in, so nothing about the resting page changes here.
+        if !carried && !editing {
+            material = material.fades();
+        }
         area.painter()
             .extend(glass::shapes(rect, &palette, material));
     }
@@ -1457,6 +1495,9 @@ fn draw_search(
         Glass::new((height * 0.3) as u8)
             .strength(1.0)
             .glow(focus)
+            // No `fades()`: it is a text field, not a card, and a text field
+            // nobody can find is not one. The history search field is solid
+            // for exactly this reason.
             .opaque(backing),
     );
     icons::draw_icon(
