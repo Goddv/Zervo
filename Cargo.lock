@@ -11030,7 +11030,7 @@ dependencies = [
 
 [[package]]
 name = "zervo"
-version = "0.3.3"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "chrono-tz",

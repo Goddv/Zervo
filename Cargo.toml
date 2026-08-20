@@ -1,6 +1,6 @@
 [package]
 name = "zervo"
-version = "0.3.3"
+version = "0.3.5"
 edition = "2024"
 rust-version = "1.97"
 license = "MPL-2.0"
