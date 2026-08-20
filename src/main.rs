@@ -1074,6 +1074,22 @@ impl RunningApp {
                     downloads::open_file(&item.path);
                 }
             },
+            UiAction::ResetLayout => {
+                let settings = &mut self.settings;
+                settings.navbar_left = ui::NavItem::default_left();
+                settings.navbar_right = ui::NavItem::default_right();
+                settings.navbar_widgets = dashboard::Placed::defaults();
+                settings.navbar_height = ui::NAVBAR_DEFAULT_HEIGHT;
+                settings.address_pill_width = ui::ADDRESS_PILL_DEFAULT_WIDTH;
+                settings.sidebar_width = ui::SIDEBAR_DEFAULT_WIDTH;
+                settings.save();
+                // egui remembers the panel's width itself, and would otherwise
+                // keep the old one until the next launch.
+                self.egui_glow.egui_ctx.data_mut(|data| {
+                    data.remove::<egui::PanelState>(egui::Id::new(ui::SIDEBAR_ID))
+                });
+                state.window.request_redraw();
+            },
             UiAction::RestartDownload(id) => {
                 // Servo has no "fetch this again" call, so the way to start a
                 // download over is to ask for the URL again — which is how it
