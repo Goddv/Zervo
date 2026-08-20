@@ -51,6 +51,32 @@ Internal pages (`zervo://settings`, `zervo://newtab`, `zervo://downloads`) are
 tabs with no `WebView` at all; they are drawn by egui in the content rect, and
 the blit is skipped.
 
+## Materials
+
+`theme.rs` resolves a `Palette` — what colour things are — and carries a
+`Material`, which is how they are built: fill, sheen, edge, lift, shadow reach,
+glow, whether surfaces frost, and the corner-radius tier along with the row
+height, control padding and animation time. `glass::shapes` reads all of it
+from the palette it is already handed, so a material reaches every surface in
+the application without a signature changing anywhere.
+
+Corner radii are named — `Tier::{Hairline, Control, Row, Card, Panel, Pill}` —
+and the material says what each comes to. `Glass::tier(Tier::Card)` is how to
+ask; `Glass::new(10)` is still there for the few radii derived from something
+else. `theme::apply` feeds egui's own widget styling from the same material.
+
+This is the seam a theme for another platform is written against. A material
+with `frosts: false`, no sheen, a heavier edge and square corners is a flat
+desktop toolkit, and none of the drawing code changes.
+
+Frosting is the one part that needs something from outside: egui cannot blur a
+shape's backdrop as it draws it. It does not have to — the only thing ever
+behind the chrome is a still image, so a caller that draws one hands the
+palette a pre-blurred copy (`Palette::with_frost`) and every glass surface
+inside it samples that copy through the same mapping the sharp one uses. It is
+scoped to the caller rather than global, because a wallpaper is behind the
+content area and not behind the sidebar.
+
 ## The new tab page
 
 `newtab.rs` draws it: cards on a twelve-column grid, arranged by dragging them
