@@ -4,11 +4,13 @@
 
 **One glass setting, not two.** Chrome opacity has gone as a separate control:
 it and the material setting were two answers to the same question, and keeping
-them in agreement was your job. The three steps drive both. **Frosted** is
-calibrated to what the chrome has always looked like — the value its slider
-defaulted to — now applied to everything the material draws rather than to the
-window alone; **Solid** takes the translucency away entirely; **Sheer** goes
-further than the chrome ever has, but only as far as text still reads.
+them in agreement was your job. The three steps drive both, and they are
+pitched against the range that slider offered rather than against the value it
+happened to default to: **Frosted** is the frosted-glass window Zervo is for,
+with the desktop legible behind it, now applied to everything the material
+draws rather than to the window alone; **Sheer** takes that as far as it goes
+while a sidebar is still a surface rather than a hole; **Solid** is for anyone
+who never wanted any of it.
 
 **Blur levels did not reach the pixels.** They were baked at a radius that ran
 to a fifth of the blurred copy's own width, where the passes reach past the
