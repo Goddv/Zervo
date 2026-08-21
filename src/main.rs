@@ -1034,6 +1034,7 @@ impl RunningApp {
                 !output.settings_open,
                 settings.top_glow,
                 settings.content_border,
+                settings.content_shadow,
                 palette.chrome_tint(),
             );
 

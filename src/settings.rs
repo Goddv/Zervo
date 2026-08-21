@@ -181,6 +181,13 @@ pub struct Settings {
     pub top_glow: f32,
     /// Accent-tinted outline around the web content card.
     pub content_border: bool,
+    /// A soft shadow around the content card.
+    ///
+    /// Off by default. The card fills nearly the whole window, so its shadow
+    /// falls on the few points of chrome around it and reads as a dark seam
+    /// tracing the edge rather than as depth — but that depends on how big the
+    /// window is and what is behind it, so it is a choice rather than a rule.
+    pub content_shadow: bool,
     /// How much comes through every surface the material draws — the cards,
     /// the menus, the shelf, the new tab page. One setting for the whole
     /// application rather than one per group of things.
@@ -242,6 +249,7 @@ impl Default for Settings {
             downloads_auto: true,
             top_glow: 1.0,
             content_border: true,
+            content_shadow: false,
             translucency: crate::theme::Translucency::Frosted,
             gestures: crate::gestures::Gestures::default(),
             newtab_tiles: crate::newtab::Tile::defaults(),

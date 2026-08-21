@@ -656,6 +656,10 @@ fn draw_header(
     actions: &mut Vec<UiAction>,
 ) {
     let palette = chrome.palette;
+    // On the photograph, not on a card, so it follows the photograph — the
+    // same rule the cards use, applied to the two strings that are not in one.
+    let header_ink = ink.over(&palette, header, false);
+    let ink = &header_ink;
     ink.write(
         root.painter(),
         pos2(header.min.x, header.center().y),
@@ -1015,13 +1019,14 @@ fn draw_credit(
         clickable && response.hovered(),
         0.12,
     ));
-    ink.write(
+    let credit_ink = ink.over(&chrome.palette, hit, false);
+    credit_ink.write(
         root.painter(),
         pos2(hit.min.x, hit.center().y),
         Align2::LEFT_CENTER,
         &line,
         font,
-        theme::mix(ink.muted, ink.text, hover),
+        theme::mix(credit_ink.muted, credit_ink.text, hover),
     );
     if clickable
         && response

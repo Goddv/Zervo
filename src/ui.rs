@@ -432,6 +432,22 @@ fn paint_card_opacity_blend(
 /// The masks are oversized by a pixel so no sliver of the square blit can
 /// peek out at fractional DPI. `mask_corners` is false for internal pages
 /// whose fill is already rounded — masking there double-paints the corners.
+/// A soft shadow hugging the content card.
+///
+/// `Outside`, unlike every other surface: what is inside this silhouette is
+/// the web page, blitted pixel for pixel, and a feather row drawn over it
+/// leaves a dark fringe around the whole page.
+fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: &Palette) {
+    painter.add(glass::shadow(
+        rect,
+        radius,
+        palette.shadow.gamma_multiply(0.9),
+        9.0,
+        glass::Inner::Outside,
+    ));
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn finish_content_frame(
     root: &Ui,
     content_rect: Rect,
@@ -439,6 +455,7 @@ pub fn finish_content_frame(
     mask_corners: bool,
     top_glow: f32,
     border: bool,
+    shadow: bool,
     chrome_opacity: f32,
 ) {
     let painter = root.ctx().layer_painter(egui::LayerId::background());
@@ -558,11 +575,10 @@ pub fn finish_content_frame(
         }
     }
 
-    // No drop shadow. The card fills nearly the whole window, so its shadow
-    // only ever fell on the few points of chrome around it — a dark seam
-    // tracing the edge rather than any impression of depth, and one more thing
-    // between the page and the window's own edge. The accent stroke below is
-    // the whole boundary now.
+    // Drawn AFTER the corner masks: filling it beforehand works on internal
+    // pages but not on web pages, where the blit wipes the square content rect
+    // and leaves unshadowed patches in the corners.
+    // Opacity blend first, so the shadow lies on top of it.
     paint_card_opacity_blend(
         root,
         &painter,
@@ -572,6 +588,10 @@ pub fn finish_content_frame(
         top_glow,
         chrome_opacity,
     );
+    if shadow {
+        paint_card_shadow(&painter, content_rect, radius, palette);
+    }
+
     // Flat: a single accent-tinted edge all the way around the card — no
     // white rim light, no highlights. It also antialiases the corner masks,
     // whose mesh triangles have hard edges.
@@ -4320,6 +4340,21 @@ fn settings_appearance(
         }
         ui.label(
             RichText::new("Accent-tinted edge framing the web page.")
+                .size(11.5)
+                .color(palette.text_muted),
+        );
+        ui.add_space(10.0);
+
+        if widgets::toggle(
+            ui,
+            &mut chrome.settings.content_shadow,
+            "Shadow around content",
+            palette,
+        ) {
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.label(
+            RichText::new("Depth under the card. On a window this size it mostly traces the edge.")
                 .size(11.5)
                 .color(palette.text_muted),
         );
