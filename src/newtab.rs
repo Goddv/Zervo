@@ -649,7 +649,7 @@ fn draw_header(
         root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
     }
     if root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true) {
-        let rows: Vec<(String, Card, bool)> = Card::ALL
+        let rows: Vec<crate::dashboard::Row<Card>> = Card::ALL
             .iter()
             .map(|card| {
                 let already = chrome
@@ -657,7 +657,7 @@ fn draw_header(
                     .newtab_tiles
                     .iter()
                     .any(|tile| tile.card == *card);
-                (card.label().to_owned(), *card, already)
+                crate::dashboard::Row::Item(card.label().to_owned(), *card, already)
             })
             .collect();
         match crate::dashboard::menu(
@@ -691,11 +691,11 @@ fn draw_header(
         Icon::Mountains,
         // Never lit. It opens a menu; it is not a state. Tinting it because a
         // photograph happens to be up made it read as a button stuck down.
-        "Wallpaper",
+        "Backdrop",
         false,
     );
-    let wallpaper_anchor = wallpaper.rect;
-    draw_wallpaper_menu(root, chrome, wallpaper_anchor, &wallpaper, actions);
+    let backdrop_anchor = wallpaper.rect;
+    draw_backdrop_menu(root, chrome, backdrop_anchor, &wallpaper, actions);
 
     if editing {
         let reset = header_button(
@@ -797,16 +797,24 @@ fn header_button(
     response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// The wallpaper control's menu: shuffle, a source, a file, or off.
-fn draw_wallpaper_menu(
+/// Everything that can go behind the page, in one menu.
+///
+/// It lives here rather than in Settings because it is a decision about *this*
+/// page, taken while looking at it. Choosing a backdrop from another window
+/// and coming back to see what it did is two steps and a memory test.
+fn draw_backdrop_menu(
     root: &mut Ui,
     chrome: &mut ChromeContext,
     anchor: Rect,
     trigger: &egui::Response,
     actions: &mut Vec<UiAction>,
 ) {
+    use crate::dashboard::Row;
+    use crate::settings::NewTabBackground;
+    use crate::wallpaper::{Source, Subject};
+
     let palette = chrome.palette;
-    let menu_id = Id::new("zervo_newtab_wallpaper_open");
+    let menu_id = Id::new("zervo_newtab_backdrop_open");
     if trigger.clicked() {
         let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
         root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
@@ -815,65 +823,95 @@ fn draw_wallpaper_menu(
         return;
     }
 
-    use crate::wallpaper::{Source, Subject};
     #[derive(Clone, Copy, PartialEq)]
     enum Pick {
-        Shuffle,
+        Generated(NewTabBackground),
         Commons,
         Subject(Subject),
         File,
-        Off,
+        Shuffle,
     }
+
+    let background = chrome.settings.new_tab_background;
+    let photo = background == NewTabBackground::Photo;
     let source = &chrome.settings.wallpaper_source;
-    let mut rows: Vec<(String, Pick, bool)> = vec![
-        ("Another picture".to_owned(), Pick::Shuffle, false),
-        (
-            "Commons picture of the day".to_owned(),
-            Pick::Commons,
-            *source == Source::Commons,
-        ),
-    ];
+    let generated = |kind: NewTabBackground| {
+        Row::Item(
+            kind.label().to_owned(),
+            Pick::Generated(kind),
+            background == kind,
+        )
+    };
+
+    // Grouped off the variants themselves rather than off a list written out
+    // here, so a backdrop added later turns up in the right group without
+    // anyone remembering to add it to two places.
+    let mut rows: Vec<Row<Pick>> = vec![Row::Heading("Static")];
+    rows.extend(
+        NewTabBackground::ALL
+            .into_iter()
+            .filter(|kind| !kind.animated() && *kind != NewTabBackground::Photo)
+            .map(generated),
+    );
+    rows.push(Row::Heading("Animated"));
+    rows.extend(
+        NewTabBackground::ALL
+            .into_iter()
+            .filter(|kind| kind.animated())
+            .map(generated),
+    );
+    rows.push(Row::Heading("Wallpaper provider"));
+    rows.push(Row::Item(
+        "Commons picture of the day".to_owned(),
+        Pick::Commons,
+        photo && *source == Source::Commons,
+    ));
     rows.extend(Subject::ALL.iter().map(|subject| {
-        (
+        Row::Item(
             format!("Openverse — {}", subject.label().to_lowercase()),
             Pick::Subject(*subject),
-            *source == Source::Openverse(*subject),
+            photo && *source == Source::Openverse(*subject),
         )
     }));
-    rows.push((
+    rows.push(Row::Item(
         "Choose a file…".to_owned(),
         Pick::File,
-        matches!(source, Source::File(_)),
+        photo && matches!(source, Source::File(_)),
     ));
-    rows.push(("No photograph".to_owned(), Pick::Off, false));
+    if photo {
+        rows.push(Row::Heading("Now"));
+        rows.push(Row::Item(
+            "Another picture".to_owned(),
+            Pick::Shuffle,
+            false,
+        ));
+    }
 
     match crate::dashboard::menu(
         root,
         &palette,
-        "zervo_newtab_wallpaper_menu",
+        "zervo_newtab_backdrop_menu",
         anchor,
-        250.0,
+        260.0,
         &rows,
     ) {
         Some(pick) => {
             root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
             match pick {
-                Pick::Shuffle => actions.push(UiAction::ShuffleWallpaper),
+                Pick::Generated(kind) => {
+                    chrome.settings.new_tab_background = kind;
+                    actions.push(UiAction::PersistSettings);
+                },
                 Pick::Commons => {
                     chrome.settings.wallpaper_source = Source::Commons;
-                    chrome.settings.new_tab_background = crate::settings::NewTabBackground::Photo;
                     actions.push(UiAction::ShuffleWallpaper);
                 },
                 Pick::Subject(subject) => {
                     chrome.settings.wallpaper_source = Source::Openverse(subject);
-                    chrome.settings.new_tab_background = crate::settings::NewTabBackground::Photo;
                     actions.push(UiAction::ShuffleWallpaper);
                 },
                 Pick::File => actions.push(UiAction::PickWallpaper),
-                Pick::Off => {
-                    chrome.settings.new_tab_background = crate::settings::NewTabBackground::Aurora;
-                    actions.push(UiAction::PersistSettings);
-                },
+                Pick::Shuffle => actions.push(UiAction::ShuffleWallpaper),
             }
         },
         None if root.input(|input| input.pointer.any_pressed())
@@ -1370,7 +1408,7 @@ fn draw_tile(
     // when it needs an edge to be grabbed by.
     let framed = !tile.card.bare() || editing;
     if framed && tile.card != Card::Search {
-        let mut material = if carried {
+        let material = if carried {
             Glass::tier(Tier::Card)
         } else if editing {
             Glass::tier(Tier::Card)
@@ -1380,16 +1418,6 @@ fn draw_tile(
             Glass::tier(Tier::Card).strength(if ink.photo { 0.95 } else { 0.85 })
         }
         .opaque(palette.bg);
-        // The card-opacity setting reaches these: they are the page's cards,
-        // and thinning them — over a photograph especially — is the point of
-        // the setting. Not while the page is being arranged, though: the edge
-        // that says where a card ends is part of this material, and arranging
-        // cards whose edges have been turned off is arranging nothing. Edit
-        // mode is a state you are in for a moment, not one the browser is
-        // left sitting in, so nothing about the resting page changes here.
-        if !carried && !editing {
-            material = material.fades();
-        }
         area.painter()
             .extend(glass::shapes(rect, &palette, material));
     }

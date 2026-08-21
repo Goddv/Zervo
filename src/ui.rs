@@ -16,7 +16,7 @@ use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
 use crate::settings::{AppIcon, NewTabBackground, NewTabPage, SearchEngine, Settings};
 use crate::state::{BrowserState, TabId, TabKind};
-use crate::theme::{self, AccentColor, Palette, ThemeMode};
+use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier};
 use crate::widgets;
 
 #[derive(Debug)]
@@ -1036,7 +1036,7 @@ fn draw_history_page(
 
     // ── Search.
     let field = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(420.0), 32.0));
-    glass::paint(ui.painter(), field, &palette, Glass::new(9));
+    glass::paint(ui.painter(), field, &palette, Glass::tier(Tier::Card));
     icons::draw_icon(
         ui.painter(),
         Rect::from_center_size(pos2(field.min.x + 16.0, field.center().y), vec2(14.0, 14.0)),
@@ -1253,7 +1253,7 @@ fn hover_card(
             // tight to the card scissors it off with a hard rectangle and
             // leaves a square-cornered wedge of shadow outside each rounded
             // corner — the second corner that kept showing up in screenshots.
-            ui.set_clip_rect(drawn.expand(glass::room(12)));
+            ui.set_clip_rect(drawn.expand(glass::room(palette.radius(Tier::Panel))));
             let painter = ui.painter();
             // Drawn at `drawn`, not `card`: while it grows it is a whole
             // rounded card of its current height, rather than a full-height
@@ -1261,12 +1261,9 @@ fn hover_card(
             for shape in glass::shapes(
                 drawn,
                 palette,
-                Glass::new(12)
+                Glass::tier(Tier::Panel)
                     .opaque(palette.bg)
-                    .border(palette.border)
-                    // The favourites and downloads cards are cards in the
-                    // sense the setting means.
-                    .fades(),
+                    .border(palette.border),
             ) {
                 painter.add(shape);
             }
@@ -1306,7 +1303,9 @@ fn popup_menu<T: Clone>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::new(10).opaque(palette.bg).border(palette.border),
+                Glass::tier(Tier::Card)
+                    .opaque(palette.bg)
+                    .border(palette.border),
             ) {
                 painter.add(shape);
             }
@@ -1951,6 +1950,16 @@ pub fn display_name<'a>(title: &'a str, url: &'a str) -> &'a str {
         .unwrap_or(url)
 }
 
+/// Whether a colour is light enough that a mark on it wants to be dark.
+///
+/// Rec. 601 luma, which is close enough for deciding between black and white
+/// and is what everything else that has to make this call uses.
+fn color_is_light(color: egui::Color32) -> bool {
+    let luma =
+        0.299 * f32::from(color.r()) + 0.587 * f32::from(color.g()) + 0.114 * f32::from(color.b());
+    luma > 140.0
+}
+
 /// Stands in for a favicon, which is not stored anywhere yet.
 pub fn initial(title: &str, url: &str) -> String {
     display_name(title, url)
@@ -2448,7 +2457,7 @@ fn draw_navbar_config(
         .fixed_pos(tray.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            for shape in glass::shapes(tray, &palette, Glass::new(10).opaque(palette.bg)) {
+            for shape in glass::shapes(tray, &palette, Glass::tier(Tier::Card).opaque(palette.bg)) {
                 ui.painter().add(shape);
             }
             ui.painter().text(
@@ -3024,7 +3033,7 @@ fn draw_essentials_grid(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut V
                     ui.painter(),
                     rect,
                     &palette,
-                    Glass::new(10)
+                    Glass::tier(Tier::Card)
                         .strength(0.55 + 0.45 * hover_t.max(sel_t))
                         .glow(0.5 * sel_t)
                         .no_shadow(),
@@ -3082,7 +3091,6 @@ fn draw_essentials_grid(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut V
     ui.add_space(4.0);
 }
 
-#[expect(clippy::too_many_arguments)]
 /// What the user did to a workspace's name this frame.
 enum WorkspaceName {
     Typing(String),
@@ -3090,6 +3098,7 @@ enum WorkspaceName {
     Discard,
 }
 
+#[expect(clippy::too_many_arguments)]
 fn workspace_header(
     ui: &mut Ui,
     index: usize,
@@ -3264,7 +3273,7 @@ fn paint_tab_ghost(
     for shape in glass::shapes(
         rect,
         palette,
-        Glass::new(8)
+        Glass::tier(Tier::Row)
             .tint(palette.active)
             // It travels over the web page, so nothing shows through it.
             .opaque(palette.bg),
@@ -3391,7 +3400,7 @@ fn tab_row(
             painter,
             rect,
             palette,
-            Glass::new(8)
+            Glass::tier(Tier::Row)
                 .strength(select_t * 0.8)
                 .glow(select_t * 0.35)
                 .tint(palette.active)
@@ -3480,7 +3489,7 @@ fn tab_row(
                 ui.painter(),
                 rect,
                 palette,
-                Glass::new(8)
+                Glass::tier(Tier::Row)
                     .tint(palette.accent)
                     .strength(0.55)
                     .no_shadow(),
@@ -3841,7 +3850,7 @@ fn draw_downloads_page(
                             ui.painter(),
                             rect,
                             &palette,
-                            Glass::new(10).strength(0.7).no_shadow(),
+                            Glass::tier(Tier::Card).strength(0.7).no_shadow(),
                         );
 
                         let icon_rect = Rect::from_center_size(
@@ -4152,24 +4161,94 @@ fn settings_appearance(
         );
     });
 
-    settings_section(ui, palette, "Accent color", |ui| {
+    settings_section(ui, palette, "Accent colour", |ui| {
+        // A swatch, drawn the same way whether it is a preset or the reader's
+        // own: one row of circles, one of which happens to open a picker.
+        let swatch = |ui: &mut Ui, color: egui::Color32, selected: bool, custom: bool| {
+            let (rect, response) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+            let centre = rect.center();
+            let t = ui.ctx().animate_bool(response.id, selected);
+            ui.painter().circle_filled(centre, 10.0 + 2.0 * t, color);
+            if custom {
+                // A ring, so the one that opens a picker does not read as
+                // simply another colour to choose.
+                ui.painter().circle_stroke(
+                    centre,
+                    10.0 + 2.0 * t,
+                    Stroke::new(1.5_f32, palette.bg),
+                );
+                icons::draw_icon(
+                    ui.painter(),
+                    Rect::from_center_size(centre, vec2(11.0, 11.0)),
+                    Icon::Pencil,
+                    if color_is_light(color) {
+                        egui::Color32::from_black_alpha(150)
+                    } else {
+                        egui::Color32::from_white_alpha(200)
+                    },
+                );
+            }
+            if t > 0.0 {
+                ui.painter()
+                    .circle_stroke(centre, 14.0, Stroke::new(1.5 + 0.5 * t, palette.text));
+            }
+            response
+        };
+
         ui.horizontal(|ui| {
-            for accent in AccentColor::ALL {
+            // ── The reader's own, first.
+            let custom_selected = matches!(chrome.settings.accent, AccentColor::Custom(..));
+            let mut rgb = chrome.settings.accent.rgb(palette.dark);
+            let response = swatch(
+                ui,
+                egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                custom_selected,
+                true,
+            );
+            let picker = Id::new("zervo_accent_picker");
+            if response
+                .clone()
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .on_hover_text("Mix your own")
+                .clicked()
+            {
+                // Opening it also selects it, seeded from whatever is in force
+                // — so the picker opens on the colour being replaced rather
+                // than on an arbitrary one.
+                chrome.settings.accent = AccentColor::Custom(rgb[0], rgb[1], rgb[2]);
+                actions.push(UiAction::SettingsChanged);
+                let open = ui.ctx().data(|data| data.get_temp::<bool>(picker)) == Some(true);
+                ui.ctx().data_mut(|data| data.insert_temp(picker, !open));
+            }
+            if ui.ctx().data(|data| data.get_temp::<bool>(picker)) == Some(true) {
+                let mut colour = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                egui::Area::new(picker.with("area"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(response.rect.left_bottom() + vec2(0.0, 6.0))
+                    .constrain(true)
+                    .show(ui.ctx(), |ui| {
+                        Frame::popup(ui.style()).show(ui, |ui| {
+                            if egui::color_picker::color_picker_color32(
+                                ui,
+                                &mut colour,
+                                egui::color_picker::Alpha::Opaque,
+                            ) {
+                                rgb = [colour.r(), colour.g(), colour.b()];
+                                chrome.settings.accent =
+                                    AccentColor::Custom(rgb[0], rgb[1], rgb[2]);
+                                actions.push(UiAction::SettingsChanged);
+                            }
+                            if ui.button("Done").clicked() {
+                                ui.ctx().data_mut(|data| data.insert_temp(picker, false));
+                            }
+                        });
+                    });
+            }
+
+            // ── The presets.
+            for accent in AccentColor::PRESETS {
                 let selected = chrome.settings.accent == accent;
-                let color = accent.color(palette.dark);
-                let (rect, response) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
-                let center = rect.center();
-                let t = ui.ctx().animate_bool(response.id, selected);
-                ui.painter().circle_filled(center, 10.0 + 2.0 * t, color);
-                if t > 0.0 {
-                    ui.painter().circle_stroke(
-                        center,
-                        14.0,
-                        Stroke::new(1.5 + 0.5 * t, palette.text),
-                    );
-                }
-                if response
-                    .clone()
+                if swatch(ui, accent.color(palette.dark), selected, false)
                     .on_hover_cursor(CursorIcon::PointingHand)
                     .on_hover_text(accent.label())
                     .clicked()
@@ -4242,42 +4321,6 @@ fn settings_appearance(
         );
     });
 
-    settings_section(ui, palette, "New tab background", |ui| {
-        let all = NewTabBackground::ALL;
-        let current = all
-            .iter()
-            .position(|background| *background == chrome.settings.new_tab_background);
-        // Two rows, so the labels stay readable in a narrow pane.
-        let (first, second) = all.split_at(4);
-        let first_labels: Vec<&str> = first.iter().map(|b| b.label()).collect();
-        let second_labels: Vec<&str> = second.iter().map(|b| b.label()).collect();
-        if let Some(index) =
-            widgets::segmented(ui, current.unwrap_or(usize::MAX), &first_labels, palette)
-        {
-            chrome.settings.new_tab_background = first[index];
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.add_space(6.0);
-        let offset_selected = current
-            .filter(|index| *index >= first.len())
-            .map(|index| index - first.len())
-            .unwrap_or(usize::MAX);
-        if let Some(index) = widgets::segmented(ui, offset_selected, &second_labels, palette) {
-            chrome.settings.new_tab_background = second[index];
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(if chrome.settings.new_tab_background.animated() {
-                "Animated — repaints at ~30fps while a new tab is open."
-            } else {
-                "Static — costs nothing while idle."
-            })
-            .size(11.5)
-            .color(palette.text_muted),
-        );
-    });
-
     settings_section(ui, palette, "Transparency", |ui| {
         ui.label(
             RichText::new("Chrome opacity")
@@ -4295,30 +4338,61 @@ fn settings_appearance(
             .size(11.5)
             .color(palette.text_muted),
         );
-        ui.add_space(10.0);
+        ui.add_space(14.0);
 
         ui.label(
-            RichText::new("Card opacity")
+            RichText::new("Material")
                 .size(12.0)
                 .color(palette.text_muted),
         );
-        if widgets::slider(ui, &mut chrome.settings.card_opacity, 0.0..=1.0, palette) {
+        let levels = crate::theme::Translucency::ALL;
+        let labels: Vec<&str> = levels.iter().map(|level| level.label()).collect();
+        let current = levels
+            .iter()
+            .position(|level| *level == chrome.settings.translucency)
+            .unwrap_or(0);
+        if let Some(index) = widgets::segmented(ui, current, &labels, palette) {
+            chrome.settings.translucency = levels[index];
             actions.push(UiAction::SettingsChanged);
         }
+        ui.add_space(4.0);
         ui.label(
-            RichText::new(if chrome.settings.card_opacity <= 0.0 {
-                "Off — the cards are gone and their contents float.".to_owned()
-            } else {
-                format!(
-                    "{:.0}% — the favourites and downloads cards, the shelf's \
-                     widgets, and the new tab page's. Not the chrome's own \
-                     furniture.",
-                    chrome.settings.card_opacity * 100.0
-                )
-            })
+            RichText::new(chrome.settings.translucency.note())
+                .size(11.5)
+                .color(palette.text_muted),
+        );
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(
+                "Every surface the material draws — the cards, the menus, the shelf, \
+                 the new tab page.",
+            )
             .size(11.5)
             .color(palette.text_muted),
         );
+
+        // Only offered by a material that blurs. One that refracts instead, or
+        // one for a flat toolkit, has nothing for this to mean.
+        if palette.material.frosts {
+            ui.add_space(14.0);
+            ui.label(RichText::new("Blur").size(12.0).color(palette.text_muted));
+            let levels = crate::theme::Blur::ALL;
+            let labels: Vec<&str> = levels.iter().map(|level| level.label()).collect();
+            let current = levels
+                .iter()
+                .position(|level| *level == chrome.settings.blur)
+                .unwrap_or(0);
+            if let Some(index) = widgets::segmented(ui, current, &labels, palette) {
+                chrome.settings.blur = levels[index];
+                actions.push(UiAction::SettingsChanged);
+            }
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(chrome.settings.blur.note())
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
+        }
     });
 }
 
@@ -4963,7 +5037,7 @@ fn settings_section(
             Shape::Vec(glass::shapes(
                 card_rect,
                 palette,
-                Glass::new(10).strength(0.8),
+                Glass::tier(Tier::Card).strength(0.8),
             )),
         );
     });

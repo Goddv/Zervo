@@ -17,30 +17,64 @@ pub enum ThemeMode {
 /// User-selectable accent color presets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AccentColor {
+    /// A colour the reader mixed themselves. First in the row, and the only
+    /// one that opens a picker rather than simply being applied.
+    ///
+    /// Kept as it was chosen in both themes. The presets carry a pair each,
+    /// tuned so they have contrast on dark chrome and on light; second-guessing
+    /// somebody's own colour by lightening it in one theme would be worse than
+    /// showing them what they picked.
+    Custom(u8, u8, u8),
     Lavender,
     Sky,
     Mint,
     Amber,
     Rose,
+    Coral,
+    Teal,
+    Violet,
+    Lime,
+    Graphite,
 }
 
 impl AccentColor {
-    pub const ALL: [AccentColor; 5] = [
+    /// The fixed ones, in the order they are offered. `Custom` is not here:
+    /// it has no colour until somebody picks one, so the settings page draws
+    /// it from whatever they last chose.
+    pub const PRESETS: [AccentColor; 10] = [
         AccentColor::Lavender,
         AccentColor::Sky,
         AccentColor::Mint,
         AccentColor::Amber,
         AccentColor::Rose,
+        AccentColor::Coral,
+        AccentColor::Teal,
+        AccentColor::Violet,
+        AccentColor::Lime,
+        AccentColor::Graphite,
     ];
 
     pub fn label(&self) -> &'static str {
         match self {
+            AccentColor::Custom(..) => "Custom",
             AccentColor::Lavender => "Lavender",
             AccentColor::Sky => "Sky",
             AccentColor::Mint => "Mint",
             AccentColor::Amber => "Amber",
             AccentColor::Rose => "Rose",
+            AccentColor::Coral => "Coral",
+            AccentColor::Teal => "Teal",
+            AccentColor::Violet => "Violet",
+            AccentColor::Lime => "Lime",
+            AccentColor::Graphite => "Graphite",
         }
+    }
+
+    /// The three bytes a custom accent is stored as, or the preset's own
+    /// colour in the current theme — what the picker opens on.
+    pub fn rgb(&self, dark: bool) -> [u8; 3] {
+        let color = self.color(dark);
+        [color.r(), color.g(), color.b()]
     }
 
     /// The accent color, tuned per theme so it has contrast on both.
@@ -56,6 +90,17 @@ impl AccentColor {
             (AccentColor::Amber, false) => Color32::from_rgb(178, 108, 24),
             (AccentColor::Rose, true) => Color32::from_rgb(240, 148, 170),
             (AccentColor::Rose, false) => Color32::from_rgb(188, 62, 96),
+            (AccentColor::Coral, true) => Color32::from_rgb(244, 152, 128),
+            (AccentColor::Coral, false) => Color32::from_rgb(196, 74, 46),
+            (AccentColor::Teal, true) => Color32::from_rgb(112, 204, 202),
+            (AccentColor::Teal, false) => Color32::from_rgb(20, 124, 124),
+            (AccentColor::Violet, true) => Color32::from_rgb(202, 142, 236),
+            (AccentColor::Violet, false) => Color32::from_rgb(138, 60, 190),
+            (AccentColor::Lime, true) => Color32::from_rgb(190, 214, 118),
+            (AccentColor::Lime, false) => Color32::from_rgb(108, 138, 30),
+            (AccentColor::Graphite, true) => Color32::from_rgb(172, 178, 188),
+            (AccentColor::Graphite, false) => Color32::from_rgb(84, 92, 104),
+            (AccentColor::Custom(red, green, blue), _) => Color32::from_rgb(*red, *green, *blue),
         }
     }
 }
@@ -96,6 +141,113 @@ pub struct Backdrop {
     /// fade with it, or a card sits on an opaque frost while the photograph
     /// beside it is still half transparent.
     pub alpha: f32,
+}
+
+/// How much of what is behind a surface comes through it.
+///
+/// Three steps rather than a slider. A surface's job is to hold text up, and
+/// most of the range between "a card" and "not there" is a surface that has
+/// stopped doing that — so the choice offered is between three that all work
+/// rather than a hundred that mostly do not.
+///
+/// Every material honours this unless it says otherwise with
+/// `Material::translucency`, so it is one setting across every theme rather
+/// than something each one reinvents.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Translucency {
+    /// What Zervo has always looked like.
+    Solid,
+    Frosted,
+    Sheer,
+}
+
+impl Translucency {
+    pub const ALL: [Translucency; 3] = [
+        Translucency::Solid,
+        Translucency::Frosted,
+        Translucency::Sheer,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Translucency::Solid => "Solid",
+            Translucency::Frosted => "Frosted",
+            Translucency::Sheer => "Sheer",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            Translucency::Solid => {
+                "Surfaces are their own colour. The most readable, and the least glass."
+            },
+            Translucency::Frosted => {
+                "What is behind shows through — the page, the chrome, the wallpaper's blur."
+            },
+            Translucency::Sheer => "As far as glass goes before it stops holding text up.",
+        }
+    }
+
+    /// How much of a surface's own material survives, 0..=1.
+    ///
+    /// Only the fill is scaled. The hairline and the shadow keep their
+    /// strength at every step, because they are what say where a surface ends
+    /// — a sheer card with no edge is not a sheer card, it is a smudge.
+    pub fn fill(self) -> f32 {
+        match self {
+            Translucency::Solid => 1.0,
+            Translucency::Frosted => 0.72,
+            Translucency::Sheer => 0.48,
+        }
+    }
+}
+
+/// How far a material blurs what is behind it.
+///
+/// Only means anything for a material that frosts at all. A flat toolkit
+/// material, or one built on Apple's Liquid Glass — which refracts rather than
+/// blurs — sets `Material::frosts` false and never reads this.
+///
+/// Three steps, like [`Translucency`], and for the same reason: the useful
+/// range is narrow. Below a certain radius a blur is just a smeared photograph
+/// and text sits on top of the smear; above it, every wallpaper looks the
+/// same and there was no point fetching one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Blur {
+    Light,
+    Medium,
+    Deep,
+}
+
+impl Blur {
+    pub const ALL: [Blur; 3] = [Blur::Light, Blur::Medium, Blur::Deep];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Blur::Light => "Light",
+            Blur::Medium => "Medium",
+            Blur::Deep => "Deep",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            Blur::Light => "The picture is still recognisable through a card.",
+            Blur::Medium => "Shape and colour come through; detail does not.",
+            Blur::Deep => "Colour only — the wallpaper as a wash behind the page.",
+        }
+    }
+
+    /// Multiplies the material's own blur radius, so a material that blurs
+    /// gently and one that blurs hard both keep their character across the
+    /// three steps rather than being flattened onto the same numbers.
+    pub fn scale(self) -> f32 {
+        match self {
+            Blur::Light => 0.45,
+            Blur::Medium => 1.0,
+            Blur::Deep => 2.1,
+        }
+    }
 }
 
 /// The corner-radius tier every rounded thing in Zervo picks from.
@@ -166,6 +318,12 @@ pub struct Material {
     /// more at full strength.
     pub fill: f32,
     pub fill_strength: f32,
+    /// Whether this material honours the reader's translucency setting.
+    ///
+    /// True for anything glassy. A material for a toolkit that has no notion
+    /// of translucency — a flat GTK or Fluent one — sets this false and its
+    /// surfaces stay exactly as it drew them, whatever the setting says.
+    pub translucency: bool,
     /// The same pair over a blurred backdrop, where the fill is a tint on the
     /// blur rather than a substitute for it.
     pub frosted_fill: f32,
@@ -214,6 +372,7 @@ impl Material {
         name: "Glass",
         fill: 0.55,
         fill_strength: 0.4,
+        translucency: true,
         frosted_fill: 0.58,
         frosted_fill_strength: 0.16,
         sheen_dark: 9.0,
@@ -274,7 +433,7 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         shadow: blend(a.shadow, b.shadow),
         // Not a colour and not part of the theme, so it does not cross over —
         // it is whatever the setting says, on both sides of the fade.
-        card_opacity: b.card_opacity,
+        translucency: b.translucency,
         backdrop: b.backdrop,
         // Not a colour either. A crossfade between two *materials* would mean
         // interpolating corner radii and metrics, which is a different and
@@ -284,12 +443,13 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
 }
 
 impl Palette {
-    /// Stamp the user's card-opacity setting on. `resolve` has no business
+    /// Stamp the reader's translucency setting on. `resolve` has no business
     /// knowing about Settings, so main.rs does this once a frame.
-    ///
-    /// NaN is possible — the value is deserialised from settings.json — and it
-    /// would reach `Color32::gamma_multiply`, which debug-asserts on a
-    /// non-finite factor and would then panic once per surface per frame.
+    pub fn with_translucency(mut self, translucency: Translucency) -> Self {
+        self.translucency = translucency;
+        self
+    }
+
     /// How round a surface of this size is, per the material.
     ///
     /// The way to spell a corner radius. A number written at a call site is a
@@ -358,15 +518,6 @@ impl Palette {
             Rect::from_min_max(map(quad.min), map(quad.max)),
         ))
     }
-
-    pub fn with_card_opacity(mut self, opacity: f32) -> Self {
-        self.card_opacity = if opacity.is_finite() {
-            opacity.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        self
-    }
 }
 
 impl ThemeMode {
@@ -398,15 +549,14 @@ pub struct Palette {
     pub border: Color32,
     /// Shadow color for the floating content card.
     pub shadow: Color32,
-    /// How solid the chrome's card surfaces are, 0.0..=1.0 — the user's
-    /// setting, not a colour.
+    /// How much comes through a surface — the reader's setting, not a colour.
     ///
     /// It lives here because the palette is already handed to every
     /// `glass::shapes` call in the app; the alternative was a parameter on
     /// nine drawing functions and their callers. `resolve` leaves it at 1.0
     /// and main.rs stamps the setting on, the same way `dark` is a fact about
     /// the theme rather than a colour.
-    pub card_opacity: f32,
+    pub translucency: Translucency,
     /// What surfaces are made of: corner radii, fills, edges, shadows, the
     /// lot. See [`Material`].
     pub material: Material,
@@ -415,8 +565,8 @@ pub struct Palette {
     /// The backdrop, not the frost: `material.frosts` says whether surfaces
     /// frost at all, and this is the thing they frost against.
     ///
-    /// Here for the same reason `card_opacity` is: frosted glass is the
-    /// material every surface in Zervo is made of, so the thing it frosts has
+    /// Here for the same reason the translucency setting is: frosted glass is
+    /// the material every surface in Zervo is made of, so what it frosts has
     /// to reach every surface without nine call sites being edited to pass it.
     /// A caller draws something behind the chrome, hands the palette a blurred
     /// copy of it, and every card, pill and menu drawn on top is frosted
@@ -495,7 +645,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             text_muted: Color32::from_rgb(158, 158, 168),
             border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
-            card_opacity: 1.0,
+            translucency: Translucency::Solid,
             material: Material::GLASS,
             backdrop: None,
         }
@@ -511,7 +661,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             text_muted: Color32::from_rgb(96, 96, 104),
             border: Color32::from_rgb(204, 204, 204),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
-            card_opacity: 1.0,
+            translucency: Translucency::Solid,
             material: Material::GLASS,
             backdrop: None,
         }

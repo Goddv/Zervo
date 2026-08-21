@@ -184,13 +184,19 @@ pub struct Settings {
     /// Opacity of the chrome (sidebar and surrounds), 0.35..=1.0. Below 1.0
     /// the window is translucent; the web content itself stays opaque.
     pub chrome_opacity: f32,
+    /// How much comes through every surface the material draws — the cards,
+    /// the menus, the shelf, the new tab page. One setting for the whole
+    /// application rather than one per group of things.
+    pub translucency: crate::theme::Translucency,
+    /// How far a material blurs what is behind it, for materials that blur at
+    /// all. Ignored by any that does not.
+    pub blur: crate::theme::Blur,
     /// Opacity of the chrome's card surfaces — the address pill, tab rows,
     /// settings sections, shelf widgets — 0.0..=1.0. Independent of
     /// `chrome_opacity`, and unlike it this one reaches zero: at zero the
     /// cards are gone and only their text and icons remain. Surfaces that
     /// float over a web page or a photograph ignore it, because a modal you
     /// cannot see is a fault rather than a look.
-    pub card_opacity: f32,
     /// Trackpad swipes bound to chrome actions.
     pub gestures: crate::gestures::Gestures,
 
@@ -243,7 +249,8 @@ impl Default for Settings {
             top_glow: 1.0,
             content_border: true,
             chrome_opacity: 0.85,
-            card_opacity: 1.0,
+            translucency: crate::theme::Translucency::Frosted,
+            blur: crate::theme::Blur::Medium,
             gestures: crate::gestures::Gestures::default(),
             newtab_tiles: crate::newtab::Tile::defaults(),
             newtab_world_clocks: crate::newtab::Zone::defaults(),
