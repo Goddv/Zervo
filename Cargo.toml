@@ -37,7 +37,15 @@ servo = { version = "0.5.0", default-features = false, features = [
 
 # ── Chrome ────────────────────────────────────────────────────────────────
 egui = "0.34.3"
-egui-winit = { version = "0.34.3", default-features = false, features = ["clipboard"] }
+# `accesskit` is *not* one of egui-winit's default features, so asking for it
+# by name is what puts the platform adapter in the build — without it egui
+# builds an accessibility tree every frame and has nowhere to hand it, and the
+# chrome is invisible to VoiceOver, Narrator and Orca. `links` is left off on
+# purpose: this is a browser, and it opens its own.
+egui-winit = { version = "0.34.3", default-features = false, features = [
+    "accesskit",
+    "clipboard",
+] }
 egui_glow = { version = "0.34.3", features = ["winit"] }
 glow = "0.17.0"
 winit = "0.30.13"

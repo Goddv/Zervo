@@ -4,8 +4,8 @@
 //! same accent, same animation timings.
 
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Sense, Stroke, StrokeKind, Ui, pos2,
-    vec2,
+    Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Sense, Stroke, StrokeKind, Ui,
+    WidgetInfo, WidgetType, pos2, vec2,
 };
 
 use crate::glass;
@@ -17,12 +17,21 @@ const ROW_HEIGHT: f32 = crate::theme::Material::GLASS.row_height;
 
 /// An iOS-style switch with a label. Returns true when toggled.
 pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str, palette: &Palette) -> bool {
-    let (rect, response) =
+    let (rect, mut response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
     let changed = response.clicked();
     if changed {
         *value = !*value;
+        // Without this `Response::changed()` is false however the value moved,
+        // so nothing downstream -- egui's own change plumbing included -- can
+        // tell that it did.
+        response.mark_changed();
     }
+    // What this control *is*, for the accessibility tree. A hand-drawn widget
+    // that only paints is an unlabelled generic node to a screen reader; egui
+    // fills in the role, label and value from here and nowhere else.
+    response
+        .widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, ui.is_enabled(), *value, label));
 
     let on = glass::ease_out(
         ui.ctx()
@@ -71,15 +80,38 @@ pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str, palette: &Palette) -> 
     changed
 }
 
-/// A labelled slider with an accent-filled track. Returns true while dragging
-/// changed the value.
+/// What a slider did this frame.
+///
+/// The two are separate because these controls write straight into `Settings`,
+/// and `Settings` is a file. A slider held for a second reports a change on
+/// every one of sixty frames, and persisting each one is sixty synchronous
+/// rewrites of the whole settings file. The chrome reads the value out of
+/// `Settings` either way, so the picture follows the drag regardless of what
+/// this says; `settled` decides only when the *file* is written.
+///
+/// `ui.rs` already does this by hand for the sidebar width and the navigation
+/// bar's height, each with a comment saying "written once the drag ends, not
+/// every frame of it". The sliders were the ones that missed out.
+///
+/// There is deliberately no `changed` beside it. The value is written straight
+/// through the `&mut f32`, and the chrome reads it from there, so every caller
+/// so far wants exactly one thing from the return: whether to write the file.
+/// A struct rather than a bare `bool` because `.settled` says which question is
+/// being answered, and a bare `bool` here once meant the other one.
+#[derive(Clone, Copy, Default)]
+pub struct SliderOut {
+    /// The interaction finished, so this is a value worth keeping.
+    pub settled: bool,
+}
+
+/// A labelled slider with an accent-filled track.
 pub fn slider(
     ui: &mut Ui,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
     palette: &Palette,
-) -> bool {
-    let (rect, response) = ui.allocate_exact_size(
+) -> SliderOut {
+    let (rect, mut response) = ui.allocate_exact_size(
         vec2(ui.available_width(), ROW_HEIGHT),
         Sense::click_and_drag(),
     );
@@ -88,6 +120,9 @@ pub fn slider(
     let track = Rect::from_center_size(rect.center(), vec2(rect.width(), 5.0));
 
     let mut changed = false;
+    // A click lands on its value at once and is over; a drag is only worth
+    // keeping when the pointer comes up.
+    let mut settled = response.drag_stopped() || response.clicked();
     if let Some(pointer) = response.interact_pointer_pos()
         && (response.dragged() || response.clicked())
     {
@@ -98,6 +133,34 @@ pub fn slider(
             changed = true;
         }
     }
+
+    // Arrow keys, once focused. A slider that answers only to a pointer cannot
+    // be set at all without one.
+    if response.has_focus() {
+        let step = (max - min) / 50.0;
+        let nudge = ui.input(|input| {
+            let back =
+                input.key_pressed(egui::Key::ArrowLeft) || input.key_pressed(egui::Key::ArrowDown);
+            let on =
+                input.key_pressed(egui::Key::ArrowRight) || input.key_pressed(egui::Key::ArrowUp);
+            f32::from(on) - f32::from(back)
+        });
+        if nudge != 0.0 {
+            let next = (*value + nudge * step).clamp(min, max);
+            if (next - *value).abs() > f32::EPSILON {
+                *value = next;
+                changed = true;
+                // A keypress is a whole gesture on its own, so it is already
+                // settled -- there is no release to wait for.
+                settled = true;
+            }
+        }
+    }
+
+    if changed {
+        response.mark_changed();
+    }
+    response.widget_info(|| WidgetInfo::slider(ui.is_enabled(), f64::from(*value), ""));
 
     let t = ((*value - min) / (max - min)).clamp(0.0, 1.0);
     let hover = glass::ease_out(ui.ctx().animate_bool_with_time(
@@ -120,7 +183,7 @@ pub fn slider(
     painter.circle_filled(knob, 8.0 + hover * 0.5, Color32::WHITE);
 
     response.on_hover_cursor(CursorIcon::ResizeHorizontal);
-    changed
+    SliderOut { settled }
 }
 
 /// A segmented control — the consistent replacement for rows of radio
@@ -188,7 +251,17 @@ pub fn segmented(
                 theme::mix(palette.text_muted, palette.text, hover)
             },
         );
-        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() && index != selected {
+        let mut response = response.on_hover_cursor(CursorIcon::PointingHand);
+        response.widget_info(|| {
+            WidgetInfo::selected(
+                WidgetType::RadioButton,
+                ui.is_enabled(),
+                index == selected,
+                *option,
+            )
+        });
+        if response.clicked() && index != selected {
+            response.mark_changed();
             changed = Some(index);
         }
     }

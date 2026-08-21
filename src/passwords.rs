@@ -39,23 +39,11 @@ pub type Failure = String;
 
 impl Vault {
     pub fn load() -> Self {
-        let Some(path) = index_path() else {
-            return Self::default();
-        };
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|contents| serde_json::from_str(&contents).ok())
-            .unwrap_or_default()
+        crate::store::load_or_default(index_path())
     }
 
     fn save_index(&self) {
-        let Some(path) = index_path() else { return };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, json);
-        }
+        let _ = crate::store::save(index_path(), self);
     }
 
     pub fn logins(&self) -> &[Login] {
@@ -122,16 +110,32 @@ impl Vault {
     pub fn export(&self, path: &std::path::Path) -> Result<usize, Failure> {
         let mut exported = Vec::new();
         for login in &self.logins {
-            let password = read_secret(&login.site, &login.username).unwrap_or_default();
+            // A keychain read that fails used to export an empty password. That
+            // is the worst of the three possible answers: the file looks
+            // complete, so it is the one somebody keeps after deleting the
+            // originals, and the passwords it was supposed to carry are gone.
+            // Refusing outright at least says so while the originals still
+            // exist.
+            let Some(password) = read_secret(&login.site, &login.username) else {
+                return Err(format!(
+                    "Your keychain would not give up the password for {} ({}), \
+                     so nothing was exported.",
+                    login.site, login.username
+                ));
+            };
             exported.push(Exported {
                 site: login.site.clone(),
                 username: login.username.clone(),
                 password,
             });
         }
-        let json = serde_json::to_string_pretty(&exported)
+        let json = serde_json::to_vec_pretty(&exported)
             .map_err(|error| format!("Could not write the export: {error}"))?;
-        std::fs::write(path, json).map_err(|error| format!("Could not write {path:?}: {error}"))?;
+        // Owner-readable only, and written whole or not at all. This is every
+        // password in the vault in plaintext; it should not spend even a moment
+        // at whatever the umask happens to say.
+        crate::store::write_private(path, &json)
+            .map_err(|error| format!("Could not write {path:?}: {error}"))?;
         Ok(exported.len())
     }
 
@@ -286,8 +290,14 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
     if !output.status.success() {
         return Err("Windows would not encrypt the password.".to_owned());
     }
-    std::fs::write(&path, String::from_utf8_lossy(&output.stdout).trim())
-        .map_err(|error| format!("Could not save the password: {error}"))
+    // This file *is* the secret on Windows, DPAPI-wrapped. It gets the same
+    // write-and-rename as everything else in `store`, so a half-written blob
+    // never replaces a good one.
+    crate::store::write_private(
+        &path,
+        String::from_utf8_lossy(&output.stdout).trim().as_bytes(),
+    )
+    .map_err(|error| format!("Could not save the password: {error}"))
 }
 
 #[cfg(target_os = "windows")]

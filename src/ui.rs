@@ -4400,7 +4400,10 @@ fn settings_appearance(
                 .size(13.0)
                 .color(palette.text),
         );
-        if widgets::slider(ui, &mut chrome.settings.top_glow, 0.0..=1.0, palette) {
+        // `.settled` rather than `.changed`: the chrome reads the value live, so
+        // the picture follows the drag either way, and this decides only when
+        // the settings file is rewritten. See `widgets::SliderOut`.
+        if widgets::slider(ui, &mut chrome.settings.top_glow, 0.0..=1.0, palette).settled {
             actions.push(UiAction::SettingsChanged);
         }
         ui.label(
@@ -4452,7 +4455,9 @@ fn settings_appearance(
                 &mut chrome.settings.content_shadow_amount,
                 0.2..=2.0,
                 palette,
-            ) {
+            )
+            .settled
+            {
                 actions.push(UiAction::SettingsChanged);
             }
             ui.label(
@@ -4496,7 +4501,9 @@ fn settings_appearance(
                 &mut chrome.settings.content_halo_amount,
                 0.2..=2.0,
                 palette,
-            ) {
+            )
+            .settled
+            {
                 actions.push(UiAction::SettingsChanged);
             }
             ui.label(
@@ -4905,7 +4912,7 @@ fn settings_layout(
 
         ui.add_space(10.0);
         ui.label(RichText::new("Veil").size(12.0).color(palette.text_muted));
-        if widgets::slider(ui, &mut chrome.settings.wallpaper_dim, 0.15..=0.9, palette) {
+        if widgets::slider(ui, &mut chrome.settings.wallpaper_dim, 0.15..=0.9, palette).settled {
             actions.push(UiAction::PersistSettings);
         }
         ui.label(
