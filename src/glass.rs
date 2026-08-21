@@ -348,7 +348,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // How much of this surface's own material survives, per the reader's
     // setting — unless the material has opted out of having one.
     let sheer = if material.translucency {
-        palette.translucency.fill()
+        palette.translucency.alpha()
     } else {
         1.0
     };
@@ -452,9 +452,17 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // are not cut it is the surface's own edge, and the cut side is inside the
     // surface where a rounded corner costs nothing to be slightly wrong.
     if let Some((texture, quad, uv)) = backdrop {
+        // At full strength, never thinned by the setting. This layer is the
+        // card's *vibrancy*, and the window's own vibrancy is not thinned
+        // either — macOS blurs the desktop behind the chrome at full strength
+        // whatever the chrome's opacity is, and the opacity paints a tint over
+        // the top of it. Scaling this too made a card mix its blurred backdrop
+        // with the sharp one underneath, which is a smear rather than glass,
+        // and is why the cards read as a different material from the window
+        // holding them.
         let arrival = palette.backdrop.map_or(1.0, |backdrop| backdrop.alpha);
         out.push(
-            RectShape::filled(quad, corner, Color32::WHITE.gamma_multiply(sheer * arrival))
+            RectShape::filled(quad, corner, Color32::WHITE.gamma_multiply(arrival))
                 .with_texture(texture, uv)
                 .into(),
         );

@@ -193,38 +193,24 @@ impl Translucency {
         }
     }
 
-    /// How opaque the window's own chrome is at this step, 0..=1.
+    /// How much of a surface's own colour it carries, 0..=1 — the window's
+    /// chrome and everything the material draws alike.
     ///
-    /// The same three steps drive this as drive the cards, so how much glass
-    /// there is is one decision rather than two that have to be kept in
-    /// agreement.
+    /// One number, deliberately, because two drifted. The chrome and the cards
+    /// were separately tuned and ended up looking like different materials in
+    /// the same window, which is the one thing a material system exists to
+    /// prevent.
     ///
-    /// These are pitched against the range the old slider offered, which ran
-    /// from 0.35 to 1.0 — not against the 0.85 it happened to *default* to.
-    /// Anyone who liked this window liked it with the slider pulled well down,
-    /// and pinning the middle step to the default meant the setting could no
-    /// longer reach the look it was supposed to preserve. `Frosted` is the
-    /// frosted-glass window Zervo is for; `Sheer` is as far as that goes while
-    /// a sidebar is still a surface rather than a hole; `Solid` is for anyone
+    /// Pitched against the range the old chrome-opacity slider offered — 0.35
+    /// to 1.0 — rather than against the value it defaulted to. `Frosted` is
+    /// its floor, which is where this window has always looked its best;
+    /// `Sheer` goes past what the slider would allow; `Solid` is for anyone
     /// who never wanted any of it.
-    pub fn chrome(self) -> f32 {
+    pub fn alpha(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.72,
-            Translucency::Sheer => 0.48,
-        }
-    }
-
-    /// How much of a surface's own material survives, 0..=1.
-    ///
-    /// Only the fill is scaled. The hairline and the shadow keep their
-    /// strength at every step, because they are what say where a surface ends
-    /// — a sheer card with no edge is not a sheer card, it is a smudge.
-    pub fn fill(self) -> f32 {
-        match self {
-            Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.80,
-            Translucency::Sheer => 0.60,
+            Translucency::Frosted => 0.35,
+            Translucency::Sheer => 0.22,
         }
     }
 }
@@ -886,12 +872,12 @@ mod tests {
     fn frosted_is_actually_frosted() {
         use Translucency::{Frosted, Sheer};
         assert!(
-            Frosted.chrome() <= 0.8,
+            Frosted.alpha() <= 0.45,
             "Frosted at {} is a window you cannot see through",
-            Frosted.chrome()
+            Frosted.alpha()
         );
         assert!(
-            Frosted.chrome() - Sheer.chrome() >= 0.15,
+            Frosted.alpha() - Sheer.alpha() >= 0.08,
             "Sheer is not far enough from Frosted to be worth choosing"
         );
     }

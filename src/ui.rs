@@ -143,7 +143,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         root,
         &chrome.palette,
         chrome.settings.top_glow,
-        chrome.palette.translucency.chrome(),
+        chrome.palette.translucency.alpha(),
     );
 
     // Autohide reveal: decided before the sidebar is drawn, but painted last
