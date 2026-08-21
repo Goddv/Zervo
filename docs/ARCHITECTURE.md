@@ -104,7 +104,7 @@ against its own previous reflection.
 
 Two pieces of this are macOS-only and worth knowing before porting: the window's
 backdrop is an `NSVisualEffectView` behind a transparent framebuffer, and the
-content card's bottom corners are *erased* from the framebuffer rather than
+content card's corners are *erased* from the framebuffer rather than
 painted over, so the chrome can be drawn back over the hole at its own tint and
 match the chrome beside it exactly. Both are described in
 [THEMING.md](THEMING.md); neither is needed where the chrome is opaque.
