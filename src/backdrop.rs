@@ -283,3 +283,106 @@ fn blur(pixels: Vec<u8>, size: (i32, i32)) -> Option<egui::ColorImage> {
         &blurred,
     ))
 }
+
+/// Cut the content card's rounded corners out of the framebuffer.
+///
+/// The page is blitted as a square, so the card's corners have to be rounded by
+/// something drawn over it. That something has to be opaque — it is hiding
+/// opaque pixels — while the chrome beside it is a thin tint over the system's
+/// backdrop, and that backdrop is composited by the window server, outside this
+/// framebuffer. It cannot be read, reproduced or matched, so the mask always
+/// landed a few per cent off its surroundings and the corners always showed it.
+/// Three attempts to pick a better colour each moved the seam rather than
+/// removing it.
+///
+/// So nothing is painted over the page at all. The corners are cleared to
+/// nothing — the page and the chrome under it both — and the chrome is drawn
+/// back over them at its own tint. Over transparency that composites to exactly
+/// what the chrome beside it is, because it is the same paint on the same
+/// backdrop.
+///
+/// The top two corners are left alone: what shows through a hole cut up there
+/// is not the backdrop but whatever is behind the window, and the chrome above
+/// the card is opaque toolbar furniture that no colour chosen per height could
+/// match anyway. Those keep the opaque mask they always had.
+///
+/// A row at a time, because a scissor is a rectangle and a corner is not.
+/// Twenty-odd rows a corner, cleared to nothing, is not work anybody will
+/// measure.
+///
+/// `rect` is the content card in physical pixels with a bottom-left origin, as
+/// a viewport is. `radius` is its corner radius in the same units.
+pub fn cut_corners(gl: &glow::Context, rect: [i32; 4], radius: i32) {
+    let [x, y, width, height] = rect;
+    if radius <= 0 || width <= radius * 2 || height <= radius * 2 {
+        return;
+    }
+    // SAFETY: a current context, and every piece of state this touches is put
+    // back before returning.
+    unsafe {
+        let scissoring = gl.is_enabled(glow::SCISSOR_TEST);
+        let mut box_before = [0_i32; 4];
+        gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut box_before);
+        let mut clear_before = [0_f32; 4];
+        gl.get_parameter_f32_slice(glow::COLOR_CLEAR_VALUE, &mut clear_before);
+        gl.enable(glow::SCISSOR_TEST);
+        gl.clear_color(0.0, 0.0, 0.0, 0.0);
+
+        for row in 0..radius {
+            // How far in the arc has come by this row, measured from the flat
+            // edge. Rounded outward, so what is cleared is everything the arc
+            // does not cover and the mask's own antialiasing can soften the
+            // boundary from there.
+            let from_edge = radius - row;
+            let reach = radius
+                - ((radius * radius - from_edge * from_edge) as f64)
+                    .sqrt()
+                    .floor() as i32;
+            if reach <= 0 {
+                continue;
+            }
+            // The bottom two corners only. Cleared pixels show whatever the
+            // window server has behind the window, and along the top of the
+            // window that is not the system's backdrop view — a hole cut there
+            // comes out black rather than blurred, and only the mask over it
+            // keeps that off the screen. Below, it is the backdrop, which is
+            // the whole point.
+            for (corner_x, corner_y) in [(x, y + row), (x + width - reach, y + row)] {
+                gl.scissor(corner_x, corner_y, reach, 1);
+                gl.clear(glow::COLOR_BUFFER_BIT);
+            }
+        }
+
+        gl.clear_color(
+            clear_before[0],
+            clear_before[1],
+            clear_before[2],
+            clear_before[3],
+        );
+        gl.scissor(box_before[0], box_before[1], box_before[2], box_before[3]);
+        if !scissoring {
+            gl.disable(glow::SCISSOR_TEST);
+        }
+    }
+}
+
+/// Add the cut to `painter`, at this point in its layer.
+pub fn cut_corners_into(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
+    painter.add(egui::PaintCallback {
+        rect,
+        callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
+            let clip = info.viewport_in_pixels();
+            let scale = info.pixels_per_point;
+            cut_corners(
+                painter.gl(),
+                [
+                    clip.left_px,
+                    clip.from_bottom_px,
+                    clip.width_px,
+                    clip.height_px,
+                ],
+                (radius * scale).round() as i32,
+            );
+        })),
+    });
+}

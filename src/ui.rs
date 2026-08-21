@@ -312,6 +312,32 @@ fn glow_strip_top(palette: &Palette, strength: f32) -> Color32 {
 
 /// The chrome color at a given window-space `y` — used both to paint the
 /// gradient and to tint anything that must blend into it seamlessly.
+/// The colour `paint_chrome_fill` actually leaves at height `y`, alpha and all.
+///
+/// Not `chrome_color_at` multiplied by the opacity afterwards. That mixes the
+/// gradient at full alpha and multiplies the result; the fill multiplies its
+/// two ends first and mixes those — and it clamps the opacity to a fifth,
+/// which anything reading the raw setting does not. Between them that came to
+/// three units out of 255, which is precisely what the corner masks were still
+/// showing against the chrome beside them.
+fn chrome_fill_at(root: &Ui, y: f32, palette: &Palette, top_glow: f32, opacity: f32) -> Color32 {
+    let opacity = opacity.clamp(0.2, 1.0);
+    let bg = palette.bg.gamma_multiply(opacity);
+    if top_glow <= 0.0 {
+        return bg;
+    }
+    let top = root.ctx().content_rect().top();
+    if y >= top + CHROME_GRADIENT_HEIGHT {
+        return bg;
+    }
+    let t = glow_falloff((y - top) / CHROME_GRADIENT_HEIGHT);
+    theme::mix(
+        glow_strip_top(palette, top_glow).gamma_multiply(opacity),
+        bg,
+        t,
+    )
+}
+
 fn chrome_color_at(root: &Ui, y: f32, palette: &Palette, top_glow: f32) -> Color32 {
     if top_glow <= 0.0 {
         return palette.bg;
@@ -517,6 +543,28 @@ pub fn finish_content_frame(
             vec2(-1.0, 1.0),
         ),
     ];
+    // The corners have been cut out of the framebuffer by now, page and chrome
+    // both, so what these masks land on is transparency — and the chrome's own
+    // tint over transparency is exactly what the chrome beside the card is.
+    // They were opaque before, standing in for a colour they could not know,
+    // and every corner showed the difference.
+    // Below and beside the card the neighbour is the bare chrome — this one
+    // tint over the system's backdrop, which a mask can now match exactly,
+    // because the corner beneath it has been cut away and it is the same paint
+    // on the same backdrop.
+    //
+    // Above the card it is the toolbar and everything in it, which is opaque,
+    // and the corners up there are not cut — a hole in the top of the window
+    // shows what is behind the window rather than the backdrop. So those masks
+    // stay opaque, and they leave the glow out of it: the band is painted from
+    // the window's top and the toolbar covers all of it, so the chrome that
+    // actually shows beside the card carries none. Reading the gradient there
+    // put a blue cast on the top corners and nowhere else, which is the
+    // nine-units-of-255 they had been off by all along.
+    let tint = palette.chrome_tint();
+    let chrome_at =
+        |y: f32, opacity: f32, glow: f32| chrome_fill_at(root, y, palette, glow, opacity);
+
     // All four corner masks in ONE mesh: independent triangles each get their
     // own antialiased edges, and the AA seams between adjacent fan triangles
     // let the page underneath shine through as hairlines. A single mesh with
@@ -528,11 +576,7 @@ pub fn finish_content_frame(
     // antialias — in the same colour, feathering the boundary.
     if mask_corners {
         let mut mesh = Mesh::default();
-        let mut skirts = Mesh::default();
         let mut arc_edges: Vec<(Vec<egui::Pos2>, Color32)> = Vec::new();
-        // How far past the rect the mask fades. Wide enough to be a ramp rather
-        // than a step, narrow enough that nobody reads it as a glow.
-        const SKIRT: f32 = 3.0;
         for (corner, center, start_angle, outward) in corners {
             let corner_out = corner + outward * pad;
             let mut arc: Vec<egui::Pos2> = (0..=segments)
@@ -564,19 +608,19 @@ pub fn finish_content_frame(
             // the masks disappear into the top gradient instead of stamping
             // flat background patches over it.
             let base = mesh.vertices.len() as u32;
-            mesh.colored_vertex(
-                corner_out,
-                chrome_color_at(root, corner_out.y, palette, top_glow),
-            );
+            let (opacity, glow) = if outward.y < 0.0 {
+                (1.0, 0.0)
+            } else {
+                (tint, top_glow)
+            };
+            mesh.colored_vertex(corner_out, chrome_at(corner_out.y, opacity, glow));
             for point in &arc {
-                mesh.colored_vertex(*point, chrome_color_at(root, point.y, palette, top_glow));
+                mesh.colored_vertex(*point, chrome_at(point.y, opacity, glow));
             }
             for segment in 0..segments as u32 {
                 mesh.add_triangle(base, base + 1 + segment, base + 2 + segment);
             }
-            // The true arc (endpoints not pushed out) for the AA pass and for
-            // anchoring the skirts, whose whole job is to start exactly where
-            // the mask stops.
+            // The true arc, endpoints not pushed out, for the AA pass.
             let true_arc: Vec<egui::Pos2> = (0..=segments)
                 .map(|segment| {
                     let angle = start_angle
@@ -588,51 +632,7 @@ pub fn finish_content_frame(
                 })
                 .collect();
 
-            // One skirt along each of the corner's two straight edges, from the
-            // corner — where the mask is thickest — out to where the arc meets
-            // the edge and the mask has thinned to nothing.
-            for end in [
-                *true_arc.first().expect("arc"),
-                *true_arc.last().expect("arc"),
-            ] {
-                // The bottom two corners only.
-                //
-                // A skirt is a bridge between the mask and a translucent
-                // neighbour, and only the bottom corners have one on both
-                // sides. The top two are bounded by the toolbar above and,
-                // when it is open, the sidebar beside — both opaque, both
-                // drawn in colours of their own that the mask's does not
-                // match. Fading into them put a pale smudge outside each top
-                // corner, which is worse than the step it was trying to hide.
-                //
-                // The step is still there at the top. It is the same problem
-                // and it wants the same answer as the corners themselves: the
-                // page clipped to a rounded silhouette so there is nothing to
-                // mask. That is a change to how the page is composited, not a
-                // colour to pick.
-                if outward.y < 0.0 {
-                    continue;
-                }
-                let along = end - corner;
-                let horizontal = along.x.abs() > along.y.abs();
-                let normal = if horizontal {
-                    vec2(0.0, outward.y)
-                } else {
-                    vec2(outward.x, 0.0)
-                };
-                let colour = |at: egui::Pos2, alpha: f32| {
-                    chrome_color_at(root, at.y, palette, top_glow).gamma_multiply(alpha)
-                };
-                let base = skirts.vertices.len() as u32;
-                skirts.colored_vertex(corner, colour(corner, 1.0));
-                skirts.colored_vertex(end, colour(end, 0.0));
-                skirts.colored_vertex(end + normal * SKIRT, colour(end, 0.0));
-                skirts.colored_vertex(corner + normal * SKIRT, colour(corner, 0.0));
-                skirts.add_triangle(base, base + 1, base + 2);
-                skirts.add_triangle(base, base + 2, base + 3);
-            }
-
-            arc_edges.push((true_arc, chrome_color_at(root, corner.y, palette, top_glow)));
+            arc_edges.push((true_arc, chrome_at(corner.y, opacity, glow)));
         }
         fan_painter.add(Shape::mesh(mesh));
         // Bridge the step where the mask meets the chrome.
@@ -651,9 +651,6 @@ pub fn finish_content_frame(
         // no page to hide and nothing to lose. Only at the corners, tapering to
         // nothing where the arc meets the edge — a ring all the way round would
         // be the halo, which is a decision rather than a repair.
-        if !skirts.is_empty() {
-            painter.add(Shape::mesh(std::mem::take(&mut skirts)));
-        }
         // One physical pixel wide, so it feathers the mesh edge and no more.
         // At 1.4 points it was nearly three pixels, laid half over the page —
         // a chrome-coloured bite out of the page along the arcs but not along
