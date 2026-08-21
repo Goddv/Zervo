@@ -1353,6 +1353,37 @@ mod tests {
         }
     }
 
+    /// A panel that hangs off the page still frosts against it, once it has
+    /// been given reach — and one far beyond that reach still does not, or a
+    /// menu at the other end of the window would frost against a smear.
+    #[test]
+    fn reach_lets_a_panel_off_the_page_frost_against_it() {
+        let palette = palette_with_backdrop();
+        let page = palette.backdrop.unwrap().rect;
+        // Wholly above the page, as a hover card is when the shelf is open.
+        let card = Rect::from_min_max(pos2(300.0, 20.0), pos2(600.0, 80.0));
+        assert!(
+            palette.backdrop_under(card).is_none(),
+            "without reach it is not on the page"
+        );
+
+        let reaching = palette.reaching(200.0);
+        let (_, quad, _) = reaching
+            .backdrop_under(card)
+            .expect("within reach of the page");
+        assert_eq!(
+            quad, card,
+            "and frosts over all of itself, as anything does"
+        );
+
+        let far = Rect::from_min_max(pos2(300.0, -400.0), pos2(600.0, -340.0));
+        assert!(
+            reaching.backdrop_under(far).is_none(),
+            "reach is a distance, not a licence"
+        );
+        assert!(page.min.y > 0.0, "the page is not at the top of the window");
+    }
+
     /// Solid is the step that means what it says. An opaque surface shows
     /// nothing of the page, so the theme already knows what its text lands on
     /// and the page has no vote.

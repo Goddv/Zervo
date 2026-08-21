@@ -1098,14 +1098,19 @@ fn draw_board(
     };
 
     let mut area = root.new_child(egui::UiBuilder::new().max_rect(board));
-    // Wide enough for a card in the first or last column to keep its shadow,
-    // and no taller: the vertical clip is what stops a scrolled card spilling
-    // over the header and the credit line. The number is `glass`'s own spread
-    // for a card-sized radius; it is written out rather than imported because
-    // being a point or two generous here costs nothing and a dependency on
-    // the material's internals costs something.
+    // Room on every side for a card to keep its shadow, which is painted
+    // outside the card. It was horizontal only, on the grounds that the
+    // vertical clip stops a scrolled card spilling over the header and the
+    // credit line — true, but it also sliced the shadow off the top and bottom
+    // rows, which is a hard edge on three cards out of four rather than a
+    // scrolling nicety. What can now spill is a card's outermost twelve points
+    // of shadow, which is what a shadow is for.
+    //
+    // The number is `glass`'s own spread for a card-sized radius; it is written
+    // out rather than imported because being a point or two generous here costs
+    // nothing and a dependency on the material's internals costs something.
     const SHADOW_ROOM: f32 = 12.0;
-    area.set_clip_rect(board.expand2(vec2(SHADOW_ROOM, 0.0)));
+    area.set_clip_rect(board.expand(SHADOW_ROOM));
     let area = &mut area;
 
     if editing {
