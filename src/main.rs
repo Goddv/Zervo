@@ -147,7 +147,12 @@ struct RunningApp {
     /// which makes the page relayout. Doing all that because someone toggled
     /// "outline around content", or on every frame of a slider drag, is what
     /// made the chrome jump.
-    applied_theme: (theme::ThemeMode, theme::AccentColor, bool),
+    applied_theme: (
+        theme::ThemeMode,
+        theme::AccentColor,
+        bool,
+        theme::Translucency,
+    ),
     applied_icon: settings::AppIcon,
     /// A theme change in flight: the palette it started from, and when.
     ///
@@ -321,7 +326,12 @@ impl ApplicationHandler<WakerEvent> for App {
             .expect("initial tab exists");
         state.open_tab(initial_tab, start_url);
 
-        let applied_theme = (settings.theme, settings.accent, system_dark);
+        let applied_theme = (
+            settings.theme,
+            settings.accent,
+            system_dark,
+            settings.translucency,
+        );
         let applied_icon = settings.app_icon;
         // Whatever was cached last time, decoded on a thread so a launch never
         // waits on a photograph.
@@ -436,7 +446,12 @@ impl RunningApp {
             },
             WindowEvent::ThemeChanged(new_theme) => {
                 self.system_dark = matches!(new_theme, winit::window::Theme::Dark);
-                self.applied_theme = (self.settings.theme, self.settings.accent, self.system_dark);
+                self.applied_theme = (
+                    self.settings.theme,
+                    self.settings.accent,
+                    self.system_dark,
+                    self.settings.translucency,
+                );
                 self.apply_theme();
                 state.window.request_redraw();
                 return;
@@ -1448,7 +1463,12 @@ impl RunningApp {
                 self.settings.save();
                 // Only redo the parts whose input actually changed — see the
                 // note on `applied_theme`.
-                let look = (self.settings.theme, self.settings.accent, self.system_dark);
+                let look = (
+                    self.settings.theme,
+                    self.settings.accent,
+                    self.system_dark,
+                    self.settings.translucency,
+                );
                 if look != self.applied_theme {
                     self.applied_theme = look;
                     self.start_theme_fade();
@@ -1572,18 +1592,19 @@ impl RunningApp {
         let target = self.target_palette();
         self.state.set_engine_theme(target.dark);
         sync_window_theme(&self.state.window, self.settings.theme);
-        // The frost is appearance-adaptive on its own, but a lighter material
-        // reads better behind light chrome.
+        // Every material here is appearance-adaptive on its own; what differs
+        // is how much of the desktop survives it. `UnderWindowBackground` is
+        // the clearest of them — it is meant for what shows *through* a window
+        // — and it is the one that lets the colours behind come through rather
+        // than a grey suggestion of them.
         #[cfg(target_os = "macos")]
         if let Some(vibrancy) = &self._vibrancy {
-            vibrancy.set_material_animated(
-                if target.dark {
-                    objc2_app_kit::NSVisualEffectMaterial::Sidebar
-                } else {
-                    objc2_app_kit::NSVisualEffectMaterial::HeaderView
-                },
-                THEME_FADE.as_secs_f64(),
-            );
+            use objc2_app_kit::NSVisualEffectMaterial;
+            let material = match target.translucency.backdrop() {
+                theme::SystemBackdrop::Opaque => NSVisualEffectMaterial::WindowBackground,
+                theme::SystemBackdrop::Clear => NSVisualEffectMaterial::UnderWindowBackground,
+            };
+            vibrancy.set_material_animated(material, THEME_FADE.as_secs_f64());
         }
     }
 

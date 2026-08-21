@@ -193,6 +193,21 @@ impl Translucency {
         }
     }
 
+    /// What the platform's own backdrop should be at this step.
+    ///
+    /// The tint is only half of it. macOS's `Sidebar` material is dark and
+    /// heavy in its own right, so a window using it looks muted however light
+    /// the tint over it is — you can tell something is behind the window
+    /// without being able to tell what colour it is. Getting the colours
+    /// through means asking the system for a clearer backdrop, not painting
+    /// less over a murky one.
+    pub fn backdrop(self) -> SystemBackdrop {
+        match self {
+            Translucency::Solid => SystemBackdrop::Opaque,
+            Translucency::Frosted | Translucency::Sheer => SystemBackdrop::Clear,
+        }
+    }
+
     /// How much of a surface's own colour it carries, 0..=1 — the window's
     /// chrome and everything the material draws alike.
     ///
@@ -201,18 +216,35 @@ impl Translucency {
     /// the same window, which is the one thing a material system exists to
     /// prevent.
     ///
-    /// Pitched against the range the old chrome-opacity slider offered — 0.35
-    /// to 1.0 — rather than against the value it defaulted to. `Frosted` is
-    /// its floor, which is where this window has always looked its best;
-    /// `Sheer` goes past what the slider would allow; `Solid` is for anyone
-    /// who never wanted any of it.
+    /// These are tints over the system's own blur, not opacities in their own
+    /// right — macOS is already darkening and blurring what is behind the
+    /// window, so the surface's job is to tint that, not to replace it. The
+    /// old slider's floor of 0.35 was still heavy enough to grey out whatever
+    /// showed through: you could tell something was back there, but not what
+    /// colour it was. `Frosted` sits where the colours behind survive;
+    /// `Sheer` is very nearly the bare material; `Solid` is for anyone who
+    /// never wanted any of it.
     pub fn alpha(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.35,
-            Translucency::Sheer => 0.22,
+            Translucency::Frosted => 0.16,
+            Translucency::Sheer => 0.07,
         }
     }
+}
+
+/// How much the platform's own backdrop should let through, for platforms that
+/// have one.
+///
+/// Named for what is wanted rather than for any one platform's constant, so
+/// the mapping to `NSVisualEffectMaterial` — or to whatever Windows and Linux
+/// turn out to offer — stays where the platform code is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SystemBackdrop {
+    /// No point letting anything through; the tint covers it.
+    Opaque,
+    /// The one that lets the colours behind the window survive.
+    Clear,
 }
 
 /// How far a material blurs what is behind it.
@@ -847,37 +879,31 @@ mod tests {
     }
 
     /// The three steps have to be three steps, in the order they are offered.
-    /// Both of these are read by different parts of the chrome, and a pair
-    /// that disagreed about which way "more glass" goes would be a setting
-    /// that made the window more translucent and the cards less.
     #[test]
     fn the_steps_go_one_way() {
         use Translucency::{Frosted, Sheer, Solid};
-        assert!(Solid.chrome() > Frosted.chrome() && Frosted.chrome() > Sheer.chrome());
-        assert!(Solid.fill() > Frosted.fill() && Frosted.fill() > Sheer.fill());
+        assert!(Solid.alpha() > Frosted.alpha() && Frosted.alpha() > Sheer.alpha());
         assert_eq!(
-            Solid.fill(),
+            Solid.alpha(),
             1.0,
             "Solid has to mean no translucency at all"
         );
-        assert_eq!(Solid.chrome(), 1.0, "Solid has to mean an opaque window");
     }
 
-    /// The point of the middle step is that you can see through the window to
-    /// the desktop blurred behind it. A value close to opaque passes every
-    /// ordering check and still fails at the only thing the setting is for, so
-    /// this pins how much glass "Frosted" has to actually have — and Sheer has
-    /// to be a step you can see, not a rounding difference.
+    /// The point of the middle step is that you can see what is behind the
+    /// window, in the colours it actually has. A tint heavy enough to mute
+    /// them passes every ordering check and still fails at the only thing the
+    /// setting is for.
     #[test]
     fn frosted_is_actually_frosted() {
         use Translucency::{Frosted, Sheer};
         assert!(
-            Frosted.alpha() <= 0.45,
-            "Frosted at {} is a window you cannot see through",
+            Frosted.alpha() <= 0.25,
+            "Frosted at {} washes out whatever is behind it",
             Frosted.alpha()
         );
         assert!(
-            Frosted.alpha() - Sheer.alpha() >= 0.08,
+            Frosted.alpha() - Sheer.alpha() >= 0.05,
             "Sheer is not far enough from Frosted to be worth choosing"
         );
     }
