@@ -2,11 +2,31 @@
 
 ## Unreleased
 
+**One glass setting, not two.** Chrome opacity has gone as a separate control:
+it and the material setting were two answers to the same question, and keeping
+them in agreement was your job. The three steps drive both. **Frosted** is
+calibrated to what the chrome has always looked like — the value its slider
+defaulted to — now applied to everything the material draws rather than to the
+window alone; **Solid** takes the translucency away entirely; **Sheer** goes
+further than the chrome ever has, but only as far as text still reads.
+
+**Blur levels did not reach the pixels.** They were baked at a radius that ran
+to a fifth of the blurred copy's own width, where the passes reach past the
+edges and what they clamp against dominates — so Deep came back with *more*
+local contrast than Medium rather than less, and moving the setting appeared to
+do nothing. The copy is larger, the radius smaller, and it is capped relative
+to the copy's own size. The frost is markedly lighter throughout as a result.
+
+**Text reads better in both themes.** Muted text is brighter in the dark theme
+and darker in the light one. It is the caption colour on every list row and
+every explanatory line in Settings, and it now has to survive being read off a
+translucent surface with a photograph behind it.
+
 **Three steps of glass instead of a slider.** Card opacity is gone. It ran from
 "a card" to "not there", and almost everything in between is a surface that has
-stopped holding text up. Appearance now offers Solid, Frosted and Sheer, and it
-reaches every surface the material draws rather than a hand-picked few — the
-cards, the menus, the shelf, the sidebar, the new tab page. Only the fill is
+stopped holding text up. Appearance offers Solid, Frosted and Sheer, and they
+reach every surface the material draws rather than a hand-picked few — the
+window's own chrome, the cards, the menus, the shelf, the new tab page. Only the fill is
 thinned; the hairline and the shadow keep their strength at every step, because
 they are what say where a surface ends.
 
