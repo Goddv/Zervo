@@ -10,6 +10,13 @@ people do not write it twice.
 
 ## Next
 
+- **Themes that are not a recompile.** The material seam is real and every
+  surface goes through it ([THEMING.md](THEMING.md)), but a theme is still a
+  Rust `const`. What is missing is a file format, a loader, and palettes that a
+  theme can set rather than only the material. The stated goal is that somebody
+  can write a Windows, GTK, Android Material or Liquid Glass theme without
+  touching drawing code; the engine is arranged for it and the door is not open
+  yet.
 - **Run the Linux and Windows builds.** They compile, package and install and
   nobody has started one. This is the single most useful thing anyone with a
   Linux box or a Windows machine can do right now, and a report that it does not

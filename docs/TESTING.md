@@ -15,7 +15,27 @@ engine bump or a chrome change, walk this list.
 - [ ] Theme: Auto/Light/Dark switch cleanly, including the titlebar; accent
       colours retint the chrome; pages see `prefers-color-scheme`.
 - [ ] New tab page: each of the eight backdrops; the animated ones do not pin
-      the CPU when the window is idle.
+      the CPU when the window is idle. The page does not blink or flicker while
+      it is simply sitting there.
+
+## Material
+- [ ] Solid and Frosted both apply to everything: the window, cards, menus,
+      dropdowns, tooltips, the widget shelf, hover cards. Nothing is left an
+      opaque slab in a window made of glass.
+- [ ] A hover card (favourites, downloads) over a *web page* is frosted, not a
+      flat wash — the page behind it is visibly softened. Over the new tab page
+      and over Settings too, and with the widget shelf open, when the card hangs
+      above the page rather than on it.
+- [ ] Dark mode over a bright wallpaper or a white page: cards stay dark and
+      their text stays readable. Light mode over a dark one: the mirror of it.
+- [ ] Text on the new tab page — card rows, the greeting, the clock, the photo
+      credit — is readable over the light and dark parts of the same
+      photograph.
+- [ ] Content card corners: with outline, shadow and halo all off, no seam,
+      notch or pale patch at any of the four, on a web page and on an internal
+      one. Worth a screen magnifier.
+- [ ] Appearance → outline, shadow, halo: each toggles, the two amounts move
+      what they say, and the halo's tint switches between accent and chrome.
 
 ## New tab page
 - [ ] Customise: cards gain an edge, a drag mark, a ✕ and a resize corner;
