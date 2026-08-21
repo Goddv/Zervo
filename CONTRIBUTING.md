@@ -25,8 +25,11 @@ the one genuinely surprising thing in the codebase.
   been built once.
 - **No new dependencies without a reason in the PR description.** The engine is
   already enormous; the chrome should stay small.
-- **`ui.rs` stays pure.** It draws from state and returns `UiAction`s. If you
-  find yourself reaching for the engine there, add an action instead.
+- **`ui.rs` never touches the engine.** If you find yourself reaching for it
+  there, add a `UiAction` instead. (It does write to `Settings` and
+  `BrowserState` in place — see the note in
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the rule that holds is the one
+  about the engine.)
 - **Take colours from the `Palette`.** No literal colours outside `theme.rs`.
 - **Put pure logic in `zervo-core`.** Anything that is arithmetic, colour,
   bytes or files rather than engine or window belongs there, and gets a unit

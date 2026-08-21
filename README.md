@@ -165,11 +165,11 @@ have GStreamer installed.
 | `src/app.rs` | engine glue — owns Servo, implements `WebViewDelegate` |
 | `src/state.rs` | workspaces, tabs, chrome state |
 | `src/ui.rs` | the whole chrome, drawn with egui; emits `UiAction`s |
-| `src/theme.rs` | palettes, accents, and the material every surface is built from |
-| `src/glass.rs` | the one place a surface is drawn |
+| `zervo-core/src/theme.rs` | palettes, accents, and the material every surface is built from |
+| `zervo-core/src/glass.rs` | the one place a surface is drawn |
 | `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
 | `src/newtab.rs` | the new tab page: cards, grid, backdrops |
-| `src/wallpaper.rs`, `src/net.rs` | wallpapers from Commons and Openverse |
+| `src/wallpaper.rs`, `zervo-core/src/net.rs` | wallpapers from Commons and Openverse |
 | `src/widgets.rs` | toggles, sliders, segmented controls |
 | `src/icons.rs`, `src/phosphor.rs` | [Phosphor][phosphor] icon rendering |
 | `src/downloads.rs` | download manager |
