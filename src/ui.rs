@@ -387,21 +387,6 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) 
     snap_rect(inset, root.pixels_per_point())
 }
 
-/// A soft shadow hugging the content card.
-///
-/// `Outside`, unlike every other surface: what is inside this silhouette is
-/// the web page, blitted pixel for pixel, and a feather row drawn over it
-/// leaves a dark fringe around the whole page.
-fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: &Palette) {
-    painter.add(glass::shadow(
-        rect,
-        radius,
-        palette.shadow.gamma_multiply(0.9),
-        9.0,
-        glass::Inner::Outside,
-    ));
-}
-
 /// Hide the seam between the opaque corner masks and translucent chrome.
 ///
 /// The masks have to be opaque — they cover the square corners of the page
@@ -573,10 +558,11 @@ pub fn finish_content_frame(
         }
     }
 
-    // Drop shadow, drawn AFTER the corner masks: filling it beforehand works
-    // on internal pages but not on web pages, where the blit wipes the square
-    // content rect and leaves unshadowed patches in the corners.
-    // Opacity blend first, so the shadow lies on top of it.
+    // No drop shadow. The card fills nearly the whole window, so its shadow
+    // only ever fell on the few points of chrome around it — a dark seam
+    // tracing the edge rather than any impression of depth, and one more thing
+    // between the page and the window's own edge. The accent stroke below is
+    // the whole boundary now.
     paint_card_opacity_blend(
         root,
         &painter,
@@ -586,8 +572,6 @@ pub fn finish_content_frame(
         top_glow,
         chrome_opacity,
     );
-    paint_card_shadow(&painter, content_rect, radius, palette);
-
     // Flat: a single accent-tinted edge all the way around the card — no
     // white rim light, no highlights. It also antialiases the corner masks,
     // whose mesh triangles have hard edges.
