@@ -387,46 +387,6 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) 
     snap_rect(inset, root.pixels_per_point())
 }
 
-/// Hide the seam between the opaque corner masks and translucent chrome.
-///
-/// The masks have to be opaque — they cover the square corners of the page
-/// blit, and anything less would let the page show through. But when the
-/// chrome is translucent, that leaves the card's *square* bounding box faintly
-/// visible as a patch of fully opaque chrome. Ramping the chrome to opaque
-/// along the card's rounded edge and fading back out moves that transition
-/// onto the rounded silhouette, where it belongs, and softens it.
-fn paint_card_opacity_blend(
-    root: &Ui,
-    painter: &egui::Painter,
-    rect: Rect,
-    radius: f32,
-    palette: &Palette,
-    top_glow: f32,
-    chrome_opacity: f32,
-) {
-    if chrome_opacity >= 1.0 {
-        return; // Opaque chrome has no seam to hide.
-    }
-    // The square box has to be *covered*, not merely approached. Its furthest
-    // point from the arc is radius * (sqrt(2) - 1) at each corner, and a
-    // falloff that begins at the silhouette has decayed to a third of its
-    // strength by the time it gets there — which is why the box stayed
-    // faintly visible as a right angle outside every rounded corner. So the
-    // ring holds full chrome out to the wedge and only then fades.
-    let wedge = radius * (std::f32::consts::SQRT_2 - 1.0);
-    painter.add(glass::shadow_tinted(
-        rect,
-        radius,
-        wedge + radius * 0.42 + 6.0,
-        wedge,
-        glass::Inner::Outside,
-        // Per vertex, not once for the whole ring: the chrome is a gradient,
-        // and a ring painted in the colour from the card's centre is far too
-        // dark along the top, where the glow strip is brightest.
-        |at| chrome_color_at(root, at.y, palette, top_glow),
-    ));
-}
-
 /// Draw the rounded-corner masks and border over the (square) webview blit.
 /// Must run after the blit callback is registered on the background layer.
 /// The masks are oversized by a pixel so no sliver of the square blit can
@@ -447,7 +407,6 @@ fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: 
     ));
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn finish_content_frame(
     root: &Ui,
     content_rect: Rect,
@@ -456,7 +415,6 @@ pub fn finish_content_frame(
     top_glow: f32,
     border: bool,
     shadow: bool,
-    chrome_opacity: f32,
 ) {
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     // The oversized fans must only bleed inward over the blit — clip them so
@@ -578,16 +536,6 @@ pub fn finish_content_frame(
     // Drawn AFTER the corner masks: filling it beforehand works on internal
     // pages but not on web pages, where the blit wipes the square content rect
     // and leaves unshadowed patches in the corners.
-    // Opacity blend first, so the shadow lies on top of it.
-    paint_card_opacity_blend(
-        root,
-        &painter,
-        content_rect,
-        radius,
-        palette,
-        top_glow,
-        chrome_opacity,
-    );
     if shadow {
         paint_card_shadow(&painter, content_rect, radius, palette);
     }
