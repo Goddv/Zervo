@@ -204,7 +204,8 @@ impl Translucency {
     pub fn backdrop(self) -> SystemBackdrop {
         match self {
             Translucency::Solid => SystemBackdrop::Opaque,
-            Translucency::Frosted | Translucency::Sheer => SystemBackdrop::Clear,
+            Translucency::Frosted => SystemBackdrop::Frosted,
+            Translucency::Sheer => SystemBackdrop::None,
         }
     }
 
@@ -255,8 +256,13 @@ impl Translucency {
 pub enum SystemBackdrop {
     /// No point letting anything through; the tint covers it.
     Opaque,
-    /// The one that lets the colours behind the window survive.
-    Clear,
+    /// The clearest frost the platform offers — the colours behind the window
+    /// survive it.
+    Frosted,
+    /// No system backdrop at all. What is behind the window arrives unblurred,
+    /// which is the only step past the clearest frost: every material *is* a
+    /// frost, so the way past the clearest one is to stop asking for one.
+    None,
 }
 
 /// How far a material blurs what is behind it.
