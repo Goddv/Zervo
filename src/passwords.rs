@@ -9,12 +9,18 @@
 //! engine *does* ask the embedder about — HTTP authentication. If Servo grows
 //! a credential API, this is where filling would attach.
 //!
-//! **Secrets never touch Zervo's own files.** They go to the operating
-//! system's credential store, which is built for exactly this and is not
-//! something worth reimplementing. What Zervo stores is an index: which site
-//! and username it knows about, so it can list them without asking the
-//! keychain to unlock. Deleting `passwords.json` loses the index, not the
-//! secrets.
+//! **Secrets go to the operating system, not into Zervo's own files.** The
+//! keychain on macOS and the Secret Service on Linux are built for exactly this
+//! and are not worth reimplementing. What Zervo stores is an index: which site
+//! and username it knows about, so it can list them without asking the keychain
+//! to unlock. Deleting `passwords.json` loses the index, not the secrets.
+//!
+//! Windows is the exception, and it is worth knowing before trusting the
+//! sentence above. Windows has no credential command that will hand a password
+//! back, so `store_secret` wraps the secret with DPAPI — per-user encryption,
+//! which is the property that matters — and writes the result beside the index.
+//! The file is useless to any other account on the machine, but it *is* a file
+//! Zervo wrote.
 
 use std::process::Command;
 

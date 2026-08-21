@@ -15,7 +15,7 @@ around the one theme currently in it.
 A theme decides two things and they are kept apart.
 
 **A `Palette` is what colour things are.** Background, surface, accent, text,
-border, shadow. It comes out of [`theme::resolve`](../src/theme.rs), which takes
+border, shadow. It comes out of [`theme::resolve`](../zervo-core/src/theme.rs), which takes
 the mode (Auto/Light/Dark), what the system says, and the accent.
 
 **A `Material` is how things are built.** Corner radii, how opaque a surface is,
@@ -149,7 +149,7 @@ is a flat desktop toolkit, and none of the drawing code changes. Concretely:
 | Android Material | `radius` generous, `shadow_reach` up, `sheen_*: 0.0`, `glow` for the ripple's resting state |
 | Liquid Glass | `frosts: true`, `blur: 0.0`, `sheen_*` and `lift_*` up — a material may be translucent without blurring |
 
-The full field list is on `Material` in [src/theme.rs](../src/theme.rs); each
+The full field list is on `Material` in [zervo-core/src/theme.rs](../zervo-core/src/theme.rs); each
 field is documented where it is declared, which is the authoritative list.
 
 ## What is not there yet
@@ -197,8 +197,8 @@ opaque and a plain rounded rect does the job.
 
 | File | What it holds |
 | --- | --- |
-| [`src/theme.rs`](../src/theme.rs) | `Palette`, `Material`, `Surface`, `Tier`, `Translucency`, `Backdrop` |
-| [`src/glass.rs`](../src/glass.rs) | `glass::shapes` — every surface is drawn here |
+| [`zervo-core/src/theme.rs`](../zervo-core/src/theme.rs) | `Palette`, `Material`, `Surface`, `Tier`, `Translucency`, `Backdrop` |
+| [`zervo-core/src/glass.rs`](../zervo-core/src/glass.rs) | `glass::shapes` — every surface is drawn here |
 | [`src/backdrop.rs`](../src/backdrop.rs) | The framebuffer copy, and the corner erase |
 | [`src/ui.rs`](../src/ui.rs) | The chrome, and `theme::apply` feeding egui's own styling |
 
