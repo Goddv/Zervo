@@ -904,16 +904,6 @@ impl RunningApp {
                 state.download_events.borrow_mut().drain(..).collect();
             for event in events {
                 match event {
-                    app::DownloadEvent::Offered {
-                        request_id,
-                        url,
-                        default_filename,
-                    } => {
-                        self.downloads
-                            .accept_from_engine(request_id, &url, &default_filename);
-                        let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
-                        state.activate_tab(tab_id);
-                    },
                     app::DownloadEvent::Chunk { request_id, chunk } => {
                         self.downloads.engine_chunk(request_id, &chunk);
                     },
@@ -1155,6 +1145,23 @@ impl RunningApp {
 
         self.favicons = favicons;
         self.settings = settings;
+
+        // Downloads the user allowed in the pass just drawn. Started here
+        // rather than inside it, because the UI pass holds `controls` borrowed
+        // and starting one wants the browser state too.
+        #[cfg(feature = "engine-downloads")]
+        {
+            let accepted = state.controls.borrow_mut().take_accepted();
+            for offer in accepted {
+                if self
+                    .downloads
+                    .accept_from_engine(offer.request_id, &offer.url, &offer.filename)
+                {
+                    let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
+                    state.activate_tab(tab_id);
+                }
+            }
+        }
 
         let mut ambient = false;
         if let Some(output) = ui_output {
