@@ -667,7 +667,7 @@ pub fn menu<T: Copy>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::tier(crate::theme::Tier::Card)
+                Glass::of(crate::theme::Surface::Menu)
                     .opaque(palette.bg)
                     .border(palette.border),
             ) {

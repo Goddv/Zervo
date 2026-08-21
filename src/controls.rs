@@ -239,7 +239,10 @@ fn panel<R>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::new(radius).opaque(palette.bg).border(palette.border),
+                Glass::of(crate::theme::Surface::Menu)
+                    .radius_exact(radius)
+                    .opaque(palette.bg)
+                    .border(palette.border),
             ) {
                 painter.add(shape);
             }
