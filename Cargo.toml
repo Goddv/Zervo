@@ -3,7 +3,7 @@ members = ["zervo-core"]
 
 [package]
 name = "zervo"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.97"
 license = "MPL-2.0"
@@ -117,6 +117,22 @@ url = "2.5"
 # installs the process crypto provider for the engine); this is the trust
 # anchors it needs to verify a host on its own.
 webpki-roots = "1.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows draws through ANGLE (EGL on Direct3D 11) rather than WGL, which is
+# what Servo's own Windows builds do.
+#
+# surfman's WGL backend creates its GL context, restores whatever context was
+# current before (none), and hands the caller a context nobody has made
+# current; Servo then asks glow to read GL_VERSION and the process dies with
+# "Make sure there is a valid GL context currently active". The ANGLE backend
+# leaves the new context current, so glow can read it. WGL also wants the
+# WGL_NV_DX_interop2 extension, which plenty of Intel drivers do not have.
+#
+# default-features = false has to be repeated: Cargo takes the union of the
+# two declarations, so leaving it off here would switch Servo's defaults back
+# on for this target alone.
+servo = { version = "0.5.0", default-features = false, features = ["no-wgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

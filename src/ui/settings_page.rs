@@ -1068,7 +1068,32 @@ pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
                 .color(palette.text),
         );
         ui.label(
-            RichText::new("Rendering engine: Servo (WebRender GPU compositing; WebGPU via Metal).")
+            RichText::new("Rendering engine: Servo, compositing through WebRender.")
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+        // Not a guess about the platform: the driver's own GL_RENDERER and
+        // GL_VERSION, read at startup from the context the page is drawn in.
+        let adapter = crate::gpu::adapter();
+        if !adapter.renderer.is_empty() {
+            ui.label(
+                RichText::new(format!("Graphics: {}", adapter.renderer))
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+            let driver = if adapter.vendor.is_empty() {
+                adapter.version.clone()
+            } else {
+                format!("{} — {}", adapter.version, adapter.vendor)
+            };
+            ui.label(
+                RichText::new(format!("Driver: {driver}"))
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+        }
+        ui.label(
+            RichText::new(format!("WebGPU: {}", crate::gpu::webgpu_backend_name()))
                 .size(12.0)
                 .color(palette.text_muted),
         );

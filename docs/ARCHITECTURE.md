@@ -22,7 +22,7 @@ page in a box.
 
 ```
 winit window
-└── WindowRenderingContext            (surfman: CGL + IOSurface + CALayer)
+└── WindowRenderingContext            (surfman: the platform's GL backend)
     ├── EguiGlow                      built on the SAME glow context
     └── OffscreenRenderingContext     an FBO sized to the content rect
         └── Servo WebView(s)          one per tab
@@ -40,6 +40,19 @@ Each frame, in `RunningApp::redraw`:
    shadow ring.
 4. `prepare_for_rendering()` binds the window framebuffer, `EguiGlow::paint`
    runs (executing the blit callback first), then `present()`.
+
+The backend under surfman is the platform's own: CGL with IOSurface and a
+CALayer on macOS, EGL on X11 or Wayland, and ANGLE — EGL over Direct3D 11 — on
+Windows. Windows takes ANGLE rather than WGL (the engine's `no-wgl` feature,
+which is also what Servo's own Windows builds use): surfman's WGL backend hands
+back a context nobody has made current, so the first `glGetString` call kills
+the process, and it needs `WGL_NV_DX_interop2`, which plenty of drivers do not
+have.
+
+WebGPU is asked for the native API on each platform — Metal, Vulkan, Direct3D
+12 — rather than wgpu's first choice; see `src/gpu.rs`. The same file reads the
+driver's `GL_RENDERER`, `GL_VENDOR` and `GL_VERSION` once, with the context
+current, which is what the about page shows.
 
 Two consequences worth knowing:
 

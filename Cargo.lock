@@ -4786,6 +4786,8 @@ checksum = "60b428c032f0af701a3ca440c92e7b552c25b2a5af2b08a85077ee8e9d2ae699"
 dependencies = [
  "bindgen",
  "cc",
+ "gl_generator",
+ "libz-sys",
  "walkdir",
 ]
 
@@ -11548,7 +11550,7 @@ dependencies = [
 
 [[package]]
 name = "zervo"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -11578,7 +11580,7 @@ dependencies = [
 
 [[package]]
 name = "zervo-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "egui",
  "log",

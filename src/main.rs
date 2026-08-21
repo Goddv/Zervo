@@ -14,6 +14,24 @@
     windows_subsystem = "windows"
 )]
 
+// surfman's `declare_surfman!()`, written out rather than invoked: the macro
+// emits a bare `#[no_mangle]`, which edition 2024 rejects. Exporting the two
+// symbols is how an application tells the NVIDIA and AMD drivers it wants
+// the discrete GPU rather than the integrated one; without them the browser
+// can end up compositing on the chip meant for spreadsheets, and surfman says
+// so on the way past.
+#[cfg(target_os = "windows")]
+mod discrete_gpu {
+    #[unsafe(link_section = ".drectve")]
+    #[unsafe(no_mangle)]
+    pub static _SURFMAN_LINK_ARGS: [u8; 74] =
+        *b" /export:NvOptimusEnablement /export:AmdPowerXpressRequestHighPerformance ";
+    #[unsafe(no_mangle)]
+    pub static mut NvOptimusEnablement: i32 = 1;
+    #[unsafe(no_mangle)]
+    pub static mut AmdPowerXpressRequestHighPerformance: i32 = 1;
+}
+
 mod app;
 mod backdrop;
 mod controls;
@@ -24,6 +42,9 @@ mod downloads;
 // Re-exported at the root rather than referred to by its own name, so every
 // `crate::theme::…` in the tree carries on resolving and nothing had to move.
 pub use zervo_core::{gestures, glass, grid, net, store, theme};
+// Stays here rather than in the core crate: it reads the window's live GL
+// context, which is the half of the browser the core crate exists to avoid.
+mod gpu;
 mod icons;
 mod keyboard;
 mod library;
@@ -282,6 +303,9 @@ impl ApplicationHandler<WakerEvent> for App {
         window_rendering_context
             .make_current()
             .expect("Could not make window rendering context current");
+        // With a context current, the driver will finally say who it is. The
+        // about page reads this; nothing else should need it.
+        gpu::record(&window_rendering_context.glow_gl_api());
         // Insurance: surfman samples the window's opacity when it builds its
         // layer, so make sure that layer really is compositing with alpha.
         #[cfg(target_os = "macos")]
@@ -339,7 +363,14 @@ impl ApplicationHandler<WakerEvent> for App {
             let _ = std::fs::create_dir_all(&dir);
             opts.config_dir = Some(dir);
         }
-        let mut preferences = servo::Preferences::default();
+        let mut preferences = servo::Preferences {
+            // WebGPU is compiled in (the `webgpu` engine feature), so let
+            // pages reach it, and name the backend rather than taking wgpu's
+            // first choice from its PRIMARY set. See `gpu::webgpu_backend`.
+            dom_webgpu_enabled: true,
+            dom_webgpu_wgpu_backend: gpu::webgpu_backend().to_owned(),
+            ..Default::default()
+        };
         if settings.user_agent_compat {
             preferences.user_agent = COMPAT_USER_AGENT.to_owned();
         }

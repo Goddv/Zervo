@@ -126,6 +126,15 @@ jobs:
           Get-ChildItem target/release -Filter *.dll | ForEach-Object {
             Copy-Item $_.FullName $out
           }
+          # ANGLE. Windows composites through EGL on Direct3D 11 rather than
+          # WGL (the `no-wgl` engine feature), and mozangle builds libEGL and
+          # libGLESv2 into its own OUT_DIR, not into target/release. The exe
+          # is linked against libEGL, so without these two it does not start.
+          $angle = Get-ChildItem target/release/build -Recurse -Filter libEGL.dll -ErrorAction SilentlyContinue
+          if (-not $angle) { throw "ANGLE DLLs not found under target/release/build" }
+          Get-ChildItem $angle[0].DirectoryName -Filter *.dll | ForEach-Object {
+            Copy-Item $_.FullName $out
+          }
           Get-ChildItem $out
           Compress-Archive -Path "$out/*" -DestinationPath "target/Zervo-$version-windows-x64.zip" -Force
 
