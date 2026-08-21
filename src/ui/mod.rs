@@ -340,7 +340,10 @@ fn sidebar_body(
                             3.5,
                             palette.accent,
                         );
-                        ui.ctx().request_repaint();
+                        // The dot does not move; what changes beside it is a
+                        // byte count.
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(250));
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2642,7 +2645,8 @@ fn draw_essentials_grid(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut V
                         .collect();
                     ui.painter()
                         .add(Shape::line(points, Stroke::new(1.8_f32, palette.accent)));
-                    ui.ctx().request_repaint();
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(33));
                 } else if let Some(texture) = chrome.favicons.get(&essential.tab_id) {
                     let icon_rect = Rect::from_center_size(icon_center, vec2(20.0, 20.0));
                     ui.painter().image(
@@ -3011,7 +3015,14 @@ fn tab_row(
             })
             .collect();
         painter.add(Shape::line(points, Stroke::new(1.8_f32, palette.accent)));
-        ui.ctx().request_repaint();
+        // Thirty a second, not the display's maximum. A spinner reads the same
+        // either way, and this one can run indefinitely: opening Zervo with a
+        // `zervo://` address puts the homepage behind the internal page, and a
+        // background tab is throttled, so the engine may never call its load
+        // complete. That left this arc turning at a hundred and twelve frames a
+        // second, forever, for a tab nobody is looking at.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(33));
     } else if style.is_settings {
         let icon_rect = Rect::from_center_size(icon_center, vec2(14.0, 14.0));
         icons::draw_icon(painter, icon_rect, Icon::Gear, palette.text_muted);
@@ -3299,7 +3310,8 @@ fn draw_downloads_page(
                                     palette.accent,
                                 );
                             }
-                            ui.ctx().request_repaint();
+                            ui.ctx()
+                                .request_repaint_after(std::time::Duration::from_millis(33));
                         }
 
                         // Row actions.
