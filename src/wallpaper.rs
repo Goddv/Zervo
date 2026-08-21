@@ -213,28 +213,23 @@ pub struct Wallpaper {
     pub error: Option<String>,
     /// Set once per launch, so `Each launch` means once.
     launched: bool,
-    /// What the frost was last blurred at. The blurred copy is baked when a
-    /// picture is decoded, so changing the setting has to decode it again —
-    /// off the cached file, with no network involved.
-    blurred_at: Option<crate::theme::Blur>,
 }
 
 impl Wallpaper {
     /// Pick up whatever was cached last time, decoding it on a thread so a
     /// launch never waits on a photograph.
-    pub fn restore(&mut self, blur: crate::theme::Blur) {
+    pub fn restore(&mut self) {
         let Some((credit, path, at)) = read_manifest() else {
             return;
         };
         self.credit = credit.clone();
         self.fetched_at = at;
-        self.blurred_at = Some(blur);
         let (sender, receiver) = channel();
         self.inbox = Some(receiver);
         std::thread::spawn(move || {
             let outcome = std::fs::read(&path)
                 .map_err(|error| error.to_string())
-                .and_then(|bytes| decode(&bytes, blur))
+                .and_then(|bytes| decode(&bytes))
                 .map(|image| Fetched {
                     credit,
                     image,
@@ -246,12 +241,6 @@ impl Wallpaper {
 
     pub fn is_loading(&self) -> bool {
         self.inbox.is_some()
-    }
-
-    /// True when the frost on disk was blurred at a different setting than the
-    /// one now in force, and wants baking again.
-    pub fn needs_reblur(&self, blur: crate::theme::Blur) -> bool {
-        !self.is_loading() && self.blurred_at.is_some_and(|was| was != blur)
     }
 
     pub fn credit(&self) -> &Credit {
@@ -277,18 +266,17 @@ impl Wallpaper {
 
     /// Start fetching. Returns without waiting; call [`Wallpaper::poll`] until
     /// it reports something arrived.
-    pub fn fetch(&mut self, source: &Source, blur: crate::theme::Blur) {
+    pub fn fetch(&mut self, source: &Source) {
         if self.is_loading() {
             return;
         }
         self.launched = true;
-        self.blurred_at = Some(blur);
         self.error = None;
         let source = source.clone();
         let (sender, receiver) = channel();
         self.inbox = Some(receiver);
         std::thread::spawn(move || {
-            let _ = sender.send(load(&source, blur));
+            let _ = sender.send(load(&source));
         });
     }
 
@@ -367,11 +355,11 @@ const MAX_BYTES: usize = 24 * 1024 * 1024;
 /// Metadata is small; a megabyte of it is not metadata.
 const MAX_JSON: usize = 4 * 1024 * 1024;
 
-fn load(source: &Source, blur: crate::theme::Blur) -> Result<Fetched, String> {
+fn load(source: &Source) -> Result<Fetched, String> {
     match source {
         Source::File(path) => {
             let bytes = std::fs::read(path).map_err(|error| format!("{path}: {error}"))?;
-            let image = decode(&bytes, blur)?;
+            let image = decode(&bytes)?;
             Ok(Fetched {
                 credit: Credit {
                     title: Path::new(path)
@@ -385,15 +373,15 @@ fn load(source: &Source, blur: crate::theme::Blur) -> Result<Fetched, String> {
                 cached: None,
             })
         },
-        Source::Commons => commons(blur),
-        Source::Openverse(subject) => openverse(*subject, blur),
+        Source::Commons => commons(),
+        Source::Openverse(subject) => openverse(*subject),
     }
 }
 
 /// Wikimedia Commons' picture of the day, from a day picked at random out of
 /// the last ten years. Today's would be the same picture for everyone all day;
 /// the archive is the interesting part.
-fn commons(blur: crate::theme::Blur) -> Result<Fetched, String> {
+fn commons() -> Result<Fetched, String> {
     let mut last = String::from("no picture of the day");
     // A handful of days have no picture in the feed. Try a few rather than
     // report a failure the user cannot act on.
@@ -437,7 +425,7 @@ fn commons(blur: crate::theme::Blur) -> Result<Fetched, String> {
             .flatten()
         {
             match picture(&candidate) {
-                Ok((bytes, from)) => return finish(credit, &bytes, &from, blur),
+                Ok((bytes, from)) => return finish(credit, &bytes, &from),
                 Err(why) => last = why,
             }
         }
@@ -446,7 +434,7 @@ fn commons(blur: crate::theme::Blur) -> Result<Fetched, String> {
 }
 
 /// Openverse, asked for a subject and given one of the answers.
-fn openverse(subject: Subject, blur: crate::theme::Blur) -> Result<Fetched, String> {
+fn openverse(subject: Subject) -> Result<Fetched, String> {
     // Openverse pages twenty at a time; a page picked at random out of the
     // first few is variety enough without asking for a page that is not there.
     let page = 1 + (random_u32(0) % 4);
@@ -503,7 +491,7 @@ fn openverse(subject: Subject, blur: crate::theme::Blur) -> Result<Fetched, Stri
             source: "Openverse".to_owned(),
         };
         match picture(&url) {
-            Ok((bytes, from)) => return finish(credit, &bytes, &from, blur),
+            Ok((bytes, from)) => return finish(credit, &bytes, &from),
             Err(why) => last = why,
         }
     }
@@ -524,13 +512,8 @@ fn picture(url: &str) -> Result<(Vec<u8>, String), String> {
 }
 
 /// Cache the bytes, decode them, and hand both back.
-fn finish(
-    credit: Credit,
-    bytes: &[u8],
-    from: &str,
-    blur: crate::theme::Blur,
-) -> Result<Fetched, String> {
-    let image = decode(bytes, blur)?;
+fn finish(credit: Credit, bytes: &[u8], from: &str) -> Result<Fetched, String> {
+    let image = decode(bytes)?;
     let cached = cache(bytes, from);
     Ok(Fetched {
         credit,
@@ -542,7 +525,7 @@ fn finish(
 /// Decode and downscale, both on this thread. A six-megapixel photograph is
 /// several hundred milliseconds of work; doing it where the frames are drawn
 /// would be a visible stall for something nobody asked to wait for.
-fn decode(bytes: &[u8], blur: crate::theme::Blur) -> Result<Decoded, String> {
+fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     let decoded = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
     let (width, height) = (decoded.width().max(1), decoded.height().max(1));
     let fit = |longest_allowed: u32| {
@@ -570,7 +553,7 @@ fn decode(bytes: &[u8], blur: crate::theme::Blur) -> Result<Decoded, String> {
         .resize_exact(frost_w, frost_h, image::imageops::FilterType::Triangle)
         .to_rgba8();
     let ceiling = frost_w.min(frost_h) as f32 * FROST_BLUR_CEILING;
-    let sigma = (FROST_BLUR * blur.scale()).min(ceiling).max(0.5);
+    let sigma = (FROST_BLUR).min(ceiling).max(0.5);
     let blurred = image::imageops::fast_blur(&small, sigma);
 
     let as_image = |rgba: image::RgbaImage| {
@@ -755,7 +738,6 @@ fn random_u32(salt: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::Blur;
 
     /// A sharp checkerboard, as PNG bytes — something for a blur to soften.
     ///
@@ -794,24 +776,23 @@ mod tests {
         values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
     }
 
-    /// The setting has to reach the pixels. It is a baked texture rather than
-    /// something the material does at draw time, so "the slider moved" and
-    /// "the picture changed" are two different things and only the second one
-    /// is worth anything.
+    /// The frost has to actually be blurred. It is a baked texture rather than
+    /// something the material does at draw time, so "the material says 10.8"
+    /// and "the picture is soft" are two different claims and only the second
+    /// one is worth anything.
     #[test]
-    fn heavier_blur_leaves_less_of_the_picture() {
+    fn the_frost_is_blurred() {
         let bytes = checkerboard();
-        let light = contrast(&decode(&bytes, Blur::Light).expect("decodes").frost);
-        let medium = contrast(&decode(&bytes, Blur::Medium).expect("decodes").frost);
-        let deep = contrast(&decode(&bytes, Blur::Deep).expect("decodes").frost);
+        let decoded = decode(&bytes).expect("decodes");
+        let sharp = contrast(&decoded.sharp);
+        let frost = contrast(&decoded.frost);
+        // Half is the bar, not a tuned figure: the point is that the frost is
+        // demonstrably softer than the picture, not that it lands on any
+        // particular number. A checkerboard with squares this coarse survives
+        // a genuine blur better than a photograph would.
         assert!(
-            light > medium && medium > deep,
-            "blur levels did not separate: light {light:.1}, medium {medium:.1}, deep {deep:.1}"
-        );
-        // And separated by enough to see, not merely by enough to measure.
-        assert!(
-            light > deep * 1.5,
-            "light {light:.1} and deep {deep:.1} are too close to tell apart"
+            sharp > frost * 2.0,
+            "the frost kept too much of the picture: sharp {sharp:.1}, frost {frost:.1}"
         );
     }
 
@@ -819,11 +800,9 @@ mod tests {
     #[test]
     fn the_picture_itself_is_never_blurred() {
         let bytes = checkerboard();
-        let light = contrast(&decode(&bytes, Blur::Light).expect("decodes").sharp);
-        let deep = contrast(&decode(&bytes, Blur::Deep).expect("decodes").sharp);
-        assert!(
-            (light - deep).abs() < 1.0,
-            "the setting reached the wallpaper"
-        );
+        let decoded = decode(&bytes).expect("decodes");
+        // A sharp checkerboard keeps nearly all of its contrast; anything that
+        // softened the wallpaper itself would show up here as a collapse.
+        assert!(contrast(&decoded.sharp) > 4000.0);
     }
 }

@@ -161,23 +161,15 @@ pub enum Translucency {
     /// What Zervo has always looked like, now applied to everything the
     /// material draws rather than to the window alone.
     Frosted,
-    /// More glass than the chrome has ever had, stopping where a surface would
-    /// stop holding text up.
-    Sheer,
 }
 
 impl Translucency {
-    pub const ALL: [Translucency; 3] = [
-        Translucency::Solid,
-        Translucency::Frosted,
-        Translucency::Sheer,
-    ];
+    pub const ALL: [Translucency; 2] = [Translucency::Solid, Translucency::Frosted];
 
     pub fn label(self) -> &'static str {
         match self {
             Translucency::Solid => "Solid",
             Translucency::Frosted => "Frosted",
-            Translucency::Sheer => "Sheer",
         }
     }
 
@@ -189,7 +181,6 @@ impl Translucency {
             Translucency::Frosted => {
                 "What is behind shows through — the page, the chrome, the wallpaper's blur."
             },
-            Translucency::Sheer => "As far as glass goes before it stops holding text up.",
         }
     }
 
@@ -205,7 +196,6 @@ impl Translucency {
         match self {
             Translucency::Solid => SystemBackdrop::Opaque,
             Translucency::Frosted => SystemBackdrop::Frosted,
-            Translucency::Sheer => SystemBackdrop::None,
         }
     }
 
@@ -227,11 +217,7 @@ impl Translucency {
     pub fn chrome(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            // Sheer starts where Frosted sits and is taken down from there by
-            // hand — see `Palette::chrome_tint`. What already separates the two
-            // without touching a tint is that Sheer has no system blur behind
-            // it at all.
-            Translucency::Frosted | Translucency::Sheer => 0.08,
+            Translucency::Frosted => 0.08,
         }
     }
 
@@ -243,7 +229,7 @@ impl Translucency {
     pub fn surface(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted | Translucency::Sheer => 0.34,
+            Translucency::Frosted => 0.34,
         }
     }
 }
@@ -261,58 +247,6 @@ pub enum SystemBackdrop {
     /// The clearest frost the platform offers — the colours behind the window
     /// survive it.
     Frosted,
-    /// No system backdrop at all. What is behind the window arrives unblurred,
-    /// which is the only step past the clearest frost: every material *is* a
-    /// frost, so the way past the clearest one is to stop asking for one.
-    None,
-}
-
-/// How far a material blurs what is behind it.
-///
-/// Only means anything for a material that frosts at all. A flat toolkit
-/// material, or one built on Apple's Liquid Glass — which refracts rather than
-/// blurs — sets `Material::frosts` false and never reads this.
-///
-/// Three steps, like [`Translucency`], and for the same reason: the useful
-/// range is narrow. Below a certain radius a blur is just a smeared photograph
-/// and text sits on top of the smear; above it, every wallpaper looks the
-/// same and there was no point fetching one.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum Blur {
-    Light,
-    Medium,
-    Deep,
-}
-
-impl Blur {
-    pub const ALL: [Blur; 3] = [Blur::Light, Blur::Medium, Blur::Deep];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Blur::Light => "Light",
-            Blur::Medium => "Medium",
-            Blur::Deep => "Deep",
-        }
-    }
-
-    pub fn note(self) -> &'static str {
-        match self {
-            Blur::Light => "The picture is still recognisable through a card.",
-            Blur::Medium => "Shape and colour come through; detail does not.",
-            Blur::Deep => "Colour only — the wallpaper as a wash behind the page.",
-        }
-    }
-
-    /// Multiplies the material's own blur radius, so a material that blurs
-    /// gently and one that blurs hard both keep their character across the
-    /// three steps rather than being flattened onto the same numbers.
-    pub fn scale(self) -> f32 {
-        match self {
-            Blur::Light => 0.5,
-            Blur::Medium => 1.0,
-            Blur::Deep => 1.8,
-        }
-    }
 }
 
 /// The corner-radius tier every rounded thing in Zervo picks from.
@@ -417,6 +351,10 @@ pub struct Material {
     pub frosts: bool,
     /// How far a backdrop is blurred before anything is frosted against it,
     /// in pixels of the small copy that is kept for the purpose.
+    ///
+    /// Pitched to match what the system's own backdrop does to the desktop, so
+    /// a card sitting on the wallpaper and the window sitting on the desktop
+    /// are blurred to the same degree and read as the same glass.
     pub blur: f32,
 
     // ── Shape and metrics
@@ -451,7 +389,7 @@ impl Material {
         glow: 0.32,
         glow_reach: 8.0,
         frosts: true,
-        blur: 6.0,
+        blur: 10.8,
         radius: Radii {
             hairline: 2,
             control: 7,
@@ -499,7 +437,6 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         // Not a colour and not part of the theme, so it does not cross over —
         // it is whatever the setting says, on both sides of the fade.
         translucency: b.translucency,
-        sheer: b.sheer,
         backdrop: b.backdrop,
         // Not a colour either. A crossfade between two *materials* would mean
         // interpolating corner radii and metrics, which is a different and
@@ -511,35 +448,51 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
 impl Palette {
     /// Stamp the reader's translucency setting on. `resolve` has no business
     /// knowing about Settings, so main.rs does this once a frame.
-    pub fn with_translucency(mut self, translucency: Translucency, sheer: f32) -> Self {
+    pub fn with_translucency(mut self, translucency: Translucency) -> Self {
         self.translucency = translucency;
-        // Deserialised from a text file, so it can be anything at all, and it
-        // reaches `gamma_multiply`, which debug-asserts on a non-finite factor.
-        self.sheer = if sheer.is_finite() {
-            sheer.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
         self
     }
 
-    /// The tint over the window's own chrome, with the hand-set sheerness
-    /// applied.
+    /// The tint over the window's own chrome.
     pub fn chrome_tint(&self) -> f32 {
-        self.translucency.chrome() * self.sheerness()
+        self.translucency.chrome()
     }
 
-    /// The tint on anything the material draws, likewise.
+    /// The tint on anything the material draws.
     pub fn surface_tint(&self) -> f32 {
-        self.translucency.surface() * self.sheerness()
+        self.translucency.surface()
     }
 
-    /// The hand-set factor, which only the sheerest step has.
-    fn sheerness(&self) -> f32 {
-        match self.translucency {
-            Translucency::Sheer => self.sheer,
-            _ => 1.0,
-        }
+    /// A surface's fill, for the things egui draws itself rather than through
+    /// `glass`: its popups, its menus, its tooltips.
+    ///
+    /// They take their colour from `Visuals` and never see the material, so
+    /// without this a combo box's dropdown is an opaque slab in the middle of
+    /// a window made of glass — which is exactly how it looked.
+    pub fn surface_fill(&self) -> Color32 {
+        let tint = self.surface_tint();
+        Color32::from_rgba_unmultiplied(
+            self.bg.r(),
+            self.bg.g(),
+            self.bg.b(),
+            (tint.clamp(0.0, 1.0) * 255.0) as u8,
+        )
+    }
+
+    /// The fill behind something you type into.
+    ///
+    /// Heavier than a surface, because a text field is the one place where
+    /// what is behind it competes directly with what you are reading. The
+    /// reference makes the same distinction — its panels are a third opaque
+    /// and its URL bar is nearly two thirds.
+    pub fn input_fill(&self) -> Color32 {
+        let tint = (self.surface_tint() * 1.8).clamp(0.0, 1.0);
+        Color32::from_rgba_unmultiplied(
+            self.surface.r(),
+            self.surface.g(),
+            self.surface.b(),
+            (tint * 255.0) as u8,
+        )
     }
 
     /// How round a surface of this size is, per the material.
@@ -649,10 +602,6 @@ pub struct Palette {
     /// and main.rs stamps the setting on, the same way `dark` is a fact about
     /// the theme rather than a colour.
     pub translucency: Translucency,
-    /// How far down from `Frosted` the sheerest step has been taken by hand,
-    /// 0..=1. One means "the same tint as Frosted"; zero means no tint at all.
-    /// Read only when `translucency` is `Sheer`.
-    pub sheer: f32,
     /// What surfaces are made of: corner radii, fills, edges, shadows, the
     /// lot. See [`Material`].
     pub material: Material,
@@ -747,7 +696,6 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
             translucency: Translucency::Solid,
-            sheer: 1.0,
             material: Material::GLASS,
             backdrop: None,
         }
@@ -764,7 +712,6 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             border: Color32::from_rgb(204, 204, 204),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
             translucency: Translucency::Solid,
-            sheer: 1.0,
             material: Material::GLASS,
             backdrop: None,
         }
@@ -795,9 +742,11 @@ pub fn apply(ctx: &Context, palette: &Palette) {
         egui::Visuals::light()
     };
     visuals.panel_fill = palette.bg;
-    visuals.window_fill = palette.bg;
-    visuals.extreme_bg_color = palette.surface;
-    visuals.faint_bg_color = palette.surface;
+    // egui draws its own popups, menus and tooltips from these, so they have
+    // to answer to the material like everything else does.
+    visuals.window_fill = palette.surface_fill();
+    visuals.extreme_bg_color = palette.input_fill();
+    visuals.faint_bg_color = palette.input_fill();
     visuals.hyperlink_color = palette.accent;
 
     visuals.selection.bg_fill = palette.active;
@@ -931,47 +880,17 @@ mod tests {
         assert!(palette.backdrop_under(card).is_none());
     }
 
-    /// The three steps have to be three steps, in the order they are offered.
+    /// The two steps have to be two different things.
     #[test]
-    fn the_steps_go_one_way() {
-        use Translucency::{Frosted, Sheer, Solid};
+    fn the_steps_are_two_different_things() {
+        use Translucency::{Frosted, Solid};
         assert_eq!(Solid.chrome(), 1.0, "Solid has to mean an opaque window");
         assert_eq!(Solid.surface(), 1.0, "Solid has to mean opaque surfaces");
-        // Sheer starts where Frosted sits: what separates them without anyone
-        // touching the slider is that Sheer has no system blur behind it.
-        assert_eq!(Frosted.chrome(), Sheer.chrome());
-        assert_eq!(Frosted.surface(), Sheer.surface());
-        assert_ne!(Frosted.backdrop(), Sheer.backdrop());
-    }
-
-    /// The slider only bites on the step it is offered for. Reaching the other
-    /// two would let a value left behind at zero make the whole window
-    /// invisible the next time somebody chose Solid.
-    #[test]
-    fn the_sheer_slider_reaches_one_step_only() {
-        let base = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
-        for level in [Translucency::Solid, Translucency::Frosted] {
-            let palette = base.with_translucency(level, 0.0);
-            assert_eq!(palette.chrome_tint(), level.chrome());
-            assert_eq!(palette.surface_tint(), level.surface());
-        }
-        let sheer = base.with_translucency(Translucency::Sheer, 0.0);
-        assert_eq!(sheer.chrome_tint(), 0.0);
-        assert_eq!(sheer.surface_tint(), 0.0);
-        let full = base.with_translucency(Translucency::Sheer, 1.0);
-        assert_eq!(full.surface_tint(), Translucency::Frosted.surface());
-    }
-
-    /// A value out of a text file cannot be trusted; it reaches
-    /// `gamma_multiply`, which debug-asserts on anything non-finite.
-    #[test]
-    fn a_nonsense_sheerness_is_ignored() {
-        let base = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
-        for bad in [f32::NAN, f32::INFINITY, -5.0, 12.0] {
-            let palette = base.with_translucency(Translucency::Sheer, bad);
-            assert!(palette.surface_tint().is_finite());
-            assert!((0.0..=1.0).contains(&palette.sheer));
-        }
+        assert!(Frosted.chrome() < Solid.chrome());
+        assert!(Frosted.surface() < Solid.surface());
+        // The step that matters is not the tint, it is whether the platform is
+        // asked for a backdrop at all.
+        assert_ne!(Frosted.backdrop(), Solid.backdrop());
     }
 
     /// The point of the middle step is that you can see what is behind the

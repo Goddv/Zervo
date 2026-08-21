@@ -48,27 +48,6 @@ impl Vibrancy {
         self.view.setMaterial(material);
         NSAnimationContext::endGrouping();
     }
-
-    /// Fade the whole backdrop in or out, over `duration` seconds.
-    ///
-    /// Faded out, the window has no system blur at all and shows what is
-    /// behind it directly — the window is already `setOpaque(false)` with a
-    /// clear background, so there is nothing else in the way. That is a step
-    /// past the clearest material AppKit offers, which is the only way to make
-    /// the sheerest setting visibly sheerer than the one below it: every
-    /// material *is* a frost, so the way past the clearest one is to stop
-    /// asking for a frost.
-    ///
-    /// Alpha rather than `setHidden`, so it crossfades with everything else
-    /// instead of snapping a frame out of step.
-    pub fn set_visible_animated(&self, visible: bool, duration: f64) {
-        NSAnimationContext::beginGrouping();
-        let context = NSAnimationContext::currentContext();
-        context.setDuration(duration);
-        context.setAllowsImplicitAnimation(true);
-        self.view.setAlphaValue(if visible { 1.0 } else { 0.0 });
-        NSAnimationContext::endGrouping();
-    }
 }
 
 /// winit's `ns_view` *is* the window's `contentView`.
