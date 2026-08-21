@@ -6,12 +6,25 @@
 
 **A calm, workspace-oriented browser built on the [Servo][servo] engine.**
 
-macOS · Rust · [MPL-2.0](LICENSE)
+[![Release](https://img.shields.io/github/v/tag/Goddv/Zervo?label=release&sort=semver)](https://github.com/Goddv/Zervo/releases)
+[![License](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE)
+[![Engine](https://img.shields.io/badge/engine-Servo-informational)](https://servo.org)
+![Rust](https://img.shields.io/badge/rust-1.97-orange)
+
+**macOS today — Linux and Windows build from the same tag and are untested.**
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light.png">
-  <img alt="The Zervo window: a sidebar of workspaces and tabs on the left, servo.org rendered in a floating content card" src="assets/screenshots/zervo-light.png" width="100%">
+  <img alt="The Zervo window: workspaces and tabs in a sidebar on the left, the new tab page in a floating content card" src="assets/screenshots/zervo-light.png" width="100%">
+</picture>
+
+<sub>Sidebar open. Collapse it and navigation moves into a bar across the top:</sub>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark-bar.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light-bar.png">
+  <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred" src="assets/screenshots/zervo-light-bar.png" width="100%">
 </picture>
 
 </div>
@@ -27,28 +40,54 @@ so some sites will not work. See [Limitations](#limitations).
 
 ## What it looks like
 
+### The window
+
 - **Sidebar-first, or bar-first.** Everything lives in one collapsible sidebar:
   navigation, the address bar, pinned "essentials", workspaces and tabs. Collapse
   it and navigation moves into a bar across the top, with the address pill
   centred on the window and the sidebar left holding only tabs.
 - **A bar you arrange.** Drag its buttons between the two sides, take them off,
   put them back. Drag the bar itself taller and it uncovers a shelf of widgets —
-  a clock and media controls so far — laid out on a grid, dropped where you like
-  and resized by the corner.
+  a clock, now playing and transport controls — laid out on a grid, dropped
+  where you like and resized by the corner.
 - **Workspaces.** Tabs are grouped into named spaces, each with its own colour.
 - **Favourites and history.** The star saves a page and hovering it opens the
   list; history is searchable and grouped by how long ago.
 - **Saved logins**, kept in the system keychain rather than in Zervo's own files.
-- **Frosted chrome.** Real macOS vibrancy behind an adjustable-opacity chrome.
-- **A new tab page you arrange.** Thirteen kinds of card on a twelve-column
-  grid — clock, world clocks, search, pinned tabs, most-visited, recent,
-  favourites, downloads, now playing, a note, a to-do list, workspaces, the
-  mark. Press Customise to drag, resize and remove them. Behind them, either
-  one of seven generated backdrops (three animated) or a photograph fetched
-  from Wikimedia Commons or Openverse, credited as its licence asks.
-- **Themed.** Light/dark/auto following the system, five accent colours that
-  retint the whole chrome, and the accent is propagated into the engine so
-  pages see the matching `prefers-color-scheme`.
+
+### The new tab page
+
+- **Thirteen kinds of card on a twelve-column grid** — clock, world clocks,
+  search, pinned tabs, most-visited, recent, favourites, downloads, now playing,
+  a note, a to-do list, workspaces, the mark. Press Customise to drag, resize
+  and remove them.
+- **Eight backdrops**, chosen from the page's own header: Plain, Gradient, Grid,
+  Mesh, Aurora, Waves, Particles, or a photograph fetched from Wikimedia Commons
+  or Openverse and credited as its licence asks.
+- **Text that reads either way.** Cards, the greeting, the clock and the photo
+  credit each ask about their own patch of the picture rather than taking one
+  answer for the page — a photograph is dark sky at the top and bright water at
+  the bottom, and pale text set for the sky disappears into the water.
+
+### How it is put together
+
+- **Every surface is drawn through one material.** Corner radii, fills, sheen,
+  shadow reach and how far glass frosts are decided in one place and reach the
+  whole application without a call site knowing a number. Surfaces have a class
+  — card, menu, input — the way an element has one in CSS.
+- **Frosted, over anything.** The chrome sits on real macOS vibrancy, and
+  everything floating over a page frosts against a blurred copy of whatever that
+  page is showing — so a menu over a website is the same glass as a card over a
+  photograph. Two steps, Solid and Frosted, drive the window and everything on
+  it together.
+- **Themed.** Light/dark/auto following the system, ten accent presets plus a
+  colour of your own, and the accent is propagated into the engine so pages see
+  the matching `prefers-color-scheme`.
+
+The material system is the seam a theme for another platform would be written
+against — Windows, GTK, Android Material, Liquid Glass. It is documented in
+[docs/THEMING.md](docs/THEMING.md), including what is not there yet: a theme is
+still a Rust constant, and nothing loads one at runtime.
 
 ## Building
 
@@ -84,16 +123,20 @@ cargo build --profile dev-fast --features engine-downloads
 Without the feature Zervo runs perfectly well; responses the engine cannot
 render simply are not offered for saving.
 
-### Packaging a `.app`
+### Packaging
 
 ```bash
 ./scripts/bundle-macos.sh          # -> target/Zervo.app
 ./scripts/bundle-macos.sh --dmg    # -> target/Zervo.dmg
 ```
 
-The result is unsigned. macOS will refuse to open it on first launch; see
-[docs/PACKAGING.md](docs/PACKAGING.md) for what your users have to do about
-that, and what signing would cost.
+Linux `.deb`/`.rpm` and a Windows `.exe` are built by CI on every release tag —
+see [Platforms](#platforms) for how far they have been taken.
+
+macOS builds are unsigned, and macOS will refuse to open one on first launch.
+[docs/PACKAGING.md](docs/PACKAGING.md) covers what your users have to do about
+that, what signing would cost, and one link-time trap worth knowing about if you
+have GStreamer installed.
 
 ## Layout
 
@@ -121,26 +164,30 @@ another platform would be written against.
 
 ## Platforms
 
-| Platform | Build | State |
+Every release tag builds all three. Only one of them has been run.
+
+| Platform | Package | State |
 | --- | --- | --- |
-| macOS (Apple Silicon) | `.dmg`, GStreamer bundled | Used daily by its author |
-| Debian and Ubuntu | `.deb` | Builds and installs; never run |
-| Fedora | `.rpm` | Builds and installs; never run |
-| Windows x64 | self-contained `.exe` | Builds; never run |
+| **macOS** (Apple Silicon) | `.dmg`, GStreamer bundled | ✅ Used daily by its author |
+| **Debian / Ubuntu** | `.deb` | ⚠️ Builds and installs — never started |
+| **Fedora** | `.rpm` | ⚠️ Builds and installs — never started |
+| **Windows** x64 | self-contained `.exe` | ⚠️ Builds — never started |
 
-The Linux and Windows packages are new and honest about it: they compile,
-package and install, and nobody has started one. Whether Zervo opens a window
-there is untested — the rendering context, X11 versus Wayland and the GL setup
-have never been exercised. A report either way is genuinely useful.
+**0.4.0 is a macOS release first.** All three packages come from the same tag,
+and the material system itself is portable — it is drawn by egui and nothing
+else. But the window's frosted backdrop is an AppKit feature, and the corner
+compositing built on top of it has been tried nowhere else. Patches for Linux
+and Windows are 0.4.1.
 
-**0.4.0 is a macOS release first.** All three packages come from the same tag
-and the material system is portable — it is drawn by egui and nothing else —
-but the window's frosted backdrop is an AppKit feature and the corner work
-behind it has been tried nowhere else. Patches for Linux and Windows are 0.4.1.
+Nobody has started Zervo on Linux or Windows at all. The packages compile,
+package and install; whether a window opens is untested, and the rendering
+context, X11 versus Wayland and the GL setup have never been exercised.
+**A report that it does not start is as useful as one that says it does** —
+[open an issue](https://github.com/Goddv/Zervo/issues) either way.
 
-macOS keeps two things the others do not: the frosted vibrancy behind the chrome,
-which is an AppKit feature, and bundled media, since GStreamer on Linux is an
-ordinary package and on Windows is a piece of work not yet done.
+Two things macOS keeps that the others do not: the frosted vibrancy behind the
+chrome, which is AppKit's, and bundled media — GStreamer is an ordinary package
+on Linux and a piece of work not yet done on Windows.
 
 ## Limitations
 
@@ -152,6 +199,9 @@ ordinary package and on Windows is a piece of work not yet done.
 - **Passwords cannot be filled into web forms.** The engine offers no hook for
   a submitted form, so saved logins are a vault plus HTTP authentication.
 - **No sync, no profiles.** Not yet.
+- **Themes are a recompile.** The material seam is real and every surface goes
+  through it, but a theme is a Rust constant — no file format, no loader, and
+  palettes are not themeable at all yet. See [docs/THEMING.md](docs/THEMING.md).
 - **Unsigned builds.** See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Contributing
