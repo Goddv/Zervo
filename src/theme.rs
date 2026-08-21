@@ -199,17 +199,19 @@ impl Translucency {
     /// there is is one decision rather than two that have to be kept in
     /// agreement.
     ///
-    /// `Frosted` is calibrated to what the chrome has always looked like —
-    /// the 0.85 the old slider defaulted to — so it is the reference the other
-    /// two are steps away from rather than a new look of its own. Solid takes
-    /// the translucency away entirely, for anyone who never wanted it. Sheer
-    /// goes further, but not much: past about a quarter the sidebar stops
-    /// being a surface and starts being a window onto the desktop.
+    /// These are pitched against the range the old slider offered, which ran
+    /// from 0.35 to 1.0 — not against the 0.85 it happened to *default* to.
+    /// Anyone who liked this window liked it with the slider pulled well down,
+    /// and pinning the middle step to the default meant the setting could no
+    /// longer reach the look it was supposed to preserve. `Frosted` is the
+    /// frosted-glass window Zervo is for; `Sheer` is as far as that goes while
+    /// a sidebar is still a surface rather than a hole; `Solid` is for anyone
+    /// who never wanted any of it.
     pub fn chrome(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.85,
-            Translucency::Sheer => 0.72,
+            Translucency::Frosted => 0.72,
+            Translucency::Sheer => 0.48,
         }
     }
 
@@ -221,8 +223,8 @@ impl Translucency {
     pub fn fill(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.85,
-            Translucency::Sheer => 0.68,
+            Translucency::Frosted => 0.80,
+            Translucency::Sheer => 0.60,
         }
     }
 }
@@ -875,13 +877,23 @@ mod tests {
         assert_eq!(Solid.chrome(), 1.0, "Solid has to mean an opaque window");
     }
 
-    /// `Frosted` is the reference the other two are steps away from, not a
-    /// look of its own: it is what the chrome looked like when its opacity was
-    /// a slider that defaulted to 0.85. Moving it silently re-skins the whole
-    /// application for everyone who never touched the setting.
+    /// The point of the middle step is that you can see through the window to
+    /// the desktop blurred behind it. A value close to opaque passes every
+    /// ordering check and still fails at the only thing the setting is for, so
+    /// this pins how much glass "Frosted" has to actually have — and Sheer has
+    /// to be a step you can see, not a rounding difference.
     #[test]
-    fn frosted_is_the_chrome_zervo_has_always_had() {
-        assert!((Translucency::Frosted.chrome() - 0.85).abs() < 1e-6);
+    fn frosted_is_actually_frosted() {
+        use Translucency::{Frosted, Sheer};
+        assert!(
+            Frosted.chrome() <= 0.8,
+            "Frosted at {} is a window you cannot see through",
+            Frosted.chrome()
+        );
+        assert!(
+            Frosted.chrome() - Sheer.chrome() >= 0.15,
+            "Sheer is not far enough from Frosted to be worth choosing"
+        );
     }
 
     /// Every tier has to resolve to something; a material that forgot one
