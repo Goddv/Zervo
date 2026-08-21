@@ -57,6 +57,31 @@ protection in macOS Sequoia][sequoia]).
 Building from source has no such problem: a locally built app is never
 quarantined.
 
+## If a build will not start: `@rpath/libz.1.dylib`
+
+```
+dyld: Library not loaded: @rpath/libz.1.dylib … no LC_RPATH's found
+```
+
+This happens only on machines with the GStreamer framework installed, and only
+to `cargo build --release` — the bundler handles it. GStreamer's `-sys` build
+scripts put the framework's lib directory on the link path whether or not
+`--features media` asked for it, so `-lz` finds the zlib in there before the
+system one. That copy's install name is `@rpath/libz.1.dylib`, and nothing adds
+an rpath.
+
+`./scripts/bundle-macos.sh` repoints it at `/usr/lib/libz.1.dylib` before
+signing. To fix a binary you built yourself:
+
+```bash
+install_name_tool -change @rpath/libz.1.dylib /usr/lib/libz.1.dylib target/release/zervo
+```
+
+The obvious fix — a linker flag in `.cargo/config.toml` — is not used, for two
+reasons: setting `rustflags` there is silently dropped when RUSTFLAGS is set in
+the environment, which is what CI does, and changing it invalidates every
+crate's fingerprint, so it costs a full rebuild of Servo.
+
 ## If you later want signed releases
 
 1. Join the Apple Developer Program ($99/yr) and create a *Developer ID
