@@ -101,26 +101,20 @@ pub struct Library {
 
 impl Library {
     pub fn load() -> Self {
-        let Some(path) = path() else {
-            return Self::default();
-        };
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|contents| serde_json::from_str(&contents).ok())
-            .unwrap_or_default()
+        crate::store::load_or_default(path())
     }
 
     pub fn save(&mut self) {
         if !self.dirty {
             return;
         }
-        self.dirty = false;
-        let Some(path) = path() else { return };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, json);
+        // Cleared once the bytes are on disk, not before. Clearing first — which
+        // is what this did — means a write that fails is never retried: every
+        // visit and every favourite since the last good save is gone, and
+        // nothing anywhere says so. The flag is the only record that there is
+        // still something to write.
+        if crate::store::save(path(), self) {
+            self.dirty = false;
         }
     }
 

@@ -217,7 +217,17 @@ impl AppState {
     /// refresh per-tab UI state from the engine's cached values. Called once
     /// per event-loop turn, after `spin_event_loop`.
     pub fn sync(self: &Rc<Self>) {
-        for webview in self.pending_popups.borrow_mut().drain(..) {
+        // Both queues are drained into a `Vec` before the loop runs rather than
+        // iterated in place. A `drain` iterator holds the `RefMut` for the whole
+        // body, and the body re-enters the engine: adopting a popup focuses a
+        // webview, and closing a tab drops the last handle to one. Either can
+        // dispatch a delegate callback that pushes onto the very queue being
+        // drained -- `request_create_new` and `notify_closed` below both do --
+        // and that second borrow_mut panics. This is the hazard the
+        // queue-and-drain note in docs/ARCHITECTURE.md warns about; collecting
+        // first is what actually avoids it.
+        let popups: Vec<WebView> = self.pending_popups.borrow_mut().drain(..).collect();
+        for webview in popups {
             let mut browser = self.browser.borrow_mut();
             let workspace = browser.active_workspace;
             let url = webview.url().map(|u| u.to_string()).unwrap_or_default();
@@ -229,7 +239,8 @@ impl AppState {
             self.activate_tab(id);
         }
 
-        for webview in self.pending_closes.borrow_mut().drain(..) {
+        let closes: Vec<WebView> = self.pending_closes.borrow_mut().drain(..).collect();
+        for webview in closes {
             let tab_id = self
                 .browser
                 .borrow_mut()

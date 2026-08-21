@@ -582,7 +582,10 @@ fn cache(bytes: &[u8], from: &str) -> Option<PathBuf> {
     let directory = cache_dir()?;
     std::fs::create_dir_all(&directory).ok()?;
     let path = directory.join(format!("current.{extension}"));
-    std::fs::write(&path, bytes).ok()?;
+    // Whole or not at all: the manifest written next records this path, and a
+    // half a JPEG on disk with a manifest pointing confidently at it is a
+    // backdrop that fails to decode on every launch until something replaces it.
+    crate::store::write_private(&path, bytes).ok()?;
     // The other extension is now a stale copy of a picture nobody will see.
     let stale = directory.join(if extension == "png" {
         "current.jpg"
@@ -617,9 +620,7 @@ fn write_manifest(credit: &Credit, path: &Path, at: Option<SystemTime>) {
             .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
             .map(|since| since.as_secs() as i64),
     };
-    if let Ok(json) = serde_json::to_string_pretty(&manifest) {
-        let _ = std::fs::write(target, json);
-    }
+    let _ = crate::store::save(Some(target), &manifest);
 }
 
 fn read_manifest() -> Option<(Credit, PathBuf, Option<SystemTime>)> {

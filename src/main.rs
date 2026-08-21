@@ -34,6 +34,7 @@ mod phosphor;
 mod platform;
 mod settings;
 mod state;
+mod store;
 mod theme;
 mod ui;
 #[cfg(target_os = "macos")]
@@ -68,6 +69,40 @@ use winit::window::Window;
 
 /// How long the chrome takes to cross from one theme to the other.
 const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(220);
+
+/// The soonest egui has asked to be woken.
+///
+/// egui reports the delay it wants through a callback rather than through
+/// `EguiGlow::run`, which destructures each `ViewportOutput { commands, .. }`
+/// and drops `repaint_delay` on the floor. Without it the loop has no idea
+/// whether egui wanted twenty milliseconds or twenty seconds.
+///
+/// The callback can be invoked from anywhere, so the answer lands here and the
+/// event loop collects it after the pass. Requests accumulate by taking the
+/// earliest: two cards asking for different delays both want to be served, and
+/// the sooner of the two is the one that decides when to wake.
+#[derive(Clone, Default)]
+struct RepaintAt(Arc<Mutex<Option<std::time::Instant>>>);
+
+impl RepaintAt {
+    fn request(&self, delay: std::time::Duration) {
+        // `Duration::MAX` is how egui says "nothing pending", and adding it to a
+        // point in time would overflow. `checked_add` covers that and every
+        // other absurd delay in one.
+        let Some(deadline) = std::time::Instant::now().checked_add(delay) else {
+            return;
+        };
+        let mut slot = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        *slot = Some(slot.map_or(deadline, |at| at.min(deadline)));
+    }
+
+    fn take(&self) -> Option<std::time::Instant> {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
+}
 
 /// Which side of the window owns the pointer between a press and its release.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,6 +176,8 @@ struct RunningApp {
     /// Deadline for a deferred egui repaint (e.g. caret blink) — served via
     /// ControlFlow::WaitUntil instead of a max-FPS redraw loop.
     pending_repaint_at: Option<std::time::Instant>,
+    /// Where egui leaves the delay it actually asked for. See `RepaintAt`.
+    repaint_at: RepaintAt,
     /// What `apply_theme` was last run for, and the icon last handed to the
     /// Dock. Every settings write used to redo both, and redoing the theme
     /// means restyling egui, retuning the window's appearance and the frosted
@@ -238,7 +275,7 @@ impl ApplicationHandler<WakerEvent> for App {
         vibrancy::force_layer_transparent(&window);
 
         // egui paints with the same surfman-created GL context — no second context.
-        let egui_glow = EguiGlow::new(
+        let mut egui_glow = EguiGlow::new(
             event_loop,
             window_rendering_context.glow_gl_api(),
             None,
@@ -249,6 +286,25 @@ impl ApplicationHandler<WakerEvent> for App {
             // egui ships to break it up.
             true,
         );
+
+        // The platform accessibility adapter. `EguiGlow::new` builds the
+        // `egui_winit::State` but never calls this, so without it egui composes
+        // an AccessKit tree every pass and has nobody to hand it to. Requests
+        // from the client arrive back through the same proxy the engine's waker
+        // uses -- see `WakerEvent`.
+        egui_glow
+            .egui_winit
+            .init_accesskit(event_loop, &window, waker.0.clone());
+
+        // egui hands the delay to a callback and nothing else, so this is the
+        // only place it can be caught.
+        let repaint_at = RepaintAt::default();
+        {
+            let slot = repaint_at.clone();
+            egui_glow
+                .egui_ctx
+                .set_request_repaint_callback(move |info| slot.request(info.delay));
+        }
 
         let settings = settings::load();
         let system_dark = matches!(window.theme(), Some(winit::window::Theme::Dark));
@@ -364,6 +420,7 @@ impl ApplicationHandler<WakerEvent> for App {
             pointer_owner: PointerOwner::Free,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
+            repaint_at,
             applied_theme,
             applied_icon,
             theme_fade: None,
@@ -403,9 +460,28 @@ impl ApplicationHandler<WakerEvent> for App {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: WakerEvent) {
-        if let Self::Running(app) = self {
-            app.state.servo.spin_event_loop();
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: WakerEvent) {
+        let Self::Running(app) = self else {
+            return;
+        };
+        match event {
+            WakerEvent::Engine => app.state.servo.spin_event_loop(),
+            WakerEvent::Accessibility(event) => {
+                use egui_winit::accesskit_winit::WindowEvent as AccessEvent;
+                match event.window_event {
+                    // The client has just attached and has no tree yet. egui
+                    // only builds one as part of a pass, so the answer to both
+                    // of these is to run one.
+                    AccessEvent::InitialTreeRequested => app.state.window.request_redraw(),
+                    AccessEvent::ActionRequested(request) => {
+                        app.egui_glow
+                            .egui_winit
+                            .on_accesskit_action_request(request);
+                        app.state.window.request_redraw();
+                    },
+                    AccessEvent::AccessibilityDeactivated => {},
+                }
+            },
         }
     }
 
@@ -819,7 +895,14 @@ impl RunningApp {
         #[cfg(feature = "engine-downloads")]
         {
             // Downloads the engine handed us (Servo does the transfer; we store).
-            for event in state.download_events.borrow_mut().drain(..) {
+            //
+            // Collected before the loop for the same reason as the queues in
+            // `AppState::sync`: the body activates a tab, which re-enters the
+            // engine, and `notify_response_chunk` pushes onto this very queue.
+            // A `drain` iterator would still be holding the borrow.
+            let events: Vec<app::DownloadEvent> =
+                state.download_events.borrow_mut().drain(..).collect();
+            for event in events {
                 match event {
                     app::DownloadEvent::Offered {
                         request_id,
@@ -1111,13 +1194,27 @@ impl RunningApp {
             self.library_saved_at = std::time::Instant::now();
         }
 
+        // Whatever egui asked for during this pass, taken whichever branch runs
+        // so a stale deadline cannot survive into the next one.
+        let egui_deadline = self.repaint_at.take();
         if self.egui_glow.egui_ctx.requested_repaint_last_pass() {
             state.window.request_redraw();
-        } else if self.egui_glow.egui_ctx.has_requested_repaint() {
-            // Delayed request (caret blink etc.): wake on a timer instead of
-            // redrawing at max FPS until it fires.
-            self.pending_repaint_at =
-                Some(std::time::Instant::now() + std::time::Duration::from_millis(300));
+        } else if let Some(deadline) = egui_deadline {
+            // Delayed request (caret blink, a clock's next minute): wake on a
+            // timer instead of redrawing at max FPS until it fires.
+            //
+            // Two things used to be wrong here. It woke after a flat 300ms
+            // regardless of what was asked for, and `has_requested_repaint()` is
+            // true whenever *any* delay is pending — so the stock new tab page,
+            // which ships a clock asking for twenty seconds, re-armed 300ms
+            // forever and never idled. And it *assigned* rather than taking the
+            // earlier of the two, so the 33ms the ambient backdrop had just
+            // asked for two branches up was overwritten by the clock's, and the
+            // default animated backdrop ran at three frames a second.
+            self.pending_repaint_at = Some(
+                self.pending_repaint_at
+                    .map_or(deadline, |at| at.min(deadline)),
+            );
         }
 
         // Paint order: bind the window framebuffer, egui paint (runs the blit
@@ -1849,8 +1946,22 @@ impl Drop for RunningApp {
 #[derive(Clone)]
 struct Waker(winit::event_loop::EventLoopProxy<WakerEvent>);
 
+/// Anything that can wake the loop from outside a window event.
 #[derive(Debug)]
-struct WakerEvent;
+enum WakerEvent {
+    /// The engine has something to do; spin its event loop.
+    Engine,
+    /// The platform's accessibility client is asking for the tree, or asking
+    /// for something in it to be activated. `accesskit_winit` delivers these
+    /// through the same proxy, which is why this is an enum now.
+    Accessibility(egui_winit::accesskit_winit::Event),
+}
+
+impl From<egui_winit::accesskit_winit::Event> for WakerEvent {
+    fn from(event: egui_winit::accesskit_winit::Event) -> Self {
+        Self::Accessibility(event)
+    }
+}
 
 impl Waker {
     fn new(event_loop: &EventLoop<WakerEvent>) -> Self {
@@ -1864,7 +1975,7 @@ impl EventLoopWaker for Waker {
     }
 
     fn wake(&self) {
-        if let Err(error) = self.0.send_event(WakerEvent) {
+        if let Err(error) = self.0.send_event(WakerEvent::Engine) {
             log::warn!("Failed to wake event loop: {error:?}");
         }
     }
