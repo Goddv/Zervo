@@ -377,9 +377,13 @@ impl Eraser {
     /// corners away instead leaves the chrome to be drawn back over nothing,
     /// which is the same paint on the same backdrop as the chrome beside it.
     ///
-    /// Only the bottom two. What shows through a hole along the top of the
-    /// window is not the backdrop but whatever is behind the window, and the
-    /// chrome above the card is opaque toolbar furniture besides.
+    /// All four. This used to be the bottom two only, on the belief that a
+    /// hole along the top of the window would show whatever is behind the
+    /// window rather than the backdrop, and that the chrome above the card was
+    /// opaque toolbar furniture anyway. Neither holds: the effect view is
+    /// installed on the frame view and autoresizes with it, so it covers the
+    /// top as readily as the bottom, and the widget shelf above the card is
+    /// frosted like the rest of the chrome.
     ///
     /// `rect` is the card in physical pixels with a bottom-left origin, as a
     /// viewport is. `radius` is its corner radius in the same units.
@@ -395,7 +399,11 @@ impl Eraser {
 
         // All four corners, and for each a fan of wedges from the square corner
         // out to the arc, plus the feathered band across it.
-        let steps = (radius_px.ceil() as usize).clamp(8, 64);
+        // Two steps per physical pixel of radius. One was enough while this
+        // only ran along the bottom edge, where the arc meets flat chrome;
+        // against the lit band at the top the facets are visible as stair
+        // steps on the curve.
+        let steps = ((radius_px * 2.0).ceil() as usize).clamp(16, 192);
         let mut vertices: Vec<f32> = Vec::with_capacity(steps * 36);
         let to_ndc = |px: f32, py: f32| {
             (
