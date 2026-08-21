@@ -392,6 +392,16 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) 
 /// The masks are oversized by a pixel so no sliver of the square blit can
 /// peek out at fractional DPI. `mask_corners` is false for internal pages
 /// whose fill is already rounded — masking there double-paints the corners.
+/// How far a floating panel may hang off the page and still frost against it.
+///
+/// A hover card drops out of a toolbar button, and with the widget shelf open
+/// there can be a good stretch of chrome between the two — so the card sat
+/// entirely above the page, found nothing to frost against, and came out flat
+/// while everything below it was glass. Generous on purpose: these panels
+/// belong to the page they are opened over, and the sampler clamps, so what a
+/// distant one gets is the page's own edge carried up to it.
+pub const PANEL_REACH: f32 = 400.0;
+
 /// A soft glow around the content card, when asked for.
 fn paint_card_halo(
     root: &Ui,
@@ -585,16 +595,26 @@ pub fn finish_content_frame(
                 *true_arc.first().expect("arc"),
                 *true_arc.last().expect("arc"),
             ] {
-                let along = end - corner;
-                let horizontal = along.x.abs() > along.y.abs();
-                // Not along the top edge. What sits above the card is the
-                // toolbar, which is opaque chrome in its own right, so there is
-                // no translucent neighbour to bridge to — fading the mask into
-                // it only smudges the toolbar, which is what this did to the
-                // top corners the first time round.
-                if horizontal && outward.y < 0.0 {
+                // The bottom two corners only.
+                //
+                // A skirt is a bridge between the mask and a translucent
+                // neighbour, and only the bottom corners have one on both
+                // sides. The top two are bounded by the toolbar above and,
+                // when it is open, the sidebar beside — both opaque, both
+                // drawn in colours of their own that the mask's does not
+                // match. Fading into them put a pale smudge outside each top
+                // corner, which is worse than the step it was trying to hide.
+                //
+                // The step is still there at the top. It is the same problem
+                // and it wants the same answer as the corners themselves: the
+                // page clipped to a rounded silhouette so there is nothing to
+                // mask. That is a change to how the page is composited, not a
+                // colour to pick.
+                if outward.y < 0.0 {
                     continue;
                 }
+                let along = end - corner;
+                let horizontal = along.x.abs() > along.y.abs();
                 let normal = if horizontal {
                     vec2(0.0, outward.y)
                 } else {
@@ -1340,7 +1360,7 @@ fn hover_card(
             // one cut off square at the bottom.
             for shape in glass::shapes(
                 drawn,
-                palette,
+                &palette.reaching(PANEL_REACH),
                 Glass::of(Surface::Menu)
                     .radius(Tier::Panel)
                     .opaque(palette.bg)
@@ -1356,7 +1376,7 @@ fn hover_card(
             // palette down rather than letting the closure capture the outer
             // one is what lets pale text turn dark when this card opens over a
             // white page in dark mode.
-            add(ui, card, palette.over(drawn));
+            add(ui, card, palette.reaching(PANEL_REACH).over(drawn));
             ui.advance_cursor_after_rect(drawn);
         });
     Some(drawn)
@@ -1378,7 +1398,7 @@ fn popup_menu<T: Clone>(
         Rect::from_min_size(at, vec2(width, rows.len() as f32 * ROW + 12.0)),
         ctx.content_rect(),
     );
-    let palette = &palette.over(rect);
+    let palette = &palette.reaching(PANEL_REACH).over(rect);
     let mut chosen = None;
     egui::Area::new(key)
         .order(egui::Order::Foreground)
@@ -2538,7 +2558,7 @@ fn draw_navbar_config(
         ),
         ctx.content_rect(),
     );
-    let palette = palette.over(tray);
+    let palette = palette.reaching(PANEL_REACH).over(tray);
     egui::Area::new(Id::new("zervo_nav_tray"))
         .order(egui::Order::Foreground)
         .fixed_pos(tray.min)

@@ -674,7 +674,7 @@ pub fn menu<T: Copy>(
         ctx.content_rect(),
     );
     ctx.data_mut(|data| data.insert_temp(Id::new("zervo_menu_rect"), rect));
-    let palette = &palette.over(rect);
+    let palette = &palette.reaching(crate::ui::PANEL_REACH).over(rect);
     let mut chosen = None;
     egui::Area::new(Id::new(id))
         .order(egui::Order::Foreground)
