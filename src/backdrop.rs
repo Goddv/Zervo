@@ -17,9 +17,43 @@
 //! throttled, because a readback stalls the pipeline and the page behind a
 //! hover card does not change while you are reading it.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use glow::HasContext as _;
+
+/// A handle to the one copy the window keeps, shared with the paint callback
+/// that takes it.
+pub type Capture = Arc<Mutex<PageBackdrop>>;
+
+/// Take the copy at this point in `painter`'s layer.
+///
+/// Where this is called is the whole design. Shapes within a layer are drawn in
+/// the order they were added, so the copy holds exactly what the page has drawn
+/// so far and none of what comes after — which is how a surface avoids frosting
+/// against itself. Every page puts it in the same place: straight after
+/// whatever filled the content rect, and before anything that sits on it.
+pub fn capture_into(painter: &egui::Painter, rect: egui::Rect, capture: &Capture) {
+    let capture = capture.clone();
+    painter.add(egui::PaintCallback {
+        rect,
+        callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
+            let clip = info.viewport_in_pixels();
+            let Ok(mut backdrop) = capture.lock() else {
+                return;
+            };
+            backdrop.capture(
+                painter.gl(),
+                [
+                    clip.left_px,
+                    clip.from_bottom_px,
+                    clip.width_px,
+                    clip.height_px,
+                ],
+            );
+        })),
+    });
+}
 
 /// The longest side of the copy.
 ///
@@ -66,14 +100,6 @@ impl PageBackdrop {
         self.ready.take()
     }
 
-    /// Forget everything. Called when there is no page to copy — an internal
-    /// page, or a tab with no engine behind it — so the chrome does not go on
-    /// frosting itself against a page that is no longer there.
-    pub fn clear(&mut self) {
-        self.ready = None;
-        self.taken_at = None;
-    }
-
     /// Copy `source` — a rectangle of the framebuffer currently bound for
     /// drawing, in physical pixels with a bottom-left origin — into a small
     /// blurred image.
@@ -83,7 +109,10 @@ impl PageBackdrop {
     /// that would draw over it.
     pub fn capture(&mut self, gl: &glow::Context, source: [i32; 4]) {
         let [x, y, width, height] = source;
-        if width <= 0 || height <= 0 {
+        // One copy per frame, whoever asks first. The pages that ask are meant
+        // to be mutually exclusive, but a readback is too expensive to leave
+        // that to trust.
+        if width <= 0 || height <= 0 || self.ready.is_some() {
             return;
         }
         // Keep the page's shape, so the blur is not stretched.
