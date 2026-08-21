@@ -284,96 +284,247 @@ fn blur(pixels: Vec<u8>, size: (i32, i32)) -> Option<egui::ColorImage> {
     ))
 }
 
-/// Cut the content card's rounded corners out of the framebuffer.
+/// An erase pass: geometry drawn to take the destination's alpha down rather
+/// than to put colour on it.
 ///
-/// The page is blitted as a square, so the card's corners have to be rounded by
-/// something drawn over it. That something has to be opaque — it is hiding
-/// opaque pixels — while the chrome beside it is a thin tint over the system's
-/// backdrop, and that backdrop is composited by the window server, outside this
-/// framebuffer. It cannot be read, reproduced or matched, so the mask always
-/// landed a few per cent off its surroundings and the corners always showed it.
-/// Three attempts to pick a better colour each moved the seam rather than
-/// removing it.
-///
-/// So nothing is painted over the page at all. The corners are cleared to
-/// nothing — the page and the chrome under it both — and the chrome is drawn
-/// back over them at its own tint. Over transparency that composites to exactly
-/// what the chrome beside it is, because it is the same paint on the same
-/// backdrop.
-///
-/// The top two corners are left alone: what shows through a hole cut up there
-/// is not the backdrop but whatever is behind the window, and the chrome above
-/// the card is opaque toolbar furniture that no colour chosen per height could
-/// match anyway. Those keep the opaque mask they always had.
-///
-/// A row at a time, because a scissor is a rectangle and a corner is not.
-/// Twenty-odd rows a corner, cleared to nothing, is not work anybody will
-/// measure.
-///
-/// `rect` is the content card in physical pixels with a bottom-left origin, as
-/// a viewport is. `radius` is its corner radius in the same units.
-pub fn cut_corners(gl: &glow::Context, rect: [i32; 4], radius: i32) {
-    let [x, y, width, height] = rect;
-    if radius <= 0 || width <= radius * 2 || height <= radius * 2 {
-        return;
-    }
-    // SAFETY: a current context, and every piece of state this touches is put
-    // back before returning.
-    unsafe {
-        let scissoring = gl.is_enabled(glow::SCISSOR_TEST);
-        let mut box_before = [0_i32; 4];
-        gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut box_before);
-        let mut clear_before = [0_f32; 4];
-        gl.get_parameter_f32_slice(glow::COLOR_CLEAR_VALUE, &mut clear_before);
-        gl.enable(glow::SCISSOR_TEST);
-        gl.clear_color(0.0, 0.0, 0.0, 0.0);
+/// `glClear` behind a scissor can do the same job and cannot antialias it — a
+/// scissor is a whole number of pixels, so the corner came out as a staircase
+/// while the two drawn by egui above it were smooth. Coverage has to come from
+/// somewhere, and the cheapest place is a triangle's own interpolation: the
+/// band either side of the arc is drawn with alpha running nought to one
+/// across it, and the blend function turns that into how much of the page
+/// survives.
+#[derive(Default)]
+pub struct Eraser {
+    program: Option<glow::Program>,
+    array: Option<glow::VertexArray>,
+    buffer: Option<glow::Buffer>,
+}
 
-        for row in 0..radius {
-            // How far in the arc has come by this row, measured from the flat
-            // edge. Rounded outward, so what is cleared is everything the arc
-            // does not cover and the mask's own antialiasing can soften the
-            // boundary from there.
-            let from_edge = radius - row;
-            let reach = radius
-                - ((radius * radius - from_edge * from_edge) as f64)
-                    .sqrt()
-                    .floor() as i32;
-            if reach <= 0 {
-                continue;
-            }
-            // The bottom two corners only. Cleared pixels show whatever the
-            // window server has behind the window, and along the top of the
-            // window that is not the system's backdrop view — a hole cut there
-            // comes out black rather than blurred, and only the mask over it
-            // keeps that off the screen. Below, it is the backdrop, which is
-            // the whole point.
-            for (corner_x, corner_y) in [(x, y + row), (x + width - reach, y + row)] {
-                gl.scissor(corner_x, corner_y, reach, 1);
-                gl.clear(glow::COLOR_BUFFER_BIT);
+/// How wide the erase fades, in physical pixels. One is what antialiasing is.
+const FEATHER_PX: f32 = 1.0;
+
+impl Eraser {
+    /// Cut the content card's rounded corners out of the framebuffer.
+    ///
+    /// The page is blitted as a square, so the corners have to be rounded by
+    /// something. Painting over it cannot work: the cover has to be opaque —
+    /// it is hiding opaque pixels — while the chrome beside it is a thin tint
+    /// over the system's backdrop, composited by the window server outside
+    /// this framebuffer and so impossible to read or reproduce. Taking the
+    /// corners away instead leaves the chrome to be drawn back over nothing,
+    /// which is the same paint on the same backdrop as the chrome beside it.
+    ///
+    /// Only the bottom two. What shows through a hole along the top of the
+    /// window is not the backdrop but whatever is behind the window, and the
+    /// chrome above the card is opaque toolbar furniture besides.
+    ///
+    /// `rect` is the card in physical pixels with a bottom-left origin, as a
+    /// viewport is. `radius` is its corner radius in the same units.
+    pub fn cut_corners(&mut self, gl: &glow::Context, rect: [i32; 4], radius: f32) {
+        let [x, y, width, height] = rect;
+        let radius_px = radius.min(width as f32 / 2.0).min(height as f32 / 2.0);
+        if radius_px <= 0.5 || width <= 0 || height <= 0 {
+            return;
+        }
+        let Some((program, array, buffer)) = self.ready(gl) else {
+            return;
+        };
+
+        // Two corners, and for each a fan of wedges from the square corner out
+        // to the arc, plus the feathered band across it.
+        let steps = (radius_px.ceil() as usize).clamp(8, 64);
+        let mut vertices: Vec<f32> = Vec::with_capacity(steps * 18);
+        let to_ndc = |px: f32, py: f32| {
+            (
+                (px - x as f32) / width as f32 * 2.0 - 1.0,
+                (py - y as f32) / height as f32 * 2.0 - 1.0,
+            )
+        };
+        // (corner, arc centre, the quadrant's start angle)
+        let corners = [
+            (
+                (x as f32, y as f32),
+                (x as f32 + radius_px, y as f32 + radius_px),
+                std::f32::consts::PI,
+            ),
+            (
+                ((x + width) as f32, y as f32),
+                ((x + width) as f32 - radius_px, y as f32 + radius_px),
+                1.5 * std::f32::consts::PI,
+            ),
+        ];
+        for (corner, centre, start) in corners {
+            let at = |angle: f32, r: f32| (centre.0 + r * angle.cos(), centre.1 + r * angle.sin());
+            let inner = radius_px - FEATHER_PX * 0.5;
+            let outer = radius_px + FEATHER_PX * 0.5;
+            for step in 0..steps {
+                let a0 = start + (step as f32 / steps as f32) * 0.5 * std::f32::consts::PI;
+                let a1 = start + ((step + 1) as f32 / steps as f32) * 0.5 * std::f32::consts::PI;
+                let (i0, i1) = (at(a0, inner), at(a1, inner));
+                let (o0, o1) = (at(a0, outer), at(a1, outer));
+                // The band across the arc: nothing erased on the page's side,
+                // everything on the chrome's, and a pixel of ramp between.
+                for (p, alpha) in [
+                    (i0, 0.0),
+                    (i1, 0.0),
+                    (o1, 1.0),
+                    (i0, 0.0),
+                    (o1, 1.0),
+                    (o0, 1.0),
+                ] {
+                    let (nx, ny) = to_ndc(p.0, p.1);
+                    vertices.extend_from_slice(&[nx, ny, alpha]);
+                }
+                // And the wedge from there out to the square corner, which is
+                // page all the way and goes entirely.
+                for p in [o0, o1, corner] {
+                    let (nx, ny) = to_ndc(p.0, p.1);
+                    vertices.extend_from_slice(&[nx, ny, 1.0]);
+                }
             }
         }
 
-        gl.clear_color(
-            clear_before[0],
-            clear_before[1],
-            clear_before[2],
-            clear_before[3],
-        );
-        gl.scissor(box_before[0], box_before[1], box_before[2], box_before[3]);
-        if !scissoring {
+        // SAFETY: a current context, and every piece of state this changes is
+        // put back before returning.
+        unsafe {
+            let blending = gl.is_enabled(glow::BLEND);
+            let scissoring = gl.is_enabled(glow::SCISSOR_TEST);
+            let previous_program = gl.get_parameter_i32(glow::CURRENT_PROGRAM);
             gl.disable(glow::SCISSOR_TEST);
+            gl.enable(glow::BLEND);
+            // Destination-out: keep none of the source's colour, and keep the
+            // destination in proportion to what the source did not cover.
+            gl.blend_func_separate(
+                glow::ZERO,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ZERO,
+                glow::ONE_MINUS_SRC_ALPHA,
+            );
+
+            gl.use_program(Some(program));
+            gl.bind_vertex_array(Some(array));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                bytemuck_cast(&vertices),
+                glow::STREAM_DRAW,
+            );
+            gl.enable_vertex_attrib_array(0);
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 12, 0);
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(1, 1, glow::FLOAT, false, 12, 8);
+            gl.draw_arrays(glow::TRIANGLES, 0, (vertices.len() / 3) as i32);
+
+            gl.bind_vertex_array(None);
+            gl.bind_buffer(glow::ARRAY_BUFFER, None);
+            gl.use_program(
+                std::num::NonZeroU32::new(previous_program as u32).map(glow::NativeProgram),
+            );
+            // Back to what egui paints with, which is premultiplied source-over.
+            gl.blend_func_separate(
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ONE_MINUS_DST_ALPHA,
+                glow::ONE,
+            );
+            if !blending {
+                gl.disable(glow::BLEND);
+            }
+            if scissoring {
+                gl.enable(glow::SCISSOR_TEST);
+            }
+        }
+    }
+
+    /// Compile once, on first use, inside the paint callback where there is a
+    /// context to compile against.
+    fn ready(
+        &mut self,
+        gl: &glow::Context,
+    ) -> Option<(glow::Program, glow::VertexArray, glow::Buffer)> {
+        if let (Some(program), Some(array), Some(buffer)) = (self.program, self.array, self.buffer)
+        {
+            return Some((program, array, buffer));
+        }
+        // SAFETY: a current context. Everything made here is kept.
+        unsafe {
+            let program = gl.create_program().ok()?;
+            const VERTEX: &str = "#version 150\n\
+                in vec2 position;\n\
+                in float coverage;\n\
+                out float shade;\n\
+                void main() {\n\
+                    shade = coverage;\n\
+                    gl_Position = vec4(position, 0.0, 1.0);\n\
+                }\n";
+            const FRAGMENT: &str = "#version 150\n\
+                in float shade;\n\
+                out vec4 colour;\n\
+                void main() {\n\
+                    colour = vec4(0.0, 0.0, 0.0, shade);\n\
+                }\n";
+            let mut shaders = Vec::new();
+            for (kind, source) in [
+                (glow::VERTEX_SHADER, VERTEX),
+                (glow::FRAGMENT_SHADER, FRAGMENT),
+            ] {
+                let shader = gl.create_shader(kind).ok()?;
+                gl.shader_source(shader, source);
+                gl.compile_shader(shader);
+                if !gl.get_shader_compile_status(shader) {
+                    log::warn!("corner eraser: {}", gl.get_shader_info_log(shader));
+                    return None;
+                }
+                gl.attach_shader(program, shader);
+                shaders.push(shader);
+            }
+            gl.bind_attrib_location(program, 0, "position");
+            gl.bind_attrib_location(program, 1, "coverage");
+            gl.link_program(program);
+            for shader in shaders {
+                gl.detach_shader(program, shader);
+                gl.delete_shader(shader);
+            }
+            if !gl.get_program_link_status(program) {
+                log::warn!("corner eraser: {}", gl.get_program_info_log(program));
+                return None;
+            }
+            let array = gl.create_vertex_array().ok()?;
+            let buffer = gl.create_buffer().ok()?;
+            self.program = Some(program);
+            self.array = Some(array);
+            self.buffer = Some(buffer);
+            Some((program, array, buffer))
         }
     }
 }
 
+/// `f32` vertices as the bytes the GPU wants, without pulling in a crate for it.
+fn bytemuck_cast(values: &[f32]) -> &[u8] {
+    // SAFETY: `f32` has no padding and no invalid bit patterns, and the result
+    // borrows the same slice for the same lifetime.
+    unsafe {
+        std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values))
+    }
+}
+
 /// Add the cut to `painter`, at this point in its layer.
-pub fn cut_corners_into(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
+pub fn cut_corners_into(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    radius: f32,
+    eraser: &Arc<Mutex<Eraser>>,
+) {
+    let eraser = eraser.clone();
     painter.add(egui::PaintCallback {
         rect,
         callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
             let clip = info.viewport_in_pixels();
-            let scale = info.pixels_per_point;
-            cut_corners(
+            let Ok(mut eraser) = eraser.lock() else {
+                return;
+            };
+            eraser.cut_corners(
                 painter.gl(),
                 [
                     clip.left_px,
@@ -381,7 +532,7 @@ pub fn cut_corners_into(painter: &egui::Painter, rect: egui::Rect, radius: f32) 
                     clip.width_px,
                     clip.height_px,
                 ],
-                (radius * scale).round() as i32,
+                radius * info.pixels_per_point,
             );
         })),
     });
