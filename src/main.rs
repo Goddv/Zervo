@@ -790,9 +790,12 @@ impl RunningApp {
                     let rect: Rect<f32, DevicePixel> = webview.size().into();
                     if rect.contains(point) {
                         let mouse_button = match button {
-                            MouseButton::Left => ServoMouseButton::Left,
-                            MouseButton::Right => ServoMouseButton::Right,
-                            MouseButton::Middle => ServoMouseButton::Middle,
+                            // Servo names these the way the DOM does — a
+                            // left-handed mouse swaps which physical button is
+                            // "primary", and winit reports the logical one.
+                            MouseButton::Left => ServoMouseButton::Primary,
+                            MouseButton::Right => ServoMouseButton::Secondary,
+                            MouseButton::Middle => ServoMouseButton::Auxiliary,
                             MouseButton::Back => ServoMouseButton::Back,
                             MouseButton::Forward => ServoMouseButton::Forward,
                             MouseButton::Other(value) => ServoMouseButton::Other(value),

@@ -5,7 +5,7 @@
 # setup; CI appends the same block for release builds.
 #
 # [patch.crates-io]
-# servo = { git = "https://github.com/Goddv/servo", rev = "0d5a12189e5003ee95b335642470e2baf25fe607" }
+# servo = { git = "https://github.com/Goddv/servo", rev = "36176b7d2c065dbed8f37edf39da495d41a4eaca" }
 #
 # Or point at a local checkout while working on the patch itself:
 #

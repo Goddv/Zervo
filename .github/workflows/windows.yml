@@ -20,7 +20,7 @@ env:
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: sccache
   SERVO_FORK: https://github.com/Goddv/servo
-  SERVO_REV: 0d5a12189e5003ee95b335642470e2baf25fe607
+  SERVO_REV: 36176b7d2c065dbed8f37edf39da495d41a4eaca
   # mozjs looks for this exact version, in this exact place, and panics with
   # "MozTools or MozillaBuild not found!" if it is missing. It does not fetch
   # it itself.

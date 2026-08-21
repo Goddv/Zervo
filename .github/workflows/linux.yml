@@ -28,7 +28,7 @@ env:
   # builds compile against a fork carrying the embedder-download patch. Pinned
   # to a revision, never a branch.
   SERVO_FORK: https://github.com/Goddv/servo
-  SERVO_REV: 0d5a12189e5003ee95b335642470e2baf25fe607
+  SERVO_REV: 36176b7d2c065dbed8f37edf39da495d41a4eaca
 
 jobs:
   deb:

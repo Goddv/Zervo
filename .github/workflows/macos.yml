@@ -37,7 +37,7 @@ env:
   # this version. Both packages are needed: the runtime and the headers.
   GSTREAMER_VERSION: 1.22.3
   SERVO_FORK: https://github.com/Goddv/servo
-  SERVO_REV: 0d5a12189e5003ee95b335642470e2baf25fe607
+  SERVO_REV: 36176b7d2c065dbed8f37edf39da495d41a4eaca
   # sccache is the single biggest lever here: Servo's own CI measures ~15 min
   # warm against ~54 min cold for the same profile.
   SCCACHE_GHA_ENABLED: "true"

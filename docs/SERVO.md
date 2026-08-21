@@ -68,7 +68,7 @@ Cargo cannot patch a dependency in place, so build against a patched checkout:
 # once
 gh repo fork servo/servo --clone   # or fork in the web UI and clone
 cd servo
-git checkout -b zervo-downloads a57e1ff105c…
+git checkout -b zervo-downloads f7cd7d88047…
 git apply /path/to/zervo/patches/servo/0001-embedder-file-downloads.patch
 git commit -am "embedder: offer unrenderable responses to the embedder"
 git push -u origin zervo-downloads

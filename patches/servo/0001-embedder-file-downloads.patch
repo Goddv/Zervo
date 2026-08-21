@@ -119,7 +119,7 @@ index 14fb7cbad9f..382173b6381 100644
      target.process_response(request, &response);
      // Send Response to Devtools
 diff --git a/components/net/http_loader.rs b/components/net/http_loader.rs
-index 03f168aa368..3b333ed8131 100644
+index f9d99d61551..f970d0d5edc 100644
 --- a/components/net/http_loader.rs
 +++ b/components/net/http_loader.rs
 @@ -39,6 +39,7 @@ use ipc_channel::router::ROUTER;
@@ -284,10 +284,10 @@ index 8a857cb78e9..ccb5481343e 100644
      // https://html.spec.whatwg.org/multipage/#attr-hyperlink-target
      make_getter!(Target, "target");
  
-diff --git a/components/script/dom/html/htmlanchorelement.rs b/components/script/dom/html/htmlanchorelement.rs
+diff --git a/components/script/dom/html/textual/htmlanchorelement.rs b/components/script/dom/html/textual/htmlanchorelement.rs
 index fe5de38fa0a..e938b3f10ca 100644
---- a/components/script/dom/html/htmlanchorelement.rs
-+++ b/components/script/dom/html/htmlanchorelement.rs
+--- a/components/script/dom/html/textual/htmlanchorelement.rs
++++ b/components/script/dom/html/textual/htmlanchorelement.rs
 @@ -186,6 +186,12 @@ impl HTMLAnchorElementMethods<crate::DomTypeHolder> for HTMLAnchorElement {
      make_setter!(SetHreflang, "hreflang");
  
@@ -361,7 +361,7 @@ index 3ed1f60bbfb..95b1f09d99c 100644
          let task = task!(navigate_follow_hyperlink: move |cx| {
              debug!("following hyperlink to {}", load_data.url);
 diff --git a/components/script/navigation.rs b/components/script/navigation.rs
-index 869a3788a74..51b3fce42dd 100644
+index 8159769f2b9..5d56b428ab0 100644
 --- a/components/script/navigation.rs
 +++ b/components/script/navigation.rs
 @@ -16,6 +16,7 @@ use http::header;
@@ -617,10 +617,10 @@ index 3bbdc5189ac..4818c6afd57 100644
  
  pub(crate) struct DefaultWebViewDelegate;
 diff --git a/components/shared/constellation/from_script_message.rs b/components/shared/constellation/from_script_message.rs
-index eb1a1626e71..9a455a3d941 100644
+index 37d9fe0a117..dcf89093f19 100644
 --- a/components/shared/constellation/from_script_message.rs
 +++ b/components/shared/constellation/from_script_message.rs
-@@ -145,6 +145,13 @@ pub struct LoadData {
+@@ -146,6 +146,13 @@ pub struct LoadData {
  
      /// If this request is for the initial about:blank document.
      pub is_initial_about_blank: bool,
@@ -634,7 +634,7 @@ index eb1a1626e71..9a455a3d941 100644
  }
  
  impl LoadData {
-@@ -185,6 +192,7 @@ impl LoadData {
+@@ -186,6 +193,7 @@ impl LoadData {
              creation_sandboxing_flag_set,
              container_document_encoding: None,
              is_initial_about_blank: false,
