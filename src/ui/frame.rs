@@ -49,17 +49,6 @@ pub(crate) fn eased_gradient(painter: &egui::Painter, rect: Rect, top: Color32, 
     // NOTE: interpolate in PREMULTIPLIED space, alpha included. `theme::mix`
     // returns an opaque colour, so using it here would make the strip fully
     // opaque with darkened (already premultiplied) RGB — a black band.
-    fn lerp_premultiplied(a: Color32, b: Color32, t: f32) -> Color32 {
-        let inv = 1.0 - t;
-        let channel = |a: u8, b: u8| (a as f32 * inv + b as f32 * t) as u8;
-        Color32::from_rgba_premultiplied(
-            channel(a.r(), b.r()),
-            channel(a.g(), b.g()),
-            channel(a.b(), b.b()),
-            channel(a.a(), b.a()),
-        )
-    }
-
     const STRIPS: usize = 32;
     let mut mesh = Mesh::default();
     for strip in 0..=STRIPS {
@@ -124,7 +113,13 @@ pub(crate) fn chrome_fill_at(
         return bg;
     }
     let t = glow_falloff((y - top) / CHROME_GRADIENT_HEIGHT);
-    theme::mix(
+    // Premultiplied, because both ends are translucent whenever `opacity` is.
+    // `theme::mix` returns an opaque colour, so it handed back the glow's RGB
+    // already scaled down by the tint and then declared it fully opaque — a
+    // near-black patch wherever the chrome is see-through and the glow band
+    // reaches. The card's bottom corners sit past the band and took the early
+    // return above, which is why only the top two were ever black.
+    lerp_premultiplied(
         glow_strip_top(palette, top_glow).gamma_multiply(opacity),
         bg,
         t,
@@ -146,6 +141,25 @@ pub(crate) fn paint_chrome_base(root: &Ui, palette: &Palette, top_glow: f32, opa
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     let window = root.ctx().content_rect();
     paint_chrome_fill(&painter, window, window.top(), palette, top_glow, opacity);
+}
+
+/// Blend two colours that are already premultiplied, keeping them
+/// premultiplied.
+///
+/// `theme::mix` cannot do this: it returns an *opaque* colour. Handed two
+/// translucent premultiplied colours it produces one whose RGB has been scaled
+/// down by an alpha it then throws away — which at a low tint is very nearly
+/// black. ARCHITECTURE.md has warned about this for as long as it has existed;
+/// it is what made the content card's top corners black.
+pub(crate) fn lerp_premultiplied(a: Color32, b: Color32, t: f32) -> Color32 {
+    let inv = 1.0 - t;
+    let channel = |a: u8, b: u8| (a as f32 * inv + b as f32 * t) as u8;
+    Color32::from_rgba_premultiplied(
+        channel(a.r(), b.r()),
+        channel(a.g(), b.g()),
+        channel(a.b(), b.b()),
+        channel(a.a(), b.a()),
+    )
 }
 
 /// Fill `rect` with the chrome's colour, including the glow band across the
@@ -305,7 +319,10 @@ pub fn finish_content_frame(
 
     // One arc segment per physical pixel, so the facets are sub-pixel and the
     // curve cannot look polygonal on a Retina display.
-    let segments = ((radius * root.pixels_per_point()).ceil() as usize).clamp(16, 64);
+    // Matched to the eraser's tessellation in backdrop.rs — where the two
+    // polygons disagree, the mask's hard mesh edge overhangs the cut's
+    // feathered one and the difference reads as facets along the curve.
+    let segments = ((radius * root.pixels_per_point() * 2.0).ceil() as usize).clamp(16, 192);
     // (corner, arc center, start angle, outward direction)
     let corners = [
         (
@@ -346,14 +363,15 @@ pub fn finish_content_frame(
     // because the corner beneath it has been cut away and it is the same paint
     // on the same backdrop.
     //
-    // Above the card it is the toolbar and everything in it, which is opaque,
-    // and the corners up there are not cut — a hole in the top of the window
-    // shows what is behind the window rather than the backdrop. So those masks
-    // stay opaque, and they leave the glow out of it: the band is painted from
-    // the window's top and the toolbar covers all of it, so the chrome that
-    // actually shows beside the card carries none. Reading the gradient there
-    // put a blue cast on the top corners and nowhere else, which is the
-    // nine-units-of-255 they had been off by all along.
+    // Above the card it is the widget shelf, which is frosted like the rest of
+    // the chrome rather than opaque — so there was never an opaque neighbour
+    // for an opaque mask to match, and the top masks read as dark notches
+    // against it. This comment used to say the opposite, and that a hole in the
+    // top of the window would show what is behind the window rather than the
+    // backdrop; the effect view is installed on the frame view and autoresizes
+    // with it, so it covers the top as well as the bottom. Checked by cutting
+    // the top corners and painting nothing back: the notch shows the frosted
+    // backdrop, same as below.
     let tint = palette.chrome_tint();
     let chrome_at =
         |y: f32, opacity: f32, glow: f32| chrome_fill_at(root, y, palette, glow, opacity);
