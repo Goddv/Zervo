@@ -155,9 +155,14 @@ pub struct Backdrop {
 /// than something each one reinvents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Translucency {
-    /// What Zervo has always looked like.
+    /// No translucency at all. Surfaces are their own colour and nothing
+    /// comes through them.
     Solid,
+    /// What Zervo has always looked like, now applied to everything the
+    /// material draws rather than to the window alone.
     Frosted,
+    /// More glass than the chrome has ever had, stopping where a surface would
+    /// stop holding text up.
     Sheer,
 }
 
@@ -188,6 +193,26 @@ impl Translucency {
         }
     }
 
+    /// How opaque the window's own chrome is at this step, 0..=1.
+    ///
+    /// The same three steps drive this as drive the cards, so how much glass
+    /// there is is one decision rather than two that have to be kept in
+    /// agreement.
+    ///
+    /// `Frosted` is calibrated to what the chrome has always looked like —
+    /// the 0.85 the old slider defaulted to — so it is the reference the other
+    /// two are steps away from rather than a new look of its own. Solid takes
+    /// the translucency away entirely, for anyone who never wanted it. Sheer
+    /// goes further, but not much: past about a quarter the sidebar stops
+    /// being a surface and starts being a window onto the desktop.
+    pub fn chrome(self) -> f32 {
+        match self {
+            Translucency::Solid => 1.0,
+            Translucency::Frosted => 0.85,
+            Translucency::Sheer => 0.72,
+        }
+    }
+
     /// How much of a surface's own material survives, 0..=1.
     ///
     /// Only the fill is scaled. The hairline and the shadow keep their
@@ -196,8 +221,8 @@ impl Translucency {
     pub fn fill(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.72,
-            Translucency::Sheer => 0.48,
+            Translucency::Frosted => 0.85,
+            Translucency::Sheer => 0.68,
         }
     }
 }
@@ -243,9 +268,9 @@ impl Blur {
     /// three steps rather than being flattened onto the same numbers.
     pub fn scale(self) -> f32 {
         match self {
-            Blur::Light => 0.45,
+            Blur::Light => 0.5,
             Blur::Medium => 1.0,
-            Blur::Deep => 2.1,
+            Blur::Deep => 1.8,
         }
     }
 }
@@ -386,7 +411,7 @@ impl Material {
         glow: 0.32,
         glow_reach: 8.0,
         frosts: true,
-        blur: 10.0,
+        blur: 6.0,
         radius: Radii {
             hairline: 2,
             control: 7,
@@ -641,8 +666,13 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             surface_hover: mix(Color32::from_rgb(51, 51, 51), accent_color, 0.07),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
-            text: Color32::from_rgb(228, 228, 232),
-            text_muted: Color32::from_rgb(158, 158, 168),
+            text: Color32::from_rgb(238, 238, 242),
+            // Muted text has to survive being read off a translucent surface
+            // with a photograph behind it, which is a harder job than it had
+            // when every card was opaque. It is the caption colour on every
+            // list row and every explanatory line in Settings, so when it is
+            // too dim it is most of the words in the application.
+            text_muted: Color32::from_rgb(182, 182, 192),
             border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
             translucency: Translucency::Solid,
@@ -657,8 +687,8 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             surface_hover: mix(Color32::from_rgb(213, 213, 213), accent_color, 0.05),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
-            text: Color32::from_rgb(28, 28, 32),
-            text_muted: Color32::from_rgb(96, 96, 104),
+            text: Color32::from_rgb(20, 20, 24),
+            text_muted: Color32::from_rgb(78, 78, 88),
             border: Color32::from_rgb(204, 204, 204),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
             translucency: Translucency::Solid,
@@ -826,6 +856,32 @@ mod tests {
         let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
         let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
         assert!(palette.backdrop_under(card).is_none());
+    }
+
+    /// The three steps have to be three steps, in the order they are offered.
+    /// Both of these are read by different parts of the chrome, and a pair
+    /// that disagreed about which way "more glass" goes would be a setting
+    /// that made the window more translucent and the cards less.
+    #[test]
+    fn the_steps_go_one_way() {
+        use Translucency::{Frosted, Sheer, Solid};
+        assert!(Solid.chrome() > Frosted.chrome() && Frosted.chrome() > Sheer.chrome());
+        assert!(Solid.fill() > Frosted.fill() && Frosted.fill() > Sheer.fill());
+        assert_eq!(
+            Solid.fill(),
+            1.0,
+            "Solid has to mean no translucency at all"
+        );
+        assert_eq!(Solid.chrome(), 1.0, "Solid has to mean an opaque window");
+    }
+
+    /// `Frosted` is the reference the other two are steps away from, not a
+    /// look of its own: it is what the chrome looked like when its opacity was
+    /// a slider that defaulted to 0.85. Moving it silently re-skins the whole
+    /// application for everyone who never touched the setting.
+    #[test]
+    fn frosted_is_the_chrome_zervo_has_always_had() {
+        assert!((Translucency::Frosted.chrome() - 0.85).abs() < 1e-6);
     }
 
     /// Every tier has to resolve to something; a material that forgot one
