@@ -1,7 +1,18 @@
 # Architecture
 
-Zervo is one binary. It owns a winit window, runs the Servo engine inside it,
-and paints its own chrome around the page with egui.
+Zervo is one binary and one library. `zervo-core` holds the parts that do not
+know the engine exists — the theme and the glass material, the card grid, the
+gesture recogniser, the atomic JSON store, and the small HTTPS client the
+wallpaper fetcher rides on. The binary owns a winit window, runs the Servo
+engine inside it, and paints its own chrome around the page with egui.
+
+The split is not architectural tidiness. Compiling the binary means compiling
+Servo, which is the better part of an hour, so nothing that needed it could run
+on a pull request — and for a long time nothing did. `zervo-core` builds in
+about ten seconds, so clippy and its tests run on every one. Anything that is
+arithmetic, colour, bytes or files belongs there. The binary re-exports each of
+its modules at its own root, so a call site still writes `crate::theme::Palette`
+and nothing had to move to make this happen.
 
 ## The frame pipeline
 
@@ -93,7 +104,7 @@ against its own previous reflection.
 
 Two pieces of this are macOS-only and worth knowing before porting: the window's
 backdrop is an `NSVisualEffectView` behind a transparent framebuffer, and the
-content card's bottom corners are *erased* from the framebuffer rather than
+content card's corners are *erased* from the framebuffer rather than
 painted over, so the chrome can be drawn back over the hole at its own tint and
 match the chrome beside it exactly. Both are described in
 [THEMING.md](THEMING.md); neither is needed where the chrome is opaque.
@@ -118,8 +129,24 @@ is drawn under the page.
 
 ## State and events
 
-`ui.rs` is pure: it draws from `BrowserState` + `Settings` and returns a list of
-`UiAction`s. `main.rs` applies them. Nothing in `ui.rs` touches the engine.
+**Nothing in `ui.rs` touches the engine.** No `servo::` call, no filesystem, no
+threads, no network, no clock. That rule is real and it is kept, and it is the
+one to keep keeping: if you find yourself reaching for the engine there, add a
+`UiAction` instead.
+
+It used to say `ui.rs` was *pure* — that it drew from state and returned a list
+of actions. That half was never quite true. `ChromeContext` hands it `&mut
+BrowserState`, `&mut Settings`, `&mut Library`, `&mut Vault` and `&mut
+Controls`, and it writes through all of them: some two dozen assignments
+straight into `chrome.settings.*` and `chrome.browser.*`, plus `newtab::apply`
+rewriting the tile arrangement wholesale. `UiAction::SettingsChanged` does not
+mean "please change this"; it means "I have changed it — write the file and
+re-apply the theme."
+
+That is an ordinary immediate-mode arrangement and it works. It is written down
+here because the difference matters: you cannot exercise the chrome by feeding
+it a state and reading back the actions, since half of what it did never
+appears in the list.
 
 The engine talks back through `AppState`, which implements `WebViewDelegate` for
 every tab. Delegate callbacks arrive on the main thread inside
@@ -130,6 +157,14 @@ Because delegate callbacks fire while the engine holds its own borrows, work
 that needs `&mut` state is queued (`pending_popups`, `pending_closes`,
 `download_events`) and drained in `redraw`. Doing it inline is how you get a
 `RefCell` panic.
+
+**Drain into a `Vec` first.** A `drain` iterator holds the `RefMut` for the
+whole loop body, and these loop bodies re-enter the engine — adopting a popup
+focuses a webview, closing a tab drops the last handle to one. Either can
+dispatch a delegate callback that pushes onto the queue being drained, and that
+second `borrow_mut` panics. `AppState::sync` did exactly this for two years
+before anyone noticed, which is a fair measure of how narrow the window is and
+how little that helps once it opens.
 
 ## Rendering the chrome
 

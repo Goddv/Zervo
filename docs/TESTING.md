@@ -90,9 +90,20 @@ engine bump or a chrome change, walk this list.
 
 ## History and logins
 - [ ] History (sidebar or ⌘Y): search filters; rows group by day, week and month.
-- [ ] Settings → Passwords: add, reveal, delete, export, import. A saved login
-      is offered for HTTP basic auth. Secrets live in the system keychain, not
-      in `passwords.json` — check the file.
+- [ ] Settings → Passwords: add, reveal, delete, export, import. Secrets live in
+      the system keychain, not in `passwords.json` — check the file. Both it and
+      the export are `rw-------`; check that too, since the export is every
+      password in plaintext.
+- [ ] HTTP basic auth **asks** before sending a saved login, naming the host
+      that raised the challenge and the login on offer. It never sends one over
+      plain `http://`. With logins saved for both `example.com` and
+      `sub.example.com`, a challenge from `deep.sub.example.com` is offered the
+      *more specific* one.
+
+## Accessibility
+- [ ] With VoiceOver on, the chrome is reachable: toggles, sliders and segmented
+      controls announce what they are and what they are set to.
+- [ ] A slider can be moved with the arrow keys once focused.
 
 ## Engine
 - [ ] A content-heavy page renders and scrolls.
@@ -101,7 +112,11 @@ engine bump or a chrome change, walk this list.
 - [ ] Favicons appear in tab rows.
 
 ## Downloads (`--features engine-downloads`)
-- [ ] Navigating to a `.zip` saves it instead of showing "Unknown content type".
+- [ ] Navigating to a `.zip` **asks** before saving, naming the host and the
+      filename it will land under. Cancelling writes nothing at all — check the
+      downloads folder, including for a `.part`.
+- [ ] A saved file carries `com.apple.quarantine` (`xattr -l`), so macOS warns
+      before opening it.
 - [ ] The saved filename honours `Content-Disposition`.
 - [ ] A same-origin `<a download="name.txt">` saves under that name.
 - [ ] A **cross-origin** `<a download="x">` saves under the *URL's* name — the
@@ -125,4 +140,10 @@ engine bump or a chrome change, walk this list.
       behind it. **Also untested.**
 
 ## Performance
-- [ ] Idle CPU near zero with a static page and no animated background.
+- [ ] Idle CPU near zero with a static page and no animated background. Check
+      the **new tab page** with a non-animated backdrop as well as a web page —
+      that one was nineteen per cent until the engine's frame-ready signal
+      stopped asking for a repaint on behalf of a tab with no webview.
+- [ ] An animated backdrop still animates: Aurora should sit around ten to
+      fifteen per cent, not one or two. Both halves matter — the fix for one is
+      how you break the other.

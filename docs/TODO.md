@@ -65,11 +65,32 @@ Listed so nobody starts them expecting to finish. Details in
 
 ## Housekeeping
 
-- **No automated UI tests.** [TESTING.md](TESTING.md) is a checklist someone
-  walks by hand. A harness that drives egui and asserts on layout would pay for
-  itself quickly.
-- **`ui.rs` is past four thousand lines.** The cards, the navigation bar and the
-  settings page each want to be their own module.
+- **No automated *UI* tests.** There are sixty-seven unit tests now, and
+  `zervo-core` runs its fifty-three on every pull request — but they cover
+  arithmetic, colour, bytes and files, not anything drawn. [TESTING.md](TESTING.md)
+  is still a checklist someone walks by hand for everything else. A harness that
+  drives egui and asserts on layout (`egui_kittest`) would pay for itself
+  quickly, and the sidebar refactor below is waiting on one.
+- **`ui.rs` is still past three thousand lines.** The four parts of it that
+  never read `ChromeContext` have left — `ui/frame.rs`, `ui/settings_page.rs`,
+  `ui/backdrops.rs`, `ui/text.rs`. What is left is the sidebar, the navigation
+  bar, the hover cards and the download and history pages, and the sidebar is
+  the hard one: its drag-and-drop spans three functions through untyped
+  `ctx.data` ids, so the compiler will not catch a reordering mistake and
+  nothing else will either. Do the navigation bar and the download pages first;
+  leave the sidebar until there is a UI harness.
+- **`dashboard.rs` still has its own copy of the grid.** `grid.rs` now has
+  fifteen tests pinning its behaviour, which is what that port was waiting for.
+  The catch is `Span::Full`: resolve it to concrete cells once, up front, and
+  hand `grid.rs` plain placements, rather than letting three functions each
+  decide what "full" means — which is how they came to disagree.
+- **`TabId` and `DownloadId` are both `u64` aliases**, so `CloseTab(TabId)` and
+  `CancelDownload(u64)` are the same type and nothing stops one reaching the
+  other. Two newtypes would close that for good; the compiler finds every site.
+- **`apply_action` is four hundred and forty lines and forty-seven arms**, and
+  thirty of them end in `request_redraw()` while seventeen deliberately do not.
+  The `Settings`-only and `BrowserState`-only arms are model logic sitting in
+  the event loop, and moving them down would make them testable.
 - **Most corner radii are still numbers.** `theme::Tier` names six sizes and the
   material decides what each comes to, and the new tab page uses nothing else —
   but `ui.rs` and `controls.rs` still write theirs in figures. The tiers were

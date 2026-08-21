@@ -249,7 +249,16 @@ pub fn free_cell(placed: &[Placed], size: Size) -> (u8, u8) {
     };
     let height = match size.h {
         Span::Cells(n) => n.clamp(1, rows),
-        Span::Full => 1,
+        // `rows`, the same as `footprint` just below resolves it to, and not 1.
+        // Resolving it to 1 here meant a full-height widget went looking for a
+        // one-row hole and then occupied every row of the column it found —
+        // landing on top of whatever was already under it.
+        //
+        // `rows_needed` does resolve `Full` to 1, and that one is right: it is
+        // computing the very number `Full` resolves *to*, so it has to break
+        // the circle somewhere, and a full-height widget contributing only its
+        // own row is what makes it "as tall as the tallest thing beside it".
+        Span::Full => rows,
     };
     for row in 0..=rows.saturating_sub(height) {
         'next: for col in 0..=COLUMNS.saturating_sub(width) {
@@ -492,15 +501,18 @@ pub fn draw(
             _ => *slot,
         };
         if held {
-            held_later = Some((widget.kind, drawn));
+            held_later = Some((index, widget.kind, drawn));
         } else {
             draw_widget(
                 root,
                 palette,
                 media,
-                widget.kind,
-                drawn,
-                Look::of(false, target == Some(index)),
+                WidgetAt {
+                    index,
+                    kind: widget.kind,
+                    rect: drawn,
+                    look: Look::of(false, target == Some(index)),
+                },
                 &mut changes,
             );
         }
@@ -579,8 +591,19 @@ pub fn draw(
         }
     }
 
-    if let Some((kind, drawn)) = held_later {
-        draw_widget(root, palette, media, kind, drawn, Look::Held, &mut changes);
+    if let Some((index, kind, drawn)) = held_later {
+        draw_widget(
+            root,
+            palette,
+            media,
+            WidgetAt {
+                index,
+                kind,
+                rect: drawn,
+                look: Look::Held,
+            },
+            &mut changes,
+        );
     }
 
     // ── The size menu, for whichever widget asked for one.
@@ -799,15 +822,35 @@ impl Look {
     }
 }
 
+/// One widget as the shelf is about to draw it.
+///
+/// `index` is the position in `Settings::navbar_widgets`, and it is the
+/// widget's identity: anything interactive *inside* a widget hangs its egui id
+/// on it. The transport's three buttons used to key theirs on
+/// `rect.min.x as i32` instead, which is wrong twice over — two widgets of the
+/// same width stacked in one column share an x and so share ids, and a widget
+/// being dragged has a new x every frame, so its buttons lost their hover state
+/// on each one.
+struct WidgetAt {
+    index: usize,
+    kind: WidgetKind,
+    rect: Rect,
+    look: Look,
+}
+
 fn draw_widget(
     root: &mut Ui,
     palette: &Palette,
     media: &Media,
-    kind: WidgetKind,
-    rect: Rect,
-    look: Look,
+    at: WidgetAt,
     changes: &mut Vec<Change>,
 ) {
+    let WidgetAt {
+        index: slot_index,
+        kind,
+        rect,
+        look,
+    } = at;
     let painter = root.painter();
     // Opaque, with the shadow left on: these stack over the content card, and
     // a translucent card in a pile does not read as a card.
@@ -923,7 +966,7 @@ fn draw_widget(
                 let hit = Rect::from_center_size(centre, vec2(30.0, 30.0));
                 let response = root.interact(
                     hit,
-                    Id::new("zervo_transport").with((rect.min.x as i32, index)),
+                    Id::new("zervo_transport").with((slot_index, index)),
                     Sense::click(),
                 );
                 if response.hovered() {

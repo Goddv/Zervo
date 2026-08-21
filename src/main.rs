@@ -19,13 +19,14 @@ mod backdrop;
 mod controls;
 mod dashboard;
 mod downloads;
-mod gestures;
-mod glass;
-mod grid;
+// The engine-independent half of the browser, in its own crate so that clippy
+// and the tests can run on a pull request without compiling Servo first.
+// Re-exported at the root rather than referred to by its own name, so every
+// `crate::theme::…` in the tree carries on resolving and nothing had to move.
+pub use zervo_core::{gestures, glass, grid, net, store, theme};
 mod icons;
 mod keyboard;
 mod library;
-mod net;
 mod newtab;
 mod passwords;
 mod phosphor;
@@ -34,7 +35,6 @@ mod phosphor;
 mod platform;
 mod settings;
 mod state;
-mod theme;
 mod ui;
 #[cfg(target_os = "macos")]
 mod vibrancy;
@@ -69,6 +69,43 @@ use winit::window::Window;
 /// How long the chrome takes to cross from one theme to the other.
 const THEME_FADE: std::time::Duration = std::time::Duration::from_millis(220);
 
+/// The soonest egui has asked to be woken.
+///
+/// egui reports the delay it wants through a callback rather than through
+/// `EguiGlow::run`, which destructures each `ViewportOutput { commands, .. }`
+/// and drops `repaint_delay` on the floor. Without it the loop has no idea
+/// whether egui wanted twenty milliseconds or twenty seconds.
+///
+/// The callback can be invoked from anywhere, so the answer lands here and the
+/// event loop collects it after the pass. Requests accumulate by taking the
+/// earliest: two cards asking for different delays both want to be served, and
+/// the sooner of the two is the one that decides when to wake.
+#[derive(Clone, Default)]
+struct RepaintAt(Arc<Mutex<Option<std::time::Instant>>>);
+
+impl RepaintAt {
+    fn request(&self, delay: std::time::Duration) {
+        // `Duration::MAX` is how egui says "nothing pending", and adding it to a
+        // point in time would overflow. `checked_add` covers that and every
+        // other absurd delay in one.
+        let Some(deadline) = std::time::Instant::now().checked_add(delay) else {
+            return;
+        };
+        let mut slot = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = Some(slot.map_or(deadline, |at| at.min(deadline)));
+    }
+
+    fn take(&self) -> Option<std::time::Instant> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
 /// Which side of the window owns the pointer between a press and its release.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PointerOwner {
@@ -100,6 +137,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(event_loop.run_app(&mut app)?)
 }
 
+// `Running` is about two kilobytes and `Initial` is a pointer, which clippy
+// reads as a reason to box. It is not one here: exactly one `App` exists, in
+// `main`, and it changes variant once when the window appears. Boxing would buy
+// nothing and put a dereference in front of every field the event loop touches.
+#[expect(clippy::large_enum_variant)]
 enum App {
     Initial(Waker),
     Running(RunningApp),
@@ -141,6 +183,8 @@ struct RunningApp {
     /// Deadline for a deferred egui repaint (e.g. caret blink) — served via
     /// ControlFlow::WaitUntil instead of a max-FPS redraw loop.
     pending_repaint_at: Option<std::time::Instant>,
+    /// Where egui leaves the delay it actually asked for. See `RepaintAt`.
+    repaint_at: RepaintAt,
     /// What `apply_theme` was last run for, and the icon last handed to the
     /// Dock. Every settings write used to redo both, and redoing the theme
     /// means restyling egui, retuning the window's appearance and the frosted
@@ -199,7 +243,13 @@ impl ApplicationHandler<WakerEvent> for App {
 
         let attributes = Window::default_attributes()
             .with_title("Zervo")
-            .with_inner_size(LogicalSize::new(1200.0, 800.0));
+            .with_inner_size(LogicalSize::new(1200.0, 800.0))
+            // Shown further down, once the AccessKit adapter exists — it
+            // refuses to be created for a window that has already been made
+            // visible, and aborts the process saying so. Waiting also means the
+            // first frame anybody sees is already themed, rather than a flash
+            // of default grey while the palette is resolved.
+            .with_visible(false);
         #[cfg(target_os = "macos")]
         let attributes = {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -238,7 +288,7 @@ impl ApplicationHandler<WakerEvent> for App {
         vibrancy::force_layer_transparent(&window);
 
         // egui paints with the same surfman-created GL context — no second context.
-        let egui_glow = EguiGlow::new(
+        let mut egui_glow = EguiGlow::new(
             event_loop,
             window_rendering_context.glow_gl_api(),
             None,
@@ -249,6 +299,25 @@ impl ApplicationHandler<WakerEvent> for App {
             // egui ships to break it up.
             true,
         );
+
+        // The platform accessibility adapter. `EguiGlow::new` builds the
+        // `egui_winit::State` but never calls this, so without it egui composes
+        // an AccessKit tree every pass and has nobody to hand it to. Requests
+        // from the client arrive back through the same proxy the engine's waker
+        // uses -- see `WakerEvent`.
+        egui_glow
+            .egui_winit
+            .init_accesskit(event_loop, &window, waker.0.clone());
+
+        // egui hands the delay to a callback and nothing else, so this is the
+        // only place it can be caught.
+        let repaint_at = RepaintAt::default();
+        {
+            let slot = repaint_at.clone();
+            egui_glow
+                .egui_ctx
+                .set_request_repaint_callback(move |info| slot.request(info.delay));
+        }
 
         let settings = settings::load();
         let system_dark = matches!(window.theme(), Some(winit::window::Theme::Dark));
@@ -305,7 +374,6 @@ impl ApplicationHandler<WakerEvent> for App {
             window_rendering_context,
             rendering_context,
             browser: RefCell::new(BrowserState::new(start_url.as_str())),
-            needs_repaint: Cell::new(false),
             pending_popups: RefCell::new(Vec::new()),
             pending_closes: RefCell::new(Vec::new()),
             pending_keyboard_events: RefCell::new(HashMap::new()),
@@ -337,6 +405,10 @@ impl ApplicationHandler<WakerEvent> for App {
             .expect("initial tab exists");
         state.open_tab(initial_tab, start_url);
 
+        // Everything is in place: the GL context, the accessibility adapter, the
+        // theme and the first tab. Now it can be looked at.
+        state.window.set_visible(true);
+
         let applied_theme = (
             settings.theme,
             settings.accent,
@@ -364,6 +436,7 @@ impl ApplicationHandler<WakerEvent> for App {
             pointer_owner: PointerOwner::Free,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
+            repaint_at,
             applied_theme,
             applied_icon,
             theme_fade: None,
@@ -396,16 +469,36 @@ impl ApplicationHandler<WakerEvent> for App {
         if let Self::Running(app) = self {
             match app.pending_repaint_at {
                 Some(deadline) => {
-                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline))
+                    event_loop
+                        .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline));
                 },
                 None => event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait),
             }
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: WakerEvent) {
-        if let Self::Running(app) = self {
-            app.state.servo.spin_event_loop();
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: WakerEvent) {
+        let Self::Running(app) = self else {
+            return;
+        };
+        match event {
+            WakerEvent::Engine => app.state.servo.spin_event_loop(),
+            WakerEvent::Accessibility(event) => {
+                use egui_winit::accesskit_winit::WindowEvent as AccessEvent;
+                match event.window_event {
+                    // The client has just attached and has no tree yet. egui
+                    // only builds one as part of a pass, so the answer to both
+                    // of these is to run one.
+                    AccessEvent::InitialTreeRequested => app.state.window.request_redraw(),
+                    AccessEvent::ActionRequested(request) => {
+                        app.egui_glow
+                            .egui_winit
+                            .on_accesskit_action_request(request);
+                        app.state.window.request_redraw();
+                    },
+                    AccessEvent::AccessibilityDeactivated => {},
+                }
+            },
         }
     }
 
@@ -815,22 +908,18 @@ impl RunningApp {
 
         // Adopt popups, drop script-closed tabs, refresh tab titles/urls.
         state.sync();
-        state.needs_repaint.set(false);
         #[cfg(feature = "engine-downloads")]
         {
             // Downloads the engine handed us (Servo does the transfer; we store).
-            for event in state.download_events.borrow_mut().drain(..) {
+            //
+            // Collected before the loop for the same reason as the queues in
+            // `AppState::sync`: the body activates a tab, which re-enters the
+            // engine, and `notify_response_chunk` pushes onto this very queue.
+            // A `drain` iterator would still be holding the borrow.
+            let events: Vec<app::DownloadEvent> =
+                state.download_events.borrow_mut().drain(..).collect();
+            for event in events {
                 match event {
-                    app::DownloadEvent::Offered {
-                        request_id,
-                        url,
-                        default_filename,
-                    } => {
-                        self.downloads
-                            .accept_from_engine(request_id, &url, &default_filename);
-                        let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
-                        state.activate_tab(tab_id);
-                    },
                     app::DownloadEvent::Chunk { request_id, chunk } => {
                         self.downloads.engine_chunk(request_id, &chunk);
                     },
@@ -885,13 +974,13 @@ impl RunningApp {
                 egui::TextureOptions::LINEAR,
             ));
         }
-        if self.settings.new_tab_background == settings::NewTabBackground::Photo {
-            if self.wallpaper.due(
+        if self.settings.new_tab_background == settings::NewTabBackground::Photo
+            && self.wallpaper.due(
                 &self.settings.wallpaper_source,
                 self.settings.wallpaper_cadence,
-            ) {
-                self.wallpaper.fetch(&self.settings.wallpaper_source);
-            }
+            )
+        {
+            self.wallpaper.fetch(&self.settings.wallpaper_source);
         }
 
         let palette = self.palette();
@@ -991,64 +1080,64 @@ impl RunningApp {
             // internal page draws itself with rounded corners already, so
             // masking it would only lay a second tint over its own.
             let mut blitted = false;
-            if !output.settings_open {
-                if let Some(webview) = &active_webview {
-                    let size = Size2D::new(
-                        content_rect.width().max(1.0),
-                        content_rect.height().max(1.0),
-                    ) * Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
-                    if size != webview.size() {
-                        // Also resizes the offscreen context, which must stay
-                        // sized to exactly the content viewport.
-                        webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
-                    }
-                    // Render Servo into the offscreen FBO before egui paints.
-                    webview.paint();
+            if !output.settings_open
+                && let Some(webview) = &active_webview
+            {
+                let size = Size2D::new(
+                    content_rect.width().max(1.0),
+                    content_rect.height().max(1.0),
+                ) * Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
+                if size != webview.size() {
+                    // Also resizes the offscreen context, which must stay
+                    // sized to exactly the content viewport.
+                    webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
+                }
+                // Render Servo into the offscreen FBO before egui paints.
+                webview.paint();
 
-                    // Blit the page under all chrome widgets. Only when a live
-                    // webview exists — otherwise the FBO holds a stale frame.
-                    if let Some(render_to_parent) = offscreen.render_to_parent_callback() {
-                        root.layer_painter(LayerId::background())
-                            .add(egui::PaintCallback {
-                                rect: content_rect,
-                                callback: Arc::new(CallbackFn::new(move |info, painter| {
-                                    let clip = info.viewport_in_pixels();
-                                    let rect_in_parent = euclid::default::Rect::new(
-                                        euclid::default::Point2D::new(
-                                            clip.left_px,
-                                            clip.from_bottom_px,
-                                        ),
-                                        euclid::default::Size2D::new(clip.width_px, clip.height_px),
-                                    );
-                                    render_to_parent(painter.gl(), rect_in_parent);
-                                })),
-                            });
+                // Blit the page under all chrome widgets. Only when a live
+                // webview exists — otherwise the FBO holds a stale frame.
+                if let Some(render_to_parent) = offscreen.render_to_parent_callback() {
+                    root.layer_painter(LayerId::background())
+                        .add(egui::PaintCallback {
+                            rect: content_rect,
+                            callback: Arc::new(CallbackFn::new(move |info, painter| {
+                                let clip = info.viewport_in_pixels();
+                                let rect_in_parent = euclid::default::Rect::new(
+                                    euclid::default::Point2D::new(
+                                        clip.left_px,
+                                        clip.from_bottom_px,
+                                    ),
+                                    euclid::default::Size2D::new(clip.width_px, clip.height_px),
+                                );
+                                render_to_parent(painter.gl(), rect_in_parent);
+                            })),
+                        });
 
-                        // And immediately after it, while the page is the only
-                        // thing on the framebuffer, take the blurred copy the
-                        // chrome frosts itself against. Ordered here on
-                        // purpose: a frame later and it would contain the
-                        // cards, which would then be frosting against
-                        // themselves.
-                        // And the corners come out of it, so the chrome can
-                        // be drawn back over transparency rather than over the
-                        // page. Ordered after the copy so the copy is of the
-                        // page as the engine drew it.
-                        if let Some(capture) = &capture {
-                            backdrop::capture_into(
-                                &root.layer_painter(LayerId::background()),
-                                content_rect,
-                                capture,
-                            );
-                        }
-                        backdrop::cut_corners_into(
+                    // And immediately after it, while the page is the only
+                    // thing on the framebuffer, take the blurred copy the
+                    // chrome frosts itself against. Ordered here on
+                    // purpose: a frame later and it would contain the
+                    // cards, which would then be frosting against
+                    // themselves.
+                    // And the corners come out of it, so the chrome can
+                    // be drawn back over transparency rather than over the
+                    // page. Ordered after the copy so the copy is of the
+                    // page as the engine drew it.
+                    if let Some(capture) = &capture {
+                        backdrop::capture_into(
                             &root.layer_painter(LayerId::background()),
                             content_rect,
-                            theme::CONTENT_RADIUS,
-                            &eraser,
+                            capture,
                         );
-                        blitted = true;
                     }
+                    backdrop::cut_corners_into(
+                        &root.layer_painter(LayerId::background()),
+                        content_rect,
+                        theme::CONTENT_RADIUS,
+                        &eraser,
+                    );
+                    blitted = true;
                 }
             }
             // Rounded-corner masks and border, drawn over the blit.
@@ -1072,6 +1161,23 @@ impl RunningApp {
 
         self.favicons = favicons;
         self.settings = settings;
+
+        // Downloads the user allowed in the pass just drawn. Started here
+        // rather than inside it, because the UI pass holds `controls` borrowed
+        // and starting one wants the browser state too.
+        #[cfg(feature = "engine-downloads")]
+        {
+            let accepted = state.controls.borrow_mut().take_accepted();
+            for offer in accepted {
+                if self
+                    .downloads
+                    .accept_from_engine(offer.request_id, &offer.url, &offer.filename)
+                {
+                    let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
+                    state.activate_tab(tab_id);
+                }
+            }
+        }
 
         let mut ambient = false;
         if let Some(output) = ui_output {
@@ -1111,13 +1217,27 @@ impl RunningApp {
             self.library_saved_at = std::time::Instant::now();
         }
 
+        // Whatever egui asked for during this pass, taken whichever branch runs
+        // so a stale deadline cannot survive into the next one.
+        let egui_deadline = self.repaint_at.take();
         if self.egui_glow.egui_ctx.requested_repaint_last_pass() {
             state.window.request_redraw();
-        } else if self.egui_glow.egui_ctx.has_requested_repaint() {
-            // Delayed request (caret blink etc.): wake on a timer instead of
-            // redrawing at max FPS until it fires.
-            self.pending_repaint_at =
-                Some(std::time::Instant::now() + std::time::Duration::from_millis(300));
+        } else if let Some(deadline) = egui_deadline {
+            // Delayed request (caret blink, a clock's next minute): wake on a
+            // timer instead of redrawing at max FPS until it fires.
+            //
+            // Two things used to be wrong here. It woke after a flat 300ms
+            // regardless of what was asked for, and `has_requested_repaint()` is
+            // true whenever *any* delay is pending — so the stock new tab page,
+            // which ships a clock asking for twenty seconds, re-armed 300ms
+            // forever and never idled. And it *assigned* rather than taking the
+            // earlier of the two, so the 33ms the ambient backdrop had just
+            // asked for two branches up was overwritten by the clock's, and the
+            // default animated backdrop ran at three frames a second.
+            self.pending_repaint_at = Some(
+                self.pending_repaint_at
+                    .map_or(deadline, |at| at.min(deadline)),
+            );
         }
 
         // Paint order: bind the window framebuffer, egui paint (runs the blit
@@ -1130,6 +1250,9 @@ impl RunningApp {
         {
             use glow::HasContext as _;
             let gl = state.window_rendering_context.glow_gl_api();
+            // SAFETY: `prepare_for_rendering` just made this context current
+            // and bound the window framebuffer. Setting a clear colour and
+            // clearing the bound framebuffer need nothing beyond that.
             unsafe {
                 gl.clear_color(0.0, 0.0, 0.0, 0.0);
                 gl.clear(glow::COLOR_BUFFER_BIT);
@@ -1451,7 +1574,7 @@ impl RunningApp {
                 // egui remembers the panel's width itself, and would otherwise
                 // keep the old one until the next launch.
                 self.egui_glow.egui_ctx.data_mut(|data| {
-                    data.remove::<egui::PanelState>(egui::Id::new(ui::SIDEBAR_ID))
+                    data.remove::<egui::PanelState>(egui::Id::new(ui::SIDEBAR_ID));
                 });
                 state.window.request_redraw();
             },
@@ -1849,8 +1972,22 @@ impl Drop for RunningApp {
 #[derive(Clone)]
 struct Waker(winit::event_loop::EventLoopProxy<WakerEvent>);
 
+/// Anything that can wake the loop from outside a window event.
 #[derive(Debug)]
-struct WakerEvent;
+enum WakerEvent {
+    /// The engine has something to do; spin its event loop.
+    Engine,
+    /// The platform's accessibility client is asking for the tree, or asking
+    /// for something in it to be activated. `accesskit_winit` delivers these
+    /// through the same proxy, which is why this is an enum now.
+    Accessibility(egui_winit::accesskit_winit::Event),
+}
+
+impl From<egui_winit::accesskit_winit::Event> for WakerEvent {
+    fn from(event: egui_winit::accesskit_winit::Event) -> Self {
+        Self::Accessibility(event)
+    }
+}
 
 impl Waker {
     fn new(event_loop: &EventLoop<WakerEvent>) -> Self {
@@ -1864,7 +2001,7 @@ impl EventLoopWaker for Waker {
     }
 
     fn wake(&self) {
-        if let Err(error) = self.0.send_event(WakerEvent) {
+        if let Err(error) = self.0.send_event(WakerEvent::Engine) {
             log::warn!("Failed to wake event loop: {error:?}");
         }
     }

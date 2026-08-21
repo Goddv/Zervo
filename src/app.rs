@@ -26,12 +26,9 @@ use crate::state::{BrowserState, TabId};
 /// Engine-driven download traffic, queued for the UI thread.
 #[cfg(feature = "engine-downloads")]
 pub enum DownloadEvent {
-    /// Servo cannot render this response and is offering it to us.
-    Offered {
-        request_id: servo::RequestId,
-        url: String,
-        default_filename: String,
-    },
+    // There was an `Offered` here. An offer is no longer something that has
+    // already happened and needs reporting — it is a question, and it waits in
+    // `Controls` for an answer instead of travelling down this queue.
     Chunk {
         request_id: servo::RequestId,
         chunk: Vec<u8>,
@@ -65,8 +62,6 @@ pub struct AppState {
     /// Webviews render here, sized to the content rect; blitted under the chrome.
     pub rendering_context: Rc<OffscreenRenderingContext>,
     pub browser: RefCell<BrowserState>,
-    /// Set when Servo has a new frame or the chrome needs redrawing.
-    pub needs_repaint: Cell<bool>,
     /// Popups created by script (window.open) waiting to be adopted as tabs.
     pub pending_popups: RefCell<Vec<WebView>>,
     /// Webviews closed by script (window.close) waiting for tab removal.
@@ -197,7 +192,6 @@ impl AppState {
             }
         }
         drop(browser);
-        self.needs_repaint.set(true);
         self.window.request_redraw();
     }
 
@@ -209,7 +203,6 @@ impl AppState {
         if let Some(next) = next {
             self.activate_tab(next);
         }
-        self.needs_repaint.set(true);
         self.window.request_redraw();
     }
 
@@ -217,7 +210,17 @@ impl AppState {
     /// refresh per-tab UI state from the engine's cached values. Called once
     /// per event-loop turn, after `spin_event_loop`.
     pub fn sync(self: &Rc<Self>) {
-        for webview in self.pending_popups.borrow_mut().drain(..) {
+        // Both queues are drained into a `Vec` before the loop runs rather than
+        // iterated in place. A `drain` iterator holds the `RefMut` for the whole
+        // body, and the body re-enters the engine: adopting a popup focuses a
+        // webview, and closing a tab drops the last handle to one. Either can
+        // dispatch a delegate callback that pushes onto the very queue being
+        // drained -- `request_create_new` and `notify_closed` below both do --
+        // and that second borrow_mut panics. This is the hazard the
+        // queue-and-drain note in docs/ARCHITECTURE.md warns about; collecting
+        // first is what actually avoids it.
+        let popups: Vec<WebView> = self.pending_popups.borrow_mut().drain(..).collect();
+        for webview in popups {
             let mut browser = self.browser.borrow_mut();
             let workspace = browser.active_workspace;
             let url = webview.url().map(|u| u.to_string()).unwrap_or_default();
@@ -229,7 +232,8 @@ impl AppState {
             self.activate_tab(id);
         }
 
-        for webview in self.pending_closes.borrow_mut().drain(..) {
+        let closes: Vec<WebView> = self.pending_closes.borrow_mut().drain(..).collect();
+        for webview in closes {
             let tab_id = self
                 .browser
                 .borrow_mut()
@@ -431,8 +435,34 @@ impl servo::WebViewDelegate for AppState {
         })
     }
 
-    fn notify_new_frame_ready(&self, _webview: WebView) {
-        self.needs_repaint.set(true);
+    fn notify_new_frame_ready(&self, webview: WebView) {
+        // Only for the tab that is actually on screen.
+        //
+        // The engine signals this at the display's refresh rate, and it does so
+        // whether or not the frame it just produced is one anybody can see. On
+        // an internal page — `zervo://newtab`, Settings, downloads — the active
+        // tab has no webview at all and the engine's output is not composited,
+        // yet every one of those signals asked for a full chrome repaint: the
+        // whole UI re-run, tessellated and uploaded, a hundred and twelve times
+        // a second, for a page that is a still image. That is the "idle CPU
+        // near zero" line in docs/TESTING.md, and it had never been true on the
+        // new tab page.
+        //
+        // A frame from a background tab is likewise not worth a repaint; the
+        // tab is hidden and throttled, and switching to it asks for one anyway.
+        let showing = self
+            .browser
+            .borrow()
+            .active_tab()
+            .and_then(|tab| {
+                tab.webview
+                    .as_ref()
+                    .map(|active| active.id() == webview.id())
+            })
+            .unwrap_or(false);
+        if !showing {
+            return;
+        }
         self.window.request_redraw();
     }
 
@@ -495,19 +525,19 @@ impl servo::WebViewDelegate for AppState {
     /// the engine keeps doing the transfer, so cookies, auth and redirects
     /// all still apply.
     #[cfg(feature = "engine-downloads")]
-    fn notify_unsupported_response(
-        &self,
-        _webview: WebView,
-        mut response: servo::UnsupportedResponse,
-    ) {
-        self.download_events
-            .borrow_mut()
-            .push(DownloadEvent::Offered {
-                request_id: response.request_id,
-                url: response.url.to_string(),
-                default_filename: response.default_filename.clone(),
-            });
-        response.accept();
+    fn notify_unsupported_response(&self, _webview: WebView, response: servo::UnsupportedResponse) {
+        // Not accepted here. `accept()` used to be called inline, before
+        // anything reached the screen — and since the engine offers the
+        // embedder every response carrying `Content-Disposition: attachment`,
+        // that let any page write a file of any size into the downloads folder
+        // with no interaction whatsoever. The offer goes on screen instead, and
+        // `Controls` accepts it if the user says so.
+        let filename = if response.default_filename.trim().is_empty() {
+            crate::downloads::filename_from_url(&response.url.to_string())
+        } else {
+            crate::downloads::sanitize_public(&response.default_filename)
+        };
+        self.controls.borrow_mut().push_offer(response, filename);
         self.window.request_redraw();
     }
 
@@ -568,10 +598,10 @@ impl servo::WebViewDelegate for AppState {
         keyboard_types::ShortcutMatcher::from_event(keyboard_event.event)
             .shortcut(CMD_OR_CONTROL, 'R', || webview.reload())
             .shortcut(CMD_OR_CONTROL, '=', || {
-                webview.set_page_zoom(webview.page_zoom() + 0.1)
+                webview.set_page_zoom(webview.page_zoom() + 0.1);
             })
             .shortcut(CMD_OR_CONTROL, '-', || {
-                webview.set_page_zoom(webview.page_zoom() - 0.1)
+                webview.set_page_zoom(webview.page_zoom() - 0.1);
             })
             .shortcut(CMD_OR_CONTROL, '0', || webview.set_page_zoom(1.0));
     }
@@ -595,18 +625,37 @@ impl servo::WebViewDelegate for AppState {
     /// HTTP authentication. This is the one place the engine asks the embedder
     /// for credentials, so it is the one place a saved login can be used.
     fn request_authentication(&self, _webview: WebView, request: servo::AuthenticationRequest) {
-        let host = request.url().host_str().unwrap_or_default().to_owned();
-        match self.vault.borrow().for_host(&host) {
-            Some((login, password)) => {
-                log::info!("using the saved login for {host}");
-                request.authenticate(login.username, password);
-            },
-            None => {
-                // Dropping it cancels, which is the safe answer: there is no
-                // dialog for this yet, and guessing is worse than failing.
-                log::info!("no saved login for {host}; not authenticating");
-            },
+        // Dropping the request cancels, which is the safe answer to every case
+        // below that does not reach the prompt.
+        let url = request.url().clone();
+        let host = url.host_str().unwrap_or_default().to_owned();
+
+        // HTTP Basic puts the password on the wire in base64, which is not
+        // encryption. This used to read the host and discard the scheme, so any
+        // page anywhere could embed `<img src="http://saved-site/x">`, take the
+        // 401, and have the password sent in the clear to a host the user never
+        // chose. A saved login is for the secure version of a site or it is for
+        // nothing.
+        if url.scheme() != "https" {
+            log::warn!(
+                "refusing to send a saved login to {host} over {}",
+                url.scheme()
+            );
+            return;
         }
+
+        let Some(login) = self.vault.borrow().for_host(&host) else {
+            log::info!("no saved login for {host}; not authenticating");
+            return;
+        };
+
+        // Queued, not answered. Sending a stored credential is not something to
+        // do on a page's say-so — the challenge is unsolicited, it can come
+        // from a subresource the user never navigated to, and a login saved for
+        // a domain covers every host under it. So it goes on screen, naming the
+        // host asking and the login being offered, and waits.
+        self.controls.borrow_mut().push_auth(request, host, login);
+        self.window.request_redraw();
     }
 
     /// Media session state, which is what makes the player widgets real rather
@@ -642,7 +691,7 @@ impl servo::WebViewDelegate for AppState {
             ConsoleLogLevel::Error => log::error!(target: "console", "{message}"),
             ConsoleLogLevel::Warn => log::warn!(target: "console", "{message}"),
             ConsoleLogLevel::Debug | ConsoleLogLevel::Trace => {
-                log::debug!(target: "console", "{message}")
+                log::debug!(target: "console", "{message}");
             },
             _ => log::info!(target: "console", "{message}"),
         }

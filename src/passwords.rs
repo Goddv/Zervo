@@ -9,12 +9,18 @@
 //! engine *does* ask the embedder about — HTTP authentication. If Servo grows
 //! a credential API, this is where filling would attach.
 //!
-//! **Secrets never touch Zervo's own files.** They go to the operating
-//! system's credential store, which is built for exactly this and is not
-//! something worth reimplementing. What Zervo stores is an index: which site
-//! and username it knows about, so it can list them without asking the
-//! keychain to unlock. Deleting `passwords.json` loses the index, not the
-//! secrets.
+//! **Secrets go to the operating system, not into Zervo's own files.** The
+//! keychain on macOS and the Secret Service on Linux are built for exactly this
+//! and are not worth reimplementing. What Zervo stores is an index: which site
+//! and username it knows about, so it can list them without asking the keychain
+//! to unlock. Deleting `passwords.json` loses the index, not the secrets.
+//!
+//! Windows is the exception, and it is worth knowing before trusting the
+//! sentence above. Windows has no credential command that will hand a password
+//! back, so `store_secret` wraps the secret with DPAPI — per-user encryption,
+//! which is the property that matters — and writes the result beside the index.
+//! The file is useless to any other account on the machine, but it *is* a file
+//! Zervo wrote.
 
 use std::process::Command;
 
@@ -39,23 +45,11 @@ pub type Failure = String;
 
 impl Vault {
     pub fn load() -> Self {
-        let Some(path) = index_path() else {
-            return Self::default();
-        };
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|contents| serde_json::from_str(&contents).ok())
-            .unwrap_or_default()
+        crate::store::load_or_default(index_path())
     }
 
     fn save_index(&self) {
-        let Some(path) = index_path() else { return };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, json);
-        }
+        let _ = crate::store::save(index_path(), self);
     }
 
     pub fn logins(&self) -> &[Login] {
@@ -95,22 +89,29 @@ impl Vault {
     }
 
     /// The best match for a host, used when the engine asks for HTTP
-    /// authentication. Exact host first, then a parent domain, so a login for
-    /// `example.com` covers `www.example.com`.
-    pub fn for_host(&self, host: &str) -> Option<(Login, String)> {
+    /// authentication. Exact host first, then the *most specific* parent
+    /// domain, so a login for `example.com` covers `www.example.com`.
+    ///
+    /// Most specific rather than first found: the list is sorted by site, so a
+    /// challenge from `deep.sub.example.com` with logins saved for both
+    /// `example.com` and `sub.example.com` used to be offered `example.com` —
+    /// the wrong one, and the one shared with more of the internet.
+    ///
+    /// No password comes back with it. What to do about a match is a question
+    /// for the person sitting there, and the secret is read only once they have
+    /// answered it.
+    pub fn for_host(&self, host: &str) -> Option<Login> {
         let host = normalise(host);
-        let matched = self
-            .logins
+        self.logins
             .iter()
-            .find(|login| login.site == host)
-            .or_else(|| {
-                self.logins
-                    .iter()
-                    .find(|login| host.ends_with(&format!(".{}", login.site)))
-            })?
-            .clone();
-        let password = read_secret(&matched.site, &matched.username)?;
-        Some((matched, password))
+            .filter(|login| login.site == host || host.ends_with(&format!(".{}", login.site)))
+            .max_by_key(|login| login.site.len())
+            .cloned()
+    }
+
+    /// The secret behind a login, read at the moment it is wanted.
+    pub fn secret(&self, login: &Login) -> Option<String> {
+        read_secret(&login.site, &login.username)
     }
 
     /// Write every login, passwords included, as JSON.
@@ -122,16 +123,32 @@ impl Vault {
     pub fn export(&self, path: &std::path::Path) -> Result<usize, Failure> {
         let mut exported = Vec::new();
         for login in &self.logins {
-            let password = read_secret(&login.site, &login.username).unwrap_or_default();
+            // A keychain read that fails used to export an empty password. That
+            // is the worst of the three possible answers: the file looks
+            // complete, so it is the one somebody keeps after deleting the
+            // originals, and the passwords it was supposed to carry are gone.
+            // Refusing outright at least says so while the originals still
+            // exist.
+            let Some(password) = read_secret(&login.site, &login.username) else {
+                return Err(format!(
+                    "Your keychain would not give up the password for {} ({}), \
+                     so nothing was exported.",
+                    login.site, login.username
+                ));
+            };
             exported.push(Exported {
                 site: login.site.clone(),
                 username: login.username.clone(),
                 password,
             });
         }
-        let json = serde_json::to_string_pretty(&exported)
+        let json = serde_json::to_vec_pretty(&exported)
             .map_err(|error| format!("Could not write the export: {error}"))?;
-        std::fs::write(path, json).map_err(|error| format!("Could not write {path:?}: {error}"))?;
+        // Owner-readable only, and written whole or not at all. This is every
+        // password in the vault in plaintext; it should not spend even a moment
+        // at whatever the umask happens to say.
+        crate::store::write_private(path, &json)
+            .map_err(|error| format!("Could not write {path:?}: {error}"))?;
         Ok(exported.len())
     }
 
@@ -185,7 +202,9 @@ fn encode(secret: &str) -> String {
 }
 
 fn decode(stored: &str) -> Option<String> {
-    if stored.is_empty() || stored.len() % 2 != 0 || !stored.bytes().all(|b| b.is_ascii_hexdigit())
+    if stored.is_empty()
+        || !stored.len().is_multiple_of(2)
+        || !stored.bytes().all(|b| b.is_ascii_hexdigit())
     {
         return None;
     }
@@ -286,8 +305,14 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
     if !output.status.success() {
         return Err("Windows would not encrypt the password.".to_owned());
     }
-    std::fs::write(&path, String::from_utf8_lossy(&output.stdout).trim())
-        .map_err(|error| format!("Could not save the password: {error}"))
+    // This file *is* the secret on Windows, DPAPI-wrapped. It gets the same
+    // write-and-rename as everything else in `store`, so a half-written blob
+    // never replaces a good one.
+    crate::store::write_private(
+        &path,
+        String::from_utf8_lossy(&output.stdout).trim().as_bytes(),
+    )
+    .map_err(|error| format!("Could not save the password: {error}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -395,5 +420,86 @@ fn run(command: &mut Command, what: &str) -> Result<(), Failure> {
             Err(format!("Could not {what}: {}", detail.trim()))
         },
         Err(error) => Err(format!("Could not {what}: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The entire reason `encode` exists: `security find-generic-password -w`
+    /// prints a password as-is when it is printable ASCII and as a hex dump
+    /// when it is not, with nothing to say which you got. Anything that does
+    /// not survive this round trip comes back as gibberish.
+    #[test]
+    fn a_password_survives_the_round_trip_whatever_is_in_it() {
+        for secret in [
+            "hunter2",
+            "pässwörd",
+            "日本語のパスワード",
+            "🔐 emoji 🔑",
+            " leading and trailing ",
+            "quotes \" and ' and \\ backslash",
+        ] {
+            assert_eq!(
+                decode(&encode(secret)).as_deref(),
+                Some(secret),
+                "{secret:?} did not survive"
+            );
+        }
+    }
+
+    #[test]
+    fn anything_that_is_not_an_encoded_secret_is_refused() {
+        assert_eq!(decode(""), None);
+        // Odd length — half a byte.
+        assert_eq!(decode("abc"), None);
+        // Not hexadecimal.
+        assert_eq!(decode("zzzz"), None);
+        // Valid hex that is not valid UTF-8.
+        assert_eq!(decode("ff"), None);
+    }
+
+    /// A login is saved against a host, and a host is what a challenge names.
+    #[test]
+    fn a_site_is_reduced_to_its_host() {
+        assert_eq!(normalise("https://example.com/login"), "example.com");
+        assert_eq!(normalise("  HTTPS://Example.COM/  "), "example.com");
+        assert_eq!(normalise("example.com"), "example.com");
+        assert_eq!(normalise("example.com/path"), "example.com");
+    }
+
+    /// The rule that decides which saved password a challenge is offered.
+    #[test]
+    fn the_most_specific_saved_login_wins() {
+        let vault = Vault {
+            logins: vec![
+                Login {
+                    site: "example.com".to_owned(),
+                    username: "broad".to_owned(),
+                },
+                Login {
+                    site: "sub.example.com".to_owned(),
+                    username: "narrow".to_owned(),
+                },
+            ],
+        };
+
+        // Exact match.
+        assert_eq!(vault.for_host("example.com").unwrap().username, "broad");
+        // A parent domain covers a host beneath it...
+        assert_eq!(vault.for_host("www.example.com").unwrap().username, "broad");
+        // ...but the most specific one wins. Taking the first match in sort
+        // order handed `deep.sub.example.com` the `example.com` login: the
+        // wrong one, and the one shared with more of the internet.
+        assert_eq!(
+            vault.for_host("deep.sub.example.com").unwrap().username,
+            "narrow"
+        );
+
+        // A host that merely ends with the same letters is not a subdomain.
+        assert!(vault.for_host("notexample.com").is_none());
+        assert!(vault.for_host("example.com.evil.test").is_none());
+        assert!(vault.for_host("elsewhere.test").is_none());
     }
 }

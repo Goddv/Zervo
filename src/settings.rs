@@ -305,36 +305,21 @@ fn settings_path() -> Option<PathBuf> {
     Some(data_dir()?.join("settings.json"))
 }
 
-/// Pre-rename location, still read once so existing preferences carry over.
-fn legacy_settings_path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("Zervo").join("settings.json"))
-}
+// There was a `legacy_settings_path` here, read as a fallback so preferences
+// written before a rename would carry over. It returned
+// `config_dir()/Zervo/settings.json` — which is what `settings_path()` returns,
+// because `data_dir()` above is `config_dir()?.join("Zervo")`. The two paths
+// became the same the moment `data_dir()` was pointed at the config directory,
+// and the fallback has been reading the file it had just failed to read ever
+// since. Removed rather than repaired: whatever it once migrated from is not
+// nameable from here any more.
 
 pub fn load() -> Settings {
-    let read = |path: Option<PathBuf>| -> Option<Settings> {
-        let contents = std::fs::read_to_string(path?).ok()?;
-        serde_json::from_str(&contents).ok()
-    };
-    read(settings_path())
-        .or_else(|| read(legacy_settings_path()))
-        .unwrap_or_default()
+    crate::store::load_or_default(settings_path())
 }
 
 impl Settings {
     pub fn save(&self) {
-        let Some(path) = settings_path() else {
-            return;
-        };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match serde_json::to_string_pretty(self) {
-            Ok(json) => {
-                if let Err(error) = std::fs::write(&path, json) {
-                    log::warn!("Failed to save settings: {error}");
-                }
-            },
-            Err(error) => log::warn!("Failed to serialize settings: {error}"),
-        }
+        let _ = crate::store::save(settings_path(), self);
     }
 }
