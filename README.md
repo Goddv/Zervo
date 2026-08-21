@@ -17,26 +17,32 @@
 <tr>
 <td width="50%" valign="top">
 
+<a href="assets/screenshots/zervo-light.png">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light.png">
   <img alt="The Zervo window with the sidebar open: workspaces and tabs in a column on the left, the new tab page in a floating content card" src="assets/screenshots/zervo-light.png" width="100%">
 </picture>
+</a>
 
 </td>
 <td width="50%" valign="top">
 
+<a href="assets/screenshots/zervo-light-bar.png">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark-bar.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light-bar.png">
   <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred" src="assets/screenshots/zervo-light-bar.png" width="100%">
 </picture>
+</a>
 
 </td>
 </tr>
 <tr>
-<td align="center"><sub><b>Sidebar</b> — navigation, workspaces and tabs in one column</sub></td>
-<td align="center"><sub><b>Collapsed</b> — navigation moves into a bar across the top</sub></td>
+<td align="center"><sub><b>Sidebar</b> — navigation, workspaces and tabs in one column<br>
+<a href="assets/screenshots/zervo-light.png">light</a> · <a href="assets/screenshots/zervo-dark.png">dark</a>, full size</sub></td>
+<td align="center"><sub><b>Collapsed</b> — navigation moves into a bar across the top<br>
+<a href="assets/screenshots/zervo-light-bar.png">light</a> · <a href="assets/screenshots/zervo-dark-bar.png">dark</a>, full size</sub></td>
 </tr>
 </table>
 
