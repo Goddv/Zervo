@@ -11,9 +11,9 @@
 //! connection reuse, and a hard ceiling on how many bytes a host can hand back.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs as _};
-use std::sync::Arc;
-use std::time::Duration;
+use std::net::{IpAddr, TcpStream, ToSocketAddrs as _};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 /// How Zervo introduces itself to a wallpaper host. Wikimedia asks that
 /// automated clients say who they are and where to complain, and refuses
@@ -26,6 +26,15 @@ const USER_AGENT: &str = concat!(
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// The whole fetch, redirects included.
+///
+/// `READ_TIMEOUT` bounds a single `read`, which is not the same thing at all: a
+/// host sending one byte every twenty-nine seconds satisfies it indefinitely,
+/// and the transfer then ends only when the byte ceiling does. Because the
+/// fetch runs on a detached thread whose `loading` flag is cleared only when it
+/// returns, that did not merely waste a thread — it stopped the wallpaper ever
+/// refreshing again for the rest of the session.
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Redirects to follow before deciding a host is playing games.
 const MAX_HOPS: usize = 5;
 /// Headers alone, before the body starts. Anything past this is not a header
@@ -46,8 +55,14 @@ pub struct Response {
 /// error page that decodes as neither.
 pub fn get(url: &str, accept: &str, limit: usize) -> Result<Response, String> {
     let mut target = url::Url::parse(url).map_err(|error| format!("{url}: {error}"))?;
+    // One deadline for the whole thing, not one per hop: five redirects each
+    // taking their own sweet time is the same wait as one that never ends.
+    let deadline = Instant::now() + TOTAL_TIMEOUT;
     for _ in 0..MAX_HOPS {
-        let response = fetch_once(&target, accept, limit)?;
+        if Instant::now() >= deadline {
+            return Err(format!("{url}: took too long"));
+        }
+        let response = fetch_once(&target, accept, limit, deadline)?;
         match response {
             Hop::Done(mut done) => {
                 done.url = target.to_string();
@@ -73,7 +88,79 @@ enum Hop {
     Redirect(String),
 }
 
-fn fetch_once(url: &url::Url, accept: &str, limit: usize) -> Result<Hop, String> {
+/// The TLS setup, built once.
+///
+/// This used to be rebuilt per request *and* per redirect hop, which meant
+/// cloning the whole webpki root store — a few hundred certificates — to fetch
+/// one picture.
+fn tls_config() -> Arc<rustls::ClientConfig> {
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let roots = rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
+            // The process-wide crypto provider is installed at startup for the
+            // engine; this rides on it rather than choosing a second one.
+            Arc::new(
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(roots)
+                    .with_no_client_auth(),
+            )
+        })
+        .clone()
+}
+
+/// Whether an address is out on the internet, rather than on this machine or
+/// this network.
+///
+/// Wallpapers come from public APIs, but Openverse indexes third-party
+/// providers, so the image URL inside a result is not first-party data — and
+/// after a redirect the host is not even the one that was asked. Names that
+/// resolve to private addresses and still hold a valid public certificate are
+/// ordinary and easy to get (`localtest.me`, `*.nip.io`). Without this check a
+/// stranger's search result can make Zervo knock on whatever is listening
+/// inside the network and report back, through Settings, what answered.
+fn is_public(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                // 100.64.0.0/10, carrier-grade NAT.
+                || (a == 100 && (64..128).contains(&b))
+                // 192.0.0.0/24, IETF protocol assignments.
+                || v4.octets()[..3] == [192, 0, 0]
+                // 240.0.0.0/4, reserved — including 255.255.255.255.
+                || a >= 240)
+        },
+        IpAddr::V6(v6) => {
+            // An IPv4 address in a v6 coat would otherwise walk past every one
+            // of the rules above.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public(IpAddr::V4(v4));
+            }
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+                return false;
+            }
+            // fc00::/7 unique-local and fe80::/10 link-local. std knows both,
+            // but only behind unstable methods, so they are spelled out.
+            let first = v6.segments()[0];
+            first & 0xfe00 != 0xfc00 && first & 0xffc0 != 0xfe80
+        },
+    }
+}
+
+fn fetch_once(
+    url: &url::Url,
+    accept: &str,
+    limit: usize,
+    deadline: Instant,
+) -> Result<Hop, String> {
     if url.scheme() != "https" {
         return Err(format!("{url}: only https is fetched"));
     }
@@ -83,14 +170,25 @@ fn fetch_once(url: &url::Url, accept: &str, limit: usize) -> Result<Hop, String>
         .to_owned();
     let port = url.port_or_known_default().unwrap_or(443);
 
-    // Resolution can block for a while on a bad network, so it happens under
-    // the same deadline as everything else.
+    // `to_socket_addrs` is a blocking `getaddrinfo` with no deadline of its own
+    // — there is no way to give it one without a thread — so on a network that
+    // is down rather than slow this call is the one part of a fetch that can
+    // outlast `TOTAL_TIMEOUT`. The resolver's own timeout is the only bound.
     let addresses: Vec<_> = (host.as_str(), port)
         .to_socket_addrs()
         .map_err(|error| format!("{host}: {error}"))?
         .collect();
     if addresses.is_empty() {
         return Err(format!("{host}: no address"));
+    }
+    // Checked after resolution rather than on the URL, because the URL is a
+    // name and the name is not what decides where the connection goes.
+    let addresses: Vec<_> = addresses
+        .into_iter()
+        .filter(|address| is_public(address.ip()))
+        .collect();
+    if addresses.is_empty() {
+        return Err(format!("{host}: refusing to fetch from a private address"));
     }
     // Every address, not just the first. A host whose first record is an IPv6
     // one, on a machine with no route to it, is otherwise unreachable — and
@@ -109,22 +207,21 @@ fn fetch_once(url: &url::Url, accept: &str, limit: usize) -> Result<Hop, String>
     let Some(socket) = connected else {
         return Err(refused);
     };
+    // Never longer than what is left of the overall deadline, so a stalled
+    // read cannot overshoot it by a whole `READ_TIMEOUT`.
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .unwrap_or_default()
+        .min(READ_TIMEOUT)
+        .max(Duration::from_millis(1));
     socket
-        .set_read_timeout(Some(READ_TIMEOUT))
-        .and_then(|()| socket.set_write_timeout(Some(READ_TIMEOUT)))
+        .set_read_timeout(Some(remaining))
+        .and_then(|()| socket.set_write_timeout(Some(remaining)))
         .map_err(|error| format!("{host}: {error}"))?;
 
-    // The process-wide crypto provider is installed at startup for the engine;
-    // this rides on it rather than choosing a second one.
-    let roots = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    };
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
     let server_name = rustls::pki_types::ServerName::try_from(host.clone())
         .map_err(|error| format!("{host}: {error}"))?;
-    let connection = rustls::ClientConnection::new(Arc::new(config), server_name)
+    let connection = rustls::ClientConnection::new(tls_config(), server_name)
         .map_err(|error| format!("{host}: {error}"))?;
     let mut tls = rustls::StreamOwned::new(connection, socket);
 
@@ -146,8 +243,8 @@ fn fetch_once(url: &url::Url, accept: &str, limit: usize) -> Result<Hop, String>
         .and_then(|()| tls.flush())
         .map_err(|error| format!("{host}: {error}"))?;
 
-    let raw =
-        read_capped(&mut tls, limit + MAX_HEADERS).map_err(|error| format!("{host}: {error}"))?;
+    let raw = read_capped(&mut tls, limit + MAX_HEADERS, deadline)
+        .map_err(|error| format!("{host}: {error}"))?;
     parse(&raw, limit)
 }
 
@@ -155,10 +252,20 @@ fn fetch_once(url: &url::Url, accept: &str, limit: usize) -> Result<Hop, String>
 ///
 /// A `Content-Length` cannot be trusted to bound this: it is the sender's
 /// claim, and the sender is the party being defended against.
-fn read_capped(source: &mut impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+fn read_capped(
+    source: &mut impl Read,
+    limit: usize,
+    deadline: Instant,
+) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut buffer = [0_u8; 16 * 1024];
     loop {
+        // A sender that keeps each individual read inside `READ_TIMEOUT` can
+        // otherwise hold this loop open until the byte ceiling is reached, one
+        // byte at a time.
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::other("took too long"));
+        }
         match source.read(&mut buffer) {
             Ok(0) => return Ok(out),
             Ok(read) => {

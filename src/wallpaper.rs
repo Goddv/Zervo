@@ -324,6 +324,9 @@ impl Wallpaper {
 /// A photograph big enough to fill a window without a second of it being
 /// spent on pixels nobody sees.
 const WANT_WIDTH: u32 = 1920;
+/// The longest side a *source* picture may have before it is refused outright.
+/// Generous — Wikimedia serves genuinely large scans — but finite.
+const MAX_SOURCE_SIDE: u32 = 16_384;
 /// The longest side a texture is allowed. Beyond this the extra detail costs
 /// video memory and buys nothing at window sizes.
 const MAX_SIDE: u32 = 2048;
@@ -526,7 +529,21 @@ fn finish(credit: Credit, bytes: &[u8], from: &str) -> Result<Fetched, String> {
 /// several hundred milliseconds of work; doing it where the frames are drawn
 /// would be a visible stall for something nobody asked to wait for.
 fn decode(bytes: &[u8]) -> Result<Decoded, String> {
-    let decoded = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    // `load_from_memory` applies `Limits::default()`, which caps one allocation
+    // at 512 MB but places no bound at all on the dimensions. That is a decode
+    // this thread can spend an appreciable time on, for a picture whose only
+    // qualification is that a stranger's search result pointed at it. Naming a
+    // side bound rejects the pathological ones up front, off the header, before
+    // any of the pixels are touched.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SOURCE_SIDE);
+    limits.max_image_height = Some(MAX_SOURCE_SIDE);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| error.to_string())?;
+    // `limits` sets rather than returns, so it cannot join the chain above.
+    reader.limits(limits);
+    let decoded = reader.decode().map_err(|error| error.to_string())?;
     let (width, height) = (decoded.width().max(1), decoded.height().max(1));
     let fit = |longest_allowed: u32| {
         let longest = width.max(height);
@@ -537,17 +554,15 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         )
     };
 
-    let (sharp_w, sharp_h) = fit(MAX_SIDE);
-    let sharp = if sharp_w < width || sharp_h < height {
-        decoded.resize_exact(sharp_w, sharp_h, image::imageops::FilterType::CatmullRom)
-    } else {
-        decoded.clone()
-    };
-
-    // The blurred copy, from the original rather than from the downscaled one:
-    // going straight to a small size with a decent filter is most of the blur
-    // already, and doing it in one step is both faster and cleaner than
-    // blurring two thousand pixels.
+    // The blurred copy first, and from the original rather than from the
+    // downscaled one: going straight to a small size with a decent filter is
+    // most of the blur already, and doing it in one step is both faster and
+    // cleaner than blurring two thousand pixels.
+    //
+    // Taking it first is also what lets the sharp copy below *move* the decoded
+    // image when it is already small enough, rather than cloning it. That clone
+    // was a second full-size buffer alongside the first, for a picture that had
+    // just been allowed to be 512 MB.
     let (frost_w, frost_h) = fit(FROST_SIDE);
     let small = decoded
         .resize_exact(frost_w, frost_h, image::imageops::FilterType::Triangle)
@@ -555,6 +570,13 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     let ceiling = frost_w.min(frost_h) as f32 * FROST_BLUR_CEILING;
     let sigma = (FROST_BLUR).min(ceiling).max(0.5);
     let blurred = image::imageops::fast_blur(&small, sigma);
+
+    let (sharp_w, sharp_h) = fit(MAX_SIDE);
+    let sharp = if sharp_w < width || sharp_h < height {
+        decoded.resize_exact(sharp_w, sharp_h, image::imageops::FilterType::CatmullRom)
+    } else {
+        decoded
+    };
 
     let as_image = |rgba: image::RgbaImage| {
         let size = [rgba.width() as usize, rgba.height() as usize];
