@@ -15,6 +15,7 @@
 )]
 
 mod app;
+mod backdrop;
 mod controls;
 mod dashboard;
 mod downloads;
@@ -169,6 +170,13 @@ struct RunningApp {
     /// The new tab page's photograph: where it comes from, and what is known
     /// about the one currently up.
     wallpaper: wallpaper::Wallpaper,
+    /// A blurred copy of the page, for the chrome to frost itself against.
+    /// Shared because the copy is taken inside a paint callback, which runs
+    /// while `self` is already borrowed by `EguiGlow::run` — and behind a
+    /// mutex because egui requires a paint callback to be `Send + Sync`, not
+    /// because anything here is on another thread. It never contends.
+    page_backdrop: Arc<std::sync::Mutex<backdrop::PageBackdrop>>,
+    page_backdrop_texture: Option<egui::TextureHandle>,
     /// The uploaded textures for it: the picture, and the blurred copy every
     /// glass surface over it is frosted against. Held here rather than in the
     /// manager because making one needs an egui context, and the manager runs
@@ -358,6 +366,8 @@ impl ApplicationHandler<WakerEvent> for App {
             theme_fade: None,
             downloads: downloads::DownloadManager::default(),
             wallpaper,
+            page_backdrop: Arc::new(std::sync::Mutex::new(backdrop::PageBackdrop::default())),
+            page_backdrop_texture: None,
             wallpaper_texture: None,
             wallpaper_frost: None,
             #[cfg(target_os = "macos")]
@@ -834,6 +844,25 @@ impl RunningApp {
         // The wallpaper: collect anything the fetch thread finished, and start
         // a new one when the cadence says so. Both are cheap when there is
         // nothing to do, which is almost always.
+        // The page's blurred copy, taken by last frame's paint callback. On an
+        // internal page there is nothing to copy, and a stale copy of the page
+        // you were on before is worse than none.
+        if self.settings_open
+            && let Ok(mut backdrop) = self.page_backdrop.lock()
+        {
+            backdrop.clear();
+            self.page_backdrop_texture = None;
+        }
+        if let Ok(mut backdrop) = self.page_backdrop.lock()
+            && let Some(image) = backdrop.take()
+        {
+            self.page_backdrop_texture = Some(self.egui_glow.egui_ctx.load_texture(
+                "zervo-page-backdrop",
+                image,
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+
         // Collected whatever the page is showing: a result left sitting in the
         // channel would keep the loop waking up for it forever.
         if self.wallpaper.poll()
@@ -888,6 +917,28 @@ impl RunningApp {
         // Move UI-facing state out of `self` for the closure; restored below.
         let mut settings = self.settings.clone();
         let favicons = std::mem::take(&mut self.favicons);
+        // Handed to the paint callback, which runs inside `run` and so cannot
+        // borrow `self`. Only asked for when it is due, so an idle window is
+        // not stalling its own pipeline on a readback every frame.
+        let capture = self
+            .page_backdrop
+            .lock()
+            .is_ok_and(|backdrop| backdrop.due())
+            .then(|| self.page_backdrop.clone());
+        // Every glass surface inside the content rect frosts against the page,
+        // the same way the new tab page's cards frost against its wallpaper —
+        // the new tab page then replaces it with the wallpaper's own, since
+        // that is what is behind *its* cards.
+        let palette = match (&self.page_backdrop_texture, self.settings_open) {
+            (Some(texture), false) => palette.with_backdrop(Some(theme::Backdrop {
+                texture: texture.id(),
+                rect: self.content_rect_points,
+                uv: egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                alpha: 1.0,
+            })),
+            _ => palette,
+        };
+
         let wallpaper = wallpaper::View {
             texture: self.wallpaper_texture.as_ref(),
             frost: self.wallpaper_frost.as_ref(),
@@ -954,6 +1005,34 @@ impl RunningApp {
                                     render_to_parent(painter.gl(), rect_in_parent);
                                 })),
                             });
+
+                        // And immediately after it, while the page is the only
+                        // thing on the framebuffer, take the blurred copy the
+                        // chrome frosts itself against. Ordered here on
+                        // purpose: a frame later and it would contain the
+                        // cards, which would then be frosting against
+                        // themselves.
+                        if let Some(capture) = capture.clone() {
+                            root.layer_painter(LayerId::background())
+                                .add(egui::PaintCallback {
+                                    rect: content_rect,
+                                    callback: Arc::new(CallbackFn::new(move |info, painter| {
+                                        let clip = info.viewport_in_pixels();
+                                        let Ok(mut backdrop) = capture.lock() else {
+                                            return;
+                                        };
+                                        backdrop.capture(
+                                            painter.gl(),
+                                            [
+                                                clip.left_px,
+                                                clip.from_bottom_px,
+                                                clip.width_px,
+                                                clip.height_px,
+                                            ],
+                                        );
+                                    })),
+                                });
+                        }
                     }
                 }
             }
