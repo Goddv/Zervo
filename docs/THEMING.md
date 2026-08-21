@@ -177,8 +177,8 @@ framebuffer. The chrome paints a thin tint over it. That is why the chrome's
 blur is the system's rather than ours, and why it is at full strength however
 opaque the tint is.
 
-**The content card's bottom corners are cut out of the framebuffer**, not
-painted over. The page arrives as a square blit, so its corners have to be
+**The content card's corners are cut out of the framebuffer**, not painted
+over. The page arrives as a square blit, so its corners have to be
 rounded by something; anything painted over them has to be opaque, and the
 chrome beside them is a thin tint over a backdrop the window server composites
 outside our framebuffer — unreadable, unreproducible, unmatchable. So the
@@ -186,9 +186,17 @@ corners are erased instead, with an antialiased destination-out pass, and the
 chrome is drawn back over the hole at its own tint. Same paint, same backdrop,
 no seam.
 
-The top corners are *not* cut: a hole along the top of the window shows what is
-behind the window rather than the backdrop. They keep an opaque mask, which is
-correct there because what sits above the card is opaque toolbar furniture.
+All four are cut. The top two used to keep an opaque mask instead, on the
+reasoning that what sits above the card is opaque toolbar furniture and an
+opaque patch would therefore match it. It does not: with a translucent
+material the chrome up there is the same thin tint as everywhere else, so the
+mask read as a dark notch hugging the arc — visible on a web page, where the
+card is a blit that needs masking, and never on `zervo://settings` or the new
+tab page, which round themselves and are never masked at all.
+
+The window's own backdrop covers the whole frame view, not just the area below
+the toolbar, so a hole at the top shows the same frosted backdrop as a hole at
+the bottom.
 
 On a platform with no system backdrop, neither piece is needed — the chrome is
 opaque and a plain rounded rect does the job.
@@ -200,7 +208,7 @@ opaque and a plain rounded rect does the job.
 | [`zervo-core/src/theme.rs`](../zervo-core/src/theme.rs) | `Palette`, `Material`, `Surface`, `Tier`, `Translucency`, `Backdrop` |
 | [`zervo-core/src/glass.rs`](../zervo-core/src/glass.rs) | `glass::shapes` — every surface is drawn here |
 | [`src/backdrop.rs`](../src/backdrop.rs) | The framebuffer copy, and the corner erase |
-| [`src/ui.rs`](../src/ui.rs) | The chrome, and `theme::apply` feeding egui's own styling |
+| [`src/ui/`](../src/ui/) | The chrome; `ui/frame.rs` holds the card's frame and corner masks |
 
 The unit tests in `theme.rs` and `glass.rs` are the contract: they pin the
 class hierarchy, the radius tiers, the frost geometry, the tint arithmetic and

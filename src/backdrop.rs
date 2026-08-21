@@ -393,17 +393,28 @@ impl Eraser {
             return;
         };
 
-        // Two corners, and for each a fan of wedges from the square corner out
-        // to the arc, plus the feathered band across it.
+        // All four corners, and for each a fan of wedges from the square corner
+        // out to the arc, plus the feathered band across it.
         let steps = (radius_px.ceil() as usize).clamp(8, 64);
-        let mut vertices: Vec<f32> = Vec::with_capacity(steps * 18);
+        let mut vertices: Vec<f32> = Vec::with_capacity(steps * 36);
         let to_ndc = |px: f32, py: f32| {
             (
                 (px - x as f32) / width as f32 * 2.0 - 1.0,
                 (py - y as f32) / height as f32 * 2.0 - 1.0,
             )
         };
-        // (corner, arc centre, the quadrant's start angle)
+        // (corner, arc centre, the quadrant's start angle). GL's origin is at
+        // the bottom left, so `y` is the card's bottom edge and `y + height`
+        // its top.
+        //
+        // This used to cut the bottom two only, and the top two were painted
+        // over instead — an opaque mask laid across the page's square corner.
+        // A mask cannot match its surroundings: the chrome beside it is a thin
+        // tint over a backdrop the window server composites outside this
+        // framebuffer, so there is nothing to read and nothing to reproduce,
+        // and the code that did it said as much. Cutting all four means the
+        // chrome is drawn back over a hole in every corner — the same paint on
+        // the same backdrop, with nothing left to match.
         let corners = [
             (
                 (x as f32, y as f32),
@@ -414,6 +425,19 @@ impl Eraser {
                 ((x + width) as f32, y as f32),
                 ((x + width) as f32 - radius_px, y as f32 + radius_px),
                 1.5 * std::f32::consts::PI,
+            ),
+            (
+                (x as f32, (y + height) as f32),
+                (x as f32 + radius_px, (y + height) as f32 - radius_px),
+                0.5 * std::f32::consts::PI,
+            ),
+            (
+                ((x + width) as f32, (y + height) as f32),
+                (
+                    (x + width) as f32 - radius_px,
+                    (y + height) as f32 - radius_px,
+                ),
+                0.0,
             ),
         ];
         for (corner, centre, start) in corners {

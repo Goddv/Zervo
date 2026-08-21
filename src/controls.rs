@@ -522,8 +522,17 @@ fn panel<R>(
         .constrain(false)
         .show(ctx, |ui| {
             if let Some(scrim) = scrim {
-                ui.painter()
-                    .rect_filled(scrim, CornerRadius::ZERO, dim(palette));
+                // Rounded to the content card, not square. The scrim covers the
+                // card exactly, and the card has rounded corners — so a square
+                // one laid four dark right-angles over them, which reads as the
+                // card having grown black corners for as long as the dialog is
+                // up. Rare when the only dialogs were a page's own `alert` and
+                // `confirm`; not rare at all now that a download asks first.
+                ui.painter().rect_filled(
+                    scrim,
+                    CornerRadius::same(crate::theme::CONTENT_RADIUS as u8),
+                    dim(palette),
+                );
             }
             let painter = ui.painter();
             // Backed opaquely: these float over live page content and the

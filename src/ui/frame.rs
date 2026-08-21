@@ -401,11 +401,13 @@ pub fn finish_content_frame(
             // the masks disappear into the top gradient instead of stamping
             // flat background patches over it.
             let base = mesh.vertices.len() as u32;
-            let (opacity, glow) = if outward.y < 0.0 {
-                (1.0, 0.0)
-            } else {
-                (tint, top_glow)
-            };
+            // The chrome's own tint, at every corner, over the hole the eraser
+            // cut. The top two used to be opaque instead, because they were
+            // painted over the page's square corner rather than over a hole —
+            // and an opaque patch cannot match a translucent surround, which is
+            // what made them read as dark notches. Now that all four are cut,
+            // all four are the same paint on the same backdrop.
+            let (opacity, glow) = (tint, top_glow);
             mesh.colored_vertex(corner_out, chrome_at(corner_out.y, opacity, glow));
             for point in &arc {
                 mesh.colored_vertex(*point, chrome_at(point.y, opacity, glow));
