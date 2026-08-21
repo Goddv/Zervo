@@ -348,7 +348,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // How much of this surface's own material survives, per the reader's
     // setting — unless the material has opted out of having one.
     let sheer = if material.translucency {
-        palette.translucency.alpha()
+        palette.translucency.surface()
     } else {
         1.0
     };
