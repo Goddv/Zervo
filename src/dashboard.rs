@@ -337,6 +337,14 @@ pub fn draw(
         return changes;
     }
 
+    // The shelf sits just above the new tab page rather than on it, so on its
+    // own it had nothing to frost against and came out flat while everything
+    // below it was glass. Letting the page's picture reach up over the shelf
+    // is what makes the two read as one surface — the sampler clamps, so what
+    // arrives is the page's own top edge carried upward.
+    let reaching = palette.reaching(area.height() + 24.0);
+    let palette = &reaching;
+
     let ctx = root.ctx().clone();
     // Everything is clipped to the shelf, so a half-open one shows the top of
     // whole cards rather than squashed ones — it uncovers the strip rather

@@ -314,6 +314,7 @@ pub fn draw(
             texture: frost.id(),
             luma: frost.luma(),
             rect: content_rect,
+            reach: 0.0,
             uv,
             alpha: arrival,
         }));
@@ -390,9 +391,13 @@ pub fn draw(
 /// Over a photograph, text is white and carries a shadow; over the chrome's
 /// own base it is the palette's. Working that out once and passing it down
 /// beats every card deciding for itself and two of them getting it wrong.
+#[derive(Clone)]
 struct Ink {
     text: Color32,
     muted: Color32,
+    /// What the halo is drawn in — the opposite of the text, or it does
+    /// nothing.
+    halo: Color32,
     /// True when a photograph is behind everything.
     photo: bool,
     dark: bool,
@@ -413,8 +418,43 @@ impl Ink {
             } else {
                 palette.text_muted
             },
+            halo: Color32::from_black_alpha(58),
             photo,
             dark: palette.dark,
+        }
+    }
+
+    /// This ink, chosen for what is behind `rect` rather than for the page as
+    /// a whole.
+    ///
+    /// One decision for the whole page cannot be right: a photograph is dark
+    /// sky at the top and bright water at the bottom, and pale text set for
+    /// the sky disappears into the water. The halo helps and is not enough on
+    /// its own — it lifts text off a busy picture, not off one the same
+    /// brightness as the text.
+    fn over(&self, palette: &Palette, rect: Rect, on_glass: bool) -> Ink {
+        let Some(light) = palette.prefers_light_ink(rect, on_glass) else {
+            return self.clone();
+        };
+        let (text, muted, halo) = if light {
+            (
+                Color32::from_white_alpha(240),
+                Color32::from_white_alpha(180),
+                Color32::from_black_alpha(58),
+            )
+        } else {
+            (
+                Color32::from_black_alpha(232),
+                Color32::from_black_alpha(160),
+                Color32::from_white_alpha(96),
+            )
+        };
+        Ink {
+            text,
+            muted,
+            halo,
+            photo: self.photo,
+            dark: !light,
         }
     }
 
@@ -444,7 +484,7 @@ impl Ink {
             // full strength stack into a hard ring that reads as an outline
             // around the letters; eight overlapping at a third of the alpha
             // build up near the glyph and thin out from it, which is a halo.
-            let halo = Color32::from_black_alpha(58);
+            let halo = self.halo;
             const COMPASS: [(f32, f32); 8] = [
                 (0.0, -1.0),
                 (0.7, -0.7),
@@ -1418,6 +1458,12 @@ fn draw_tile(
     // A bare card has no material of its own — until it is being arranged,
     // when it needs an edge to be grabbed by.
     let framed = !tile.card.bare() || editing;
+    // Every card asks again, for itself. The page's answer is the right one
+    // only for a card that happens to sit where the page was sampled — a
+    // photograph is dark sky at the top and bright water at the bottom, and
+    // pale text set for the sky disappears into the water.
+    let card_ink = ink.over(&palette, rect, framed);
+    let ink = &card_ink;
     if framed && tile.card != Card::Search {
         let material = if carried {
             Glass::tier(Tier::Card)

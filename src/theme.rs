@@ -267,6 +267,16 @@ pub struct Backdrop {
     /// should be light or dark, and that decision does not get better with
     /// resolution. Sixty-four bytes, so a `Palette` stays cheap to copy.
     pub luma: [u8; LUMA_CELLS * LUMA_CELLS],
+    /// How far outside its own rectangle this picture will still be frosted
+    /// against, in points.
+    ///
+    /// Zero for the ordinary case, where only what is on the page frosts
+    /// against the page. The widget shelf is the exception: it slides out of
+    /// the top of the new tab page and sits just above it, and reading it as
+    /// part of that page rather than as part of the chrome is what makes it
+    /// look like it belongs there. The sampler clamps, so what it gets is the
+    /// page's edge carried outward.
+    pub reach: f32,
     /// How far the picture itself has arrived, 0..=1.
     ///
     /// A wallpaper fades in. While it is doing so the blur under a card has to
@@ -720,9 +730,22 @@ impl Palette {
         // What the text will actually sit on is the backdrop seen *through* the
         // glass, not the backdrop. A dark card at a third opacity over a white
         // page reads as neither.
-        let tint = self.tint_over(rect, self.tint_for(Surface::Menu));
+        let tint = self.tint_over(rect, self.nominal_tint(Surface::Menu));
         let own = f32::from(luminance_of(self.bg)) / 255.0;
         Some(behind * (1.0 - tint) + own * tint)
+    }
+
+    /// How much of a surface is its own colour rather than what is behind it,
+    /// before any thickening.
+    ///
+    /// Two numbers make this and both are easy to miss: the material's fill,
+    /// which is the core's own alpha, and the class's tint, which scales the
+    /// whole finished surface afterwards. A menu with a 0.58 fill at a 0.34
+    /// class tint is a fifth of its own colour, not three fifths — and code
+    /// that reads only one of them is wrong by a factor of three.
+    pub fn nominal_tint(&self, surface: Surface) -> f32 {
+        let material = &self.material;
+        (material.frosted_fill + material.frosted_fill_strength) * self.tint_for(surface)
     }
 
     /// The tint a surface needs so that it still reads as one of this theme's
@@ -771,13 +794,13 @@ impl Palette {
 
     /// How light whatever is behind `rect` is, before this palette's glass goes
     /// over it.
-    fn page_brightness_under(&self, rect: Rect) -> Option<f32> {
+    pub fn page_brightness_under(&self, rect: Rect) -> Option<f32> {
         let backdrop = self.backdrop?;
         let page = backdrop.rect;
         if page.width() <= 0.0 || page.height() <= 0.0 {
             return None;
         }
-        let patch = rect.intersect(page);
+        let patch = rect.intersect(page.expand(backdrop.reach));
         if patch.width() <= 0.0 || patch.height() <= 0.0 {
             return None;
         }
@@ -801,6 +824,36 @@ impl Palette {
             return None;
         }
         Some(f32::from((total / count) as u8) / 255.0 * backdrop.alpha)
+    }
+
+    /// This palette, with its picture reaching `points` beyond its own edges.
+    ///
+    /// For surfaces that sit beside the page rather than on it and should read
+    /// as part of it anyway. Nothing when there is no picture.
+    pub fn reaching(&self, points: f32) -> Palette {
+        Palette {
+            backdrop: self.backdrop.map(|backdrop| Backdrop {
+                reach: backdrop.reach.max(points),
+                ..backdrop
+            }),
+            ..*self
+        }
+    }
+
+    /// Whether pale text reads better than dark text at `rect`, or `None` when
+    /// there is nothing behind it.
+    ///
+    /// `on_glass` says whether the text sits on one of this theme's surfaces or
+    /// straight on the page. It is the whole question: a card holds the theme,
+    /// so text on one follows the theme, while text laid directly on a
+    /// photograph follows the photograph.
+    pub fn prefers_light_ink(&self, rect: Rect, on_glass: bool) -> Option<bool> {
+        let brightness = if on_glass {
+            self.brightness_under(rect)?
+        } else {
+            self.page_brightness_under(rect)?
+        };
+        Some(contrast(LIGHT_INK.0, brightness) >= contrast(DARK_INK.0, brightness))
     }
 
     /// This palette, with text chosen for whatever is behind `rect`.
@@ -856,7 +909,8 @@ impl Palette {
         // flat at the top with a seam across it. The sampler clamps at the
         // edge, so the blur simply continues — which is what the eye expects
         // and what the alternative could not give it.
-        if rect.intersect(page).width() <= 0.0 || rect.intersect(page).height() <= 0.0 {
+        let within = page.expand(backdrop.reach);
+        if rect.intersect(within).width() <= 0.0 || rect.intersect(within).height() <= 0.0 {
             return None;
         }
         let quad = rect;
@@ -1133,6 +1187,7 @@ mod tests {
             rect: Rect::from_min_max(pos2(100.0, 100.0), pos2(900.0, 700.0)),
             uv: Rect::from_min_max(pos2(0.25, 0.25), pos2(0.75, 0.75)),
             luma: [128; LUMA_CELLS * LUMA_CELLS],
+            reach: 0.0,
             alpha: 1.0,
         });
         palette
@@ -1278,6 +1333,24 @@ mod tests {
             DARK_INK.0,
             "so the text has to leave the theme behind instead"
         );
+    }
+
+    /// Both factors, or the number is wrong by a factor of three.
+    #[test]
+    fn a_surface_tint_counts_the_class_as_well_as_the_fill() {
+        let palette = palette_with_backdrop().with_translucency(Translucency::Frosted);
+        let fill = Material::GLASS.frosted_fill + Material::GLASS.frosted_fill_strength;
+        for surface in [Surface::Card, Surface::Menu, Surface::Input] {
+            let nominal = palette.nominal_tint(surface);
+            assert!(
+                nominal < fill,
+                "{surface:?}: the class tint has to be in there, {nominal} vs {fill}"
+            );
+            assert!(
+                (nominal - fill * palette.tint_for(surface)).abs() < 1e-6,
+                "{surface:?}: it is the product of the two"
+            );
+        }
     }
 
     /// Solid is the step that means what it says. An opaque surface shows

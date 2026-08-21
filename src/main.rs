@@ -935,6 +935,7 @@ impl RunningApp {
                 texture: frost.id(),
                 luma: frost.luma(),
                 rect: self.content_rect_points,
+                reach: 0.0,
                 uv: egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 alpha: 1.0,
             })),

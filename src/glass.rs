@@ -362,6 +362,11 @@ fn over(top: Color32, bottom: Color32) -> Color32 {
     )
 }
 
+/// The core's own alpha, before the class tint scales the finished surface.
+fn core_fill(material: &crate::theme::Material, strength: f32) -> f32 {
+    material.frosted_fill + material.frosted_fill_strength * strength
+}
+
 pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     let mut out = Vec::new();
     if glass.strength <= 0.0 && glass.glow <= 0.0 {
@@ -378,10 +383,25 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     let strength = glass.strength.clamp(0.0, 1.0);
     // How much of this surface's own material survives, per the reader's
     // setting — unless the material has opted out of having one.
+    // What is behind this surface, blurred, if anything is.
+    let backdrop = (material.frosts && palette.translucency == crate::theme::Translucency::Frosted)
+        .then(|| palette.backdrop_under(rect))
+        .flatten();
     let sheer = if material.translucency {
         palette.tint_for(glass.surface)
     } else {
         1.0
+    };
+    // What the reader sees is the core's own alpha times this, so this is where
+    // holding the theme has to happen. Thickening the core instead cannot work:
+    // it saturates at one, and the class tint then hands two thirds of the page
+    // straight back — which is how a dark-mode card over a bright wallpaper
+    // stayed pale, and took its text with it.
+    let sheer = if backdrop.is_some() {
+        let own = core_fill(material, strength);
+        (palette.tint_over(rect, own * sheer) / own.max(0.01)).min(1.0)
+    } else {
+        sheer
     };
 
     // Accent glow halo behind active/focused elements — a falloff rather than
@@ -422,9 +442,6 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // skip the work of making one under Solid, but the rule belongs here — it
     // is a property of the material, not something two call sites have to
     // remember in step.
-    let backdrop = (material.frosts && palette.translucency == crate::theme::Translucency::Frosted)
-        .then(|| palette.backdrop_under(rect))
-        .flatten();
 
     // Translucent core over whatever is behind, plus the glass wash — white
     // translucency per the glassmorphism recipe, with the light theme leaning
@@ -438,14 +455,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
         .tint
         .unwrap_or(palette.surface)
         .gamma_multiply(if backdrop.is_some() {
-            // Thickened, but only over a page that would otherwise overrule the
-            // theme — a dark menu opened over a white page has to stay a dark
-            // menu. Over a page the theme agrees with, this is the material's
-            // own number untouched.
-            palette.tint_over(
-                rect,
-                material.frosted_fill + material.frosted_fill_strength * strength,
-            )
+            core_fill(material, strength)
         } else {
             material.fill + material.fill_strength * strength
         });
@@ -550,6 +560,7 @@ mod tests {
             rect: Rect::from_min_max(pos2(100.0, 100.0), pos2(900.0, 700.0)),
             uv: Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
             luma: [128; LUMA_CELLS * LUMA_CELLS],
+            reach: 0.0,
             alpha: 1.0,
         });
         palette
@@ -591,6 +602,53 @@ mod tests {
         let palette = frosting_palette();
         let card = Rect::from_min_max(pos2(0.0, 0.0), pos2(90.0, 90.0));
         assert!(frosted_area(&shapes(card, &palette, Glass::of(Surface::Menu))).is_empty());
+    }
+
+    /// The strongest fill any shape covering the card carries.
+    fn heaviest_fill(shapes: &[Shape], card: Rect) -> u8 {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                // Exactly the card: the shadow is drawn on a larger rectangle
+                // and would otherwise answer for it.
+                Shape::Rect(rect) if rect.brush.is_none() && rect.rect == card => {
+                    Some(rect.fill.a())
+                },
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The bug this is here to stop coming back: the tint is applied twice —
+    /// once as the core's own alpha, and again as the class tint scaling the
+    /// finished fill. Thickening only the first left a dark-mode card over a
+    /// bright wallpaper at a quarter of its own colour, so the beach came
+    /// through it and its pale text went with it.
+    #[test]
+    fn a_card_gets_heavier_over_a_page_that_would_overrule_it() {
+        let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(660.0, 450.0));
+        let weight = |luma: u8| {
+            let mut palette = frosting_palette();
+            palette.backdrop.as_mut().unwrap().luma = [luma; LUMA_CELLS * LUMA_CELLS];
+            heaviest_fill(
+                &shapes(card, &palette, Glass::tier(crate::theme::Tier::Card)),
+                card,
+            )
+        };
+        let (agreeable, opposite) = (weight(10), weight(255));
+        assert!(
+            opposite > agreeable,
+            "a dark card over a white page has to be heavier than over a black one: \
+             {opposite} vs {agreeable}"
+        );
+        // And heavier by enough to matter — the first attempt at this raised
+        // the core from 0.58 to 0.73, which the class tint then cut back to a
+        // quarter and nobody could see.
+        assert!(
+            f32::from(opposite) > f32::from(agreeable) * 1.5,
+            "barely heavier is the same bug: {opposite} vs {agreeable}"
+        );
     }
 
     /// Solid is opaque, whatever is behind the window.
