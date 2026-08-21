@@ -143,7 +143,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         root,
         &chrome.palette,
         chrome.settings.top_glow,
-        chrome.settings.chrome_opacity,
+        chrome.palette.translucency.chrome(),
     );
 
     // Autohide reveal: decided before the sidebar is drawn, but painted last
@@ -4323,24 +4323,6 @@ fn settings_appearance(
 
     settings_section(ui, palette, "Transparency", |ui| {
         ui.label(
-            RichText::new("Chrome opacity")
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        if widgets::slider(ui, &mut chrome.settings.chrome_opacity, 0.35..=1.0, palette) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.label(
-            RichText::new(format!(
-                "{:.0}% — the web page itself always stays opaque.",
-                chrome.settings.chrome_opacity * 100.0
-            ))
-            .size(11.5)
-            .color(palette.text_muted),
-        );
-        ui.add_space(14.0);
-
-        ui.label(
             RichText::new("Material")
                 .size(12.0)
                 .color(palette.text_muted),
@@ -4364,8 +4346,8 @@ fn settings_appearance(
         ui.add_space(2.0);
         ui.label(
             RichText::new(
-                "Every surface the material draws — the cards, the menus, the shelf, \
-                 the new tab page.",
+                "Everything the material draws — the window's own chrome, the cards, \
+                 the menus, the shelf, the new tab page.",
             )
             .size(11.5)
             .color(palette.text_muted),

@@ -346,13 +346,22 @@ const MAX_SIDE: u32 = 2048;
 /// the texture sampler's own bilinear filtering smooths it further, for free.
 /// Storing it at full size would be storing a megabyte of information that has
 /// already been thrown away.
-const FROST_SIDE: u32 = 360;
+const FROST_SIDE: u32 = 640;
 /// How far the frost is blurred, in pixels of the small copy, before the
-/// reader's setting scales it. At this size it is equivalent to about a
-/// sixty-pixel blur of the original. The material's, since how frosted frosted
+/// reader's setting scales it.
+///
+/// Kept well under the copy's own size on purpose. A sigma that approaches it
+/// stops being a blur: the box passes reach past the edges, what they clamp
+/// against dominates the result, and a *heavier* setting can come back with
+/// more contrast than a lighter one rather than less. That is not a
+/// theoretical worry — it is what the first pair of numbers here did, and
+/// `heavier_blur_leaves_less_of_the_picture` is the test that caught it. The material's, since how frosted frosted
 /// glass is is a property of the material and not of the fetcher — this thread
 /// simply has no palette to ask.
 const FROST_BLUR: f32 = crate::theme::Material::GLASS.blur;
+/// The most the reader's setting may scale it to, as a share of the copy's
+/// shortest side — past this the artefacts above set in.
+const FROST_BLUR_CEILING: f32 = 0.06;
 /// A picture this large is a mistake somewhere.
 const MAX_BYTES: usize = 24 * 1024 * 1024;
 /// Metadata is small; a megabyte of it is not metadata.
@@ -560,7 +569,9 @@ fn decode(bytes: &[u8], blur: crate::theme::Blur) -> Result<Decoded, String> {
     let small = decoded
         .resize_exact(frost_w, frost_h, image::imageops::FilterType::Triangle)
         .to_rgba8();
-    let blurred = image::imageops::fast_blur(&small, FROST_BLUR * blur.scale());
+    let ceiling = frost_w.min(frost_h) as f32 * FROST_BLUR_CEILING;
+    let sigma = (FROST_BLUR * blur.scale()).min(ceiling).max(0.5);
+    let blurred = image::imageops::fast_blur(&small, sigma);
 
     let as_image = |rgba: image::RgbaImage| {
         let size = [rgba.width() as usize, rgba.height() as usize];
@@ -739,4 +750,80 @@ fn random_u32(salt: u32) -> u32 {
     value ^= value >> 15;
     value = value.wrapping_mul(0x846c_a68b);
     value ^ (value >> 16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Blur;
+
+    /// A sharp checkerboard, as PNG bytes — something for a blur to soften.
+    ///
+    /// Big squares on purpose. Fine ones are annihilated by any blur worth
+    /// having, so every setting past the lightest measures the same flat grey
+    /// and the test can no longer tell them apart. A photograph has structure
+    /// at every scale; this has it at one, and that scale has to be coarse
+    /// enough to survive the heaviest setting.
+    fn checkerboard() -> Vec<u8> {
+        let mut image = image::RgbaImage::new(512, 512);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            let on = ((x / 64) + (y / 64)) % 2 == 0;
+            let value = if on { 255 } else { 0 };
+            *pixel = image::Rgba([value, value, value, 255]);
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .expect("encodes");
+        bytes.into_inner()
+    }
+
+    /// How much local contrast is left, as the variance of the pixels. A blur
+    /// takes contrast away, so a heavier one leaves less.
+    fn contrast(image: &egui::ColorImage) -> f64 {
+        // The middle of the picture only. Every blur clamps at the edges, so
+        // the border carries an artefact of the blur rather than a measure of
+        // it, and at large radii that artefact is the loudest thing there.
+        let [width, height] = image.size;
+        let (inset_x, inset_y) = (width / 5, height / 5);
+        let values: Vec<f64> = (inset_y..height - inset_y)
+            .flat_map(|y| (inset_x..width - inset_x).map(move |x| (x, y)))
+            .map(|(x, y)| f64::from(image.pixels[y * width + x].r()))
+            .collect();
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
+    }
+
+    /// The setting has to reach the pixels. It is a baked texture rather than
+    /// something the material does at draw time, so "the slider moved" and
+    /// "the picture changed" are two different things and only the second one
+    /// is worth anything.
+    #[test]
+    fn heavier_blur_leaves_less_of_the_picture() {
+        let bytes = checkerboard();
+        let light = contrast(&decode(&bytes, Blur::Light).expect("decodes").frost);
+        let medium = contrast(&decode(&bytes, Blur::Medium).expect("decodes").frost);
+        let deep = contrast(&decode(&bytes, Blur::Deep).expect("decodes").frost);
+        assert!(
+            light > medium && medium > deep,
+            "blur levels did not separate: light {light:.1}, medium {medium:.1}, deep {deep:.1}"
+        );
+        // And separated by enough to see, not merely by enough to measure.
+        assert!(
+            light > deep * 1.5,
+            "light {light:.1} and deep {deep:.1} are too close to tell apart"
+        );
+    }
+
+    /// The sharp copy is not blurred at all, whatever the setting says.
+    #[test]
+    fn the_picture_itself_is_never_blurred() {
+        let bytes = checkerboard();
+        let light = contrast(&decode(&bytes, Blur::Light).expect("decodes").sharp);
+        let deep = contrast(&decode(&bytes, Blur::Deep).expect("decodes").sharp);
+        assert!(
+            (light - deep).abs() < 1.0,
+            "the setting reached the wallpaper"
+        );
+    }
 }
