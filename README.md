@@ -103,8 +103,11 @@ that, and what signing would cost.
 | `src/app.rs` | engine glue — owns Servo, implements `WebViewDelegate` |
 | `src/state.rs` | workspaces, tabs, chrome state |
 | `src/ui.rs` | the whole chrome, drawn with egui; emits `UiAction`s |
-| `src/theme.rs` | palettes, accents, light/dark resolution |
-| `src/glass.rs` | the translucent material |
+| `src/theme.rs` | palettes, accents, and the material every surface is built from |
+| `src/glass.rs` | the one place a surface is drawn |
+| `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
+| `src/newtab.rs` | the new tab page: cards, grid, backdrops |
+| `src/wallpaper.rs`, `src/net.rs` | wallpapers from Commons and Openverse |
 | `src/widgets.rs` | toggles, sliders, segmented controls |
 | `src/icons.rs`, `src/phosphor.rs` | [Phosphor][phosphor] icon rendering |
 | `src/downloads.rs` | download manager |
@@ -112,7 +115,9 @@ that, and what signing would cost.
 | `patches/servo/` | engine patches Zervo can build against |
 
 There is a longer tour in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-including how the chrome and the engine share one GL context.
+including how the chrome and the engine share one GL context, and
+[docs/THEMING.md](docs/THEMING.md) describes the material system a theme for
+another platform would be written against.
 
 ## Platforms
 
@@ -127,6 +132,11 @@ The Linux and Windows packages are new and honest about it: they compile,
 package and install, and nobody has started one. Whether Zervo opens a window
 there is untested — the rendering context, X11 versus Wayland and the GL setup
 have never been exercised. A report either way is genuinely useful.
+
+**0.4.0 is a macOS release first.** All three packages come from the same tag
+and the material system is portable — it is drawn by egui and nothing else —
+but the window's frosted backdrop is an AppKit feature and the corner work
+behind it has been tried nowhere else. Patches for Linux and Windows are 0.4.1.
 
 macOS keeps two things the others do not: the frosted vibrancy behind the chrome,
 which is an AppKit feature, and bundled media, since GStreamer on Linux is an

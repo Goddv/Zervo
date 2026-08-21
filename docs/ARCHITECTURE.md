@@ -60,22 +60,43 @@ height, control padding and animation time. `glass::shapes` reads all of it
 from the palette it is already handed, so a material reaches every surface in
 the application without a signature changing anywhere.
 
-Corner radii are named — `Tier::{Hairline, Control, Row, Card, Panel, Pill}` —
-and the material says what each comes to. `Glass::tier(Tier::Card)` is how to
-ask; `Glass::new(10)` is still there for the few radii derived from something
-else. `theme::apply` feeds egui's own widget styling from the same material.
+Surfaces have a class — `Surface::{Card, Menu, Input}` — the way an element has
+one in CSS, and the class carries the weight rather than the call site. Corner
+radii are named on the same principle: `Tier::{Hairline, Control, Row, Card,
+Panel, Pill}`, with the material saying what each comes to. `Glass::of(surface)`
+and `Glass::tier(tier)` are how to ask; `Glass::new(10)` is still there for the
+few radii derived from something else — a pill whose corners are half its
+height. `theme::apply` feeds egui's own widget styling from the same material,
+so its popups and dropdowns are the same glass as everything drawn by hand.
 
-This is the seam a theme for another platform is written against. A material
-with `frosts: false`, no sheen, a heavier edge and square corners is a flat
-desktop toolkit, and none of the drawing code changes.
+This is the seam a theme for another platform is written against, and
+[THEMING.md](THEMING.md) is the guide to it.
 
-Frosting is the one part that needs something from outside: egui cannot blur a
-shape's backdrop as it draws it. It does not have to — the only thing ever
-behind the chrome is a still image, so a caller that draws one hands the
-palette a pre-blurred copy (`Palette::with_frost`) and every glass surface
-inside it samples that copy through the same mapping the sharp one uses. It is
-scoped to the caller rather than global, because a wallpaper is behind the
-content area and not behind the sidebar.
+Frosting needs something from outside, because egui cannot blur a shape's
+backdrop as it draws it. It does not have to: the palette carries a `Backdrop` —
+an already-blurred texture, the rectangle it covers, the uv within it, a coarse
+luminance map, and how far past its own edges it may be sampled — and every
+glass surface inside that rectangle samples it through the same mapping. Nothing
+at the call sites changes.
+
+Three things supply one, and all three take it the same way: a copy of the
+framebuffer, straight after whatever filled the content rect and before anything
+sits on top of it. `src/backdrop.rs` does the taking — a `glBlitFramebuffer`
+downsample, one small `glReadPixels`, a CPU blur, throttled to about eight a
+second. The web page's copy is taken after the engine's blit, the new tab page's
+after its backdrop is painted, and Settings' after its base and navigation
+column.
+
+The moment is the design. Shapes within a layer are drawn in the order they were
+added, so taking the copy at that point is what keeps a surface from frosting
+against its own previous reflection.
+
+Two pieces of this are macOS-only and worth knowing before porting: the window's
+backdrop is an `NSVisualEffectView` behind a transparent framebuffer, and the
+content card's bottom corners are *erased* from the framebuffer rather than
+painted over, so the chrome can be drawn back over the hole at its own tint and
+match the chrome beside it exactly. Both are described in
+[THEMING.md](THEMING.md); neither is needed where the chrome is opaque.
 
 ## The new tab page
 

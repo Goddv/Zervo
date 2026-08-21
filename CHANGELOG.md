@@ -1,6 +1,73 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 21 August 2026
+
+**A macOS release first.** Everything below is built and used on macOS. The
+Linux and Windows packages are produced from the same tag and the material
+itself is portable — it is all drawn by egui — but the window's frosted
+backdrop is an AppKit feature, and the corner work behind it has not been tried
+anywhere else. Patches for the other two are v0.4.1. Reports from either are
+genuinely useful in the meantime.
+
+**A theme engine, documented.** [docs/THEMING.md](docs/THEMING.md) describes the
+seam a theme for another platform is written against: what a `Material` decides,
+what a class carries, how frosting is supplied, and what a Windows, GTK, Android
+Material or Liquid Glass theme would set. It is honest about what is not there —
+a theme is still a Rust constant, there is no file format, and nothing loads one
+at runtime.
+
+**Surfaces have a class, and the class carries the material.** Card, Menu and
+Input, the way an element has one in CSS. A call site asks for what a thing *is*
+and the material answers with the numbers, so a menu can never be heavier than a
+card by accident and a text field can be heavier than both on purpose. Corner
+radii are named on the same principle — Hairline through Pill — and the material
+says what each comes to.
+
+**Everything frosts against the page, not just the wallpaper.** A panel over a
+web page had nothing to sample: the page is opaque pixels the engine has drawn,
+and no amount of translucency turns those into a blur. The window now takes a
+small blurred copy of whatever the page is showing and hands it to the palette,
+so the downloads card, the favourites card and every menu are made of the same
+glass over a website as over a photograph. The new tab page and Settings supply
+one too, so a menu opened over either frosts against it rather than falling flat.
+
+**A surface belongs to its theme first.** A dark menu at a fifth of its own
+colour, opened over a white page, is four fifths white — still frosted, still
+blurred, and no longer a dark menu. The tint now thickens exactly as far as it
+must to keep a surface on its own side of the middle and no further; over a page
+the theme already agrees with, nothing changes. Two numbers make a surface's
+weight and only one of them was being adjusted, which is how a dark-mode card
+over a bright wallpaper came out pale enough to lose its text.
+
+**Text follows what it lands on.** Cards on the new tab page, and the greeting,
+clock and photo credit beside them, each ask about their own patch of the
+picture rather than taking one answer for the page. A photograph is dark sky at
+the top and bright water at the bottom, and pale text set for the sky disappears
+into the water. It picks by contrast ratio rather than a brightness threshold —
+the crossover is not at half — with hysteresis, so text does not flip as a page
+scrolls past it.
+
+**The content card's corners.** They had been a few per cent off their
+surroundings at every zoom, because the mask rounding them has to be opaque
+while the chrome beside it is a thin tint over a backdrop the window server
+composites outside the application's own framebuffer. The bottom corners are now
+cut out of the framebuffer instead — antialiased, with a destination-out pass —
+and the chrome is drawn back over the hole at its own tint: the same paint on
+the same backdrop, so there is nothing left to match. Measured after, all four
+corners are within one part in 255 of the chrome an inch away from them.
+
+**The card's edge is yours.** Outline, shadow and halo are three toggles in
+Appearance, with an amount for the last two. The outline is on, the other two
+off. The halo used to be drawn unconditionally to hide the corner seam; with the
+seam gone it is a decision rather than a repair.
+
+**Fixes.** The widget shelf clipped its own widgets' shadows off along every edge
+it touched. The new tab page did the same to the top and bottom rows of cards.
+The release bundle would not start on a machine with GStreamer installed — its
+build scripts put the framework on the link path whether or not the media
+feature asked for them, and `-lz` found a zlib there with no rpath to resolve it.
+The new tab page blinked eight times a second, because the backdrop capture
+turned the scissor test off and never turned it back on.
 
 **Two steps, and every surface answers to them.** Appearance offers Solid and
 Frosted; Frosted is the default. The Sheer step and the blur control have gone
