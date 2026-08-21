@@ -115,6 +115,132 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
+/// The lightest a dark theme's surface may read, and the darkest a light
+/// theme's may, once the page behind has come through it.
+///
+/// Not the middle: a surface that lands exactly halfway belongs to neither
+/// theme. These leave it recognisably on its own side while still letting a
+/// good deal of the page through.
+const DARKEST_LIGHT: f32 = 0.42;
+const LIGHTEST_DARK: f32 = 0.60;
+
+/// The most tint a surface may take on to hold its theme. Past this the blur
+/// stops showing through and it is not glass any more.
+const THICKEST_TINT: f32 = 0.88;
+
+/// How much better the other ink has to read before a panel abandons the
+/// theme's own. Pure hysteresis: without it, text flips as the page scrolls.
+const FLIP_MARGIN: f32 = 1.3;
+
+/// WCAG contrast ratio between a text colour and a background of the given
+/// brightness, 1..=21.
+fn contrast(ink: Color32, brightness: f32) -> f32 {
+    let linear = |value: f32| {
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let a = linear(f32::from(luminance_of(ink)) / 255.0);
+    let b = linear(brightness.clamp(0.0, 1.0));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Text for a dark background, and the muted shade beside it.
+///
+/// Muted text has to survive being read off a translucent surface with a
+/// photograph behind it, which is a harder job than it had when every card was
+/// opaque. It is the caption colour on every list row and every explanatory
+/// line in Settings, so when it is too dim it is most of the words in the
+/// application.
+const LIGHT_INK: (Color32, Color32) = (
+    Color32::from_rgb(238, 238, 242),
+    Color32::from_rgb(182, 182, 192),
+);
+
+/// Text for a light background.
+const DARK_INK: (Color32, Color32) = (Color32::from_rgb(20, 20, 24), Color32::from_rgb(78, 78, 88));
+
+/// How many cells across the backdrop's luminance map is.
+pub const LUMA_CELLS: usize = 8;
+
+/// Reduce a picture to that map.
+pub fn luma_map(image: &egui::ColorImage) -> [u8; LUMA_CELLS * LUMA_CELLS] {
+    let mut map = [0_u8; LUMA_CELLS * LUMA_CELLS];
+    let [width, height] = image.size;
+    if width == 0 || height == 0 {
+        return map;
+    }
+    for cell_y in 0..LUMA_CELLS {
+        for cell_x in 0..LUMA_CELLS {
+            let x0 = width * cell_x / LUMA_CELLS;
+            let x1 = (width * (cell_x + 1) / LUMA_CELLS).max(x0 + 1).min(width);
+            let y0 = height * cell_y / LUMA_CELLS;
+            let y1 = (height * (cell_y + 1) / LUMA_CELLS).max(y0 + 1).min(height);
+            let mut total = 0_u32;
+            let mut count = 0_u32;
+            // Every fourth pixel: this is an eight-by-eight answer and reading
+            // every pixel of a two-hundred-pixel picture to produce it is work
+            // nobody sees.
+            for y in (y0..y1).step_by(2) {
+                for x in (x0..x1).step_by(2) {
+                    let pixel = image.pixels[y * width + x];
+                    total += u32::from(luminance_of(pixel));
+                    count += 1;
+                }
+            }
+            map[cell_y * LUMA_CELLS + cell_x] = if count == 0 { 0 } else { (total / count) as u8 };
+        }
+    }
+    map
+}
+
+/// Rec. 601 luma, which is what everything deciding between black and white
+/// text uses.
+fn luminance_of(color: Color32) -> u8 {
+    ((0.299 * f32::from(color.r()) + 0.587 * f32::from(color.g()) + 0.114 * f32::from(color.b()))
+        as u8)
+        .min(255)
+}
+
+/// A blurred picture uploaded for frosting, carrying the luminance map that
+/// was taken from it.
+///
+/// The two travel together because they are only ever right together: a map
+/// read from a different picture than the one on screen would pick text
+/// colours for a backdrop that is no longer there.
+pub struct Frost {
+    texture: egui::TextureHandle,
+    luma: [u8; LUMA_CELLS * LUMA_CELLS],
+}
+
+impl Frost {
+    /// Take the map, then hand the picture to the GPU.
+    pub fn upload(
+        ctx: &egui::Context,
+        name: &str,
+        image: egui::ColorImage,
+        options: egui::TextureOptions,
+    ) -> Self {
+        let luma = luma_map(&image);
+        Self {
+            texture: ctx.load_texture(name, image, options),
+            luma,
+        }
+    }
+
+    /// What to draw with.
+    pub fn id(&self) -> TextureId {
+        self.texture.id()
+    }
+
+    /// How light it is, cell by cell.
+    pub fn luma(&self) -> [u8; LUMA_CELLS * LUMA_CELLS] {
+        self.luma
+    }
+}
+
 /// A picture behind the chrome, already blurred, for glass surfaces to frost
 /// themselves against.
 ///
@@ -135,6 +261,12 @@ pub struct Backdrop {
     /// one uses, so the blur underneath a card lines up with the photograph
     /// beside it.
     pub uv: Rect,
+    /// How light the picture is, on an eight-by-eight grid, 0..=255.
+    ///
+    /// Coarse on purpose: it is used to decide whether text over a patch of it
+    /// should be light or dark, and that decision does not get better with
+    /// resolution. Sixty-four bytes, so a `Palette` stays cheap to copy.
+    pub luma: [u8; LUMA_CELLS * LUMA_CELLS],
     /// How far the picture itself has arrived, 0..=1.
     ///
     /// A wallpaper fades in. While it is doing so the blur under a card has to
@@ -578,16 +710,156 @@ impl Palette {
     /// which is what the containment test was protecting against: egui_glow
     /// samples with `CLAMP_TO_EDGE`, so an out-of-range uv smears the edge row
     /// of the picture across the overhang.
+    /// How light whatever is behind `rect` will read once this palette's glass
+    /// has been laid over it, 0..=1.
+    ///
+    /// `None` when nothing is behind it, which is the ordinary case for a
+    /// surface over the chrome: there the theme already knows the answer.
+    pub fn brightness_under(&self, rect: Rect) -> Option<f32> {
+        let behind = self.page_brightness_under(rect)?;
+        // What the text will actually sit on is the backdrop seen *through* the
+        // glass, not the backdrop. A dark card at a third opacity over a white
+        // page reads as neither.
+        let tint = self.tint_over(rect, self.tint_for(Surface::Menu));
+        let own = f32::from(luminance_of(self.bg)) / 255.0;
+        Some(behind * (1.0 - tint) + own * tint)
+    }
+
+    /// The tint a surface needs so that it still reads as one of this theme's
+    /// surfaces, given `wanted` is what the material asked for.
+    ///
+    /// The material's tint is deliberately thin — it is a wash *on* a blur
+    /// rather than a substitute for one. That works until the page behind is
+    /// the opposite of the theme: a third of near-black over a white page is
+    /// two-thirds white, so a dark-mode menu opened over a white page came out
+    /// white. It was still glass, and still blurred, and still wrong — a menu
+    /// belongs to the theme first and to the page behind it second.
+    ///
+    /// So the wash thickens exactly as far as it has to and no further. Over a
+    /// page the theme already agrees with, nothing changes at all.
+    pub fn tint_over(&self, rect: Rect, wanted: f32) -> f32 {
+        if self.translucency != Translucency::Frosted {
+            return wanted;
+        }
+        let Some(behind) = self.page_brightness_under(rect) else {
+            return wanted;
+        };
+        let own = f32::from(luminance_of(self.bg)) / 255.0;
+        let target = if self.dark {
+            DARKEST_LIGHT
+        } else {
+            LIGHTEST_DARK
+        };
+        // Which way the tint has to pull, and how far the tint can pull it.
+        let span = own - behind;
+        let needed = if self.dark {
+            if behind <= target || span >= 0.0 {
+                return wanted;
+            }
+            (behind - target) / -span
+        } else {
+            if behind >= target || span <= 0.0 {
+                return wanted;
+            }
+            (target - behind) / span
+        };
+        // Never thinner than the material asked for, and never opaque: past
+        // this the blur stops showing through and it is no longer glass, which
+        // is the other half of what makes it look right.
+        needed.clamp(wanted, THICKEST_TINT)
+    }
+
+    /// How light whatever is behind `rect` is, before this palette's glass goes
+    /// over it.
+    fn page_brightness_under(&self, rect: Rect) -> Option<f32> {
+        let backdrop = self.backdrop?;
+        let page = backdrop.rect;
+        if page.width() <= 0.0 || page.height() <= 0.0 {
+            return None;
+        }
+        let patch = rect.intersect(page);
+        if patch.width() <= 0.0 || patch.height() <= 0.0 {
+            return None;
+        }
+        let cell = |value: f32, low: f32, high: f32| {
+            let fraction = ((value - low) / (high - low)).clamp(0.0, 1.0);
+            ((fraction * LUMA_CELLS as f32) as usize).min(LUMA_CELLS - 1)
+        };
+        let x0 = cell(patch.min.x, page.min.x, page.max.x);
+        let x1 = cell(patch.max.x, page.min.x, page.max.x);
+        let y0 = cell(patch.min.y, page.min.y, page.max.y);
+        let y1 = cell(patch.max.y, page.min.y, page.max.y);
+        let mut total = 0_u32;
+        let mut count = 0_u32;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                total += u32::from(backdrop.luma[y * LUMA_CELLS + x]);
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return None;
+        }
+        Some(f32::from((total / count) as u8) / 255.0 * backdrop.alpha)
+    }
+
+    /// This palette, with text chosen for whatever is behind `rect`.
+    ///
+    /// A floating panel is the one place where the theme cannot know what its
+    /// text will land on: the same downloads card sits over a black page one
+    /// moment and a white one the next, and in dark mode its pale text
+    /// disappears against the second. Ask for this once per panel and the text
+    /// inside it follows the page rather than the theme.
+    ///
+    /// It changes nothing when the panel is over the chrome, and nothing when
+    /// the backdrop agrees with the theme — so a panel over a dark page in dark
+    /// mode looks exactly as it always did.
+    pub fn over(&self, rect: Rect) -> Palette {
+        let Some(brightness) = self.brightness_under(rect) else {
+            return *self;
+        };
+        // Which of the two inks actually reads better on it, rather than a
+        // guess at where the middle is. The crossover is not at half: pale text
+        // on a mid grey is worse than dark text on the same grey, and picking
+        // 0.5 left a band of backgrounds where the theme kept the ink that read
+        // worse.
+        let (theirs, ours) = if self.dark {
+            (DARK_INK, LIGHT_INK)
+        } else {
+            (LIGHT_INK, DARK_INK)
+        };
+        // The theme keeps its own unless the other is *clearly* better. Text
+        // that flips back and forth as a page scrolls past the crossover is
+        // worse than text that is slightly less contrasty than it could be, and
+        // this value moves as the page behind it moves.
+        let take_theirs =
+            contrast(theirs.0, brightness) > contrast(ours.0, brightness) * FLIP_MARGIN;
+        let (text, muted) = if take_theirs { theirs } else { ours };
+        Palette {
+            text,
+            text_muted: muted,
+            ..*self
+        }
+    }
+
     pub fn backdrop_under(&self, rect: Rect) -> Option<(TextureId, Rect, Rect)> {
         let backdrop = self.backdrop?;
         let page = backdrop.rect;
         if page.width() <= 0.0 || page.height() <= 0.0 {
             return None;
         }
-        let quad = rect.intersect(page);
-        if quad.width() <= 0.0 || quad.height() <= 0.0 {
+        // It has to *touch* the picture to frost against it, but once it does,
+        // it frosts over all of itself. Returning only the overlap was the
+        // careful-looking answer and the wrong one: a hover card anchored to a
+        // toolbar button hangs a few points above the page, and frosting only
+        // the part below the edge drew a card that was glass at the bottom and
+        // flat at the top with a seam across it. The sampler clamps at the
+        // edge, so the blur simply continues — which is what the eye expects
+        // and what the alternative could not give it.
+        if rect.intersect(page).width() <= 0.0 || rect.intersect(page).height() <= 0.0 {
             return None;
         }
+        let quad = rect;
         let across = |value: f32, low: f32, high: f32, from: f32, to: f32| {
             from + (to - from) * ((value - low) / (high - low))
         };
@@ -738,13 +1010,8 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             surface_hover: mix(Color32::from_rgb(51, 51, 51), accent_color, 0.07),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
-            text: Color32::from_rgb(238, 238, 242),
-            // Muted text has to survive being read off a translucent surface
-            // with a photograph behind it, which is a harder job than it had
-            // when every card was opaque. It is the caption colour on every
-            // list row and every explanatory line in Settings, so when it is
-            // too dim it is most of the words in the application.
-            text_muted: Color32::from_rgb(182, 182, 192),
+            text: LIGHT_INK.0,
+            text_muted: LIGHT_INK.1,
             border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
             translucency: Translucency::Solid,
@@ -759,8 +1026,8 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             surface_hover: mix(Color32::from_rgb(213, 213, 213), accent_color, 0.05),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
-            text: Color32::from_rgb(20, 20, 24),
-            text_muted: Color32::from_rgb(78, 78, 88),
+            text: DARK_INK.0,
+            text_muted: DARK_INK.1,
             border: Color32::from_rgb(204, 204, 204),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
             translucency: Translucency::Solid,
@@ -865,6 +1132,7 @@ mod tests {
             texture: TextureId::default(),
             rect: Rect::from_min_max(pos2(100.0, 100.0), pos2(900.0, 700.0)),
             uv: Rect::from_min_max(pos2(0.25, 0.25), pos2(0.75, 0.75)),
+            luma: [128; LUMA_CELLS * LUMA_CELLS],
             alpha: 1.0,
         });
         palette
@@ -890,10 +1158,16 @@ mod tests {
     /// altogether — and because the fill recipe followed the frost, it did not
     /// merely lose its blur, it changed material between one frame and the
     /// next.
+    ///
+    /// Frosting only the overlap fixed the material but left a seam: a hover
+    /// card anchored to a toolbar button hangs a few points above the page, so
+    /// it drew as glass below the page's top edge and flat above it, with a
+    /// line across it where the two met. It frosts over all of itself now, and
+    /// the sampler clamps.
     #[test]
-    fn a_surface_hanging_off_the_page_still_frosts_over_the_part_that_is_on_it() {
+    fn a_surface_hanging_off_the_page_still_frosts_over_all_of_itself() {
         let palette = palette_with_backdrop();
-        let page = palette.backdrop.unwrap().rect;
+        let picture = palette.backdrop.unwrap().uv;
         for card in [
             Rect::from_min_max(pos2(300.0, 40.0), pos2(500.0, 300.0)), // off the top
             Rect::from_min_max(pos2(300.0, 600.0), pos2(500.0, 950.0)), // off the bottom
@@ -903,19 +1177,131 @@ mod tests {
             let (_, quad, uv) = palette
                 .backdrop_under(card)
                 .expect("part of the card is still on the page");
-            assert_eq!(quad, card.intersect(page), "frosts exactly the overlap");
-            // Which is what keeps the uv in range: egui samples with
-            // CLAMP_TO_EDGE, so an out-of-range uv smears the picture's edge
-            // row across the overhang.
-            let picture = palette.backdrop.unwrap().uv;
+            assert_eq!(quad, card, "no seam: the whole card frosts");
+            // Which puts the uv outside the picture over the overhang. That is
+            // the point rather than a defect — egui samples with CLAMP_TO_EDGE,
+            // so the picture's edge row carries on across it.
+            let escaped = uv.min.x < picture.min.x - 1e-5
+                || uv.min.y < picture.min.y - 1e-5
+                || uv.max.x > picture.max.x + 1e-5
+                || uv.max.y > picture.max.y + 1e-5;
             assert!(
-                uv.min.x >= picture.min.x - 1e-5
-                    && uv.min.y >= picture.min.y - 1e-5
-                    && uv.max.x <= picture.max.x + 1e-5
-                    && uv.max.y <= picture.max.y + 1e-5,
-                "uv {uv:?} escaped the picture {picture:?}"
+                escaped,
+                "uv {uv:?} stayed inside {picture:?}, so it clipped"
             );
         }
+    }
+
+    #[test]
+    fn the_luminance_map_reads_the_picture() {
+        let mut image = egui::ColorImage::filled([32, 32], Color32::BLACK);
+        for y in 0..32 {
+            for x in 0..16 {
+                image.pixels[y * 32 + x] = Color32::WHITE;
+            }
+        }
+        let map = luma_map(&image);
+        for row in 0..LUMA_CELLS {
+            assert_eq!(map[row * LUMA_CELLS], 255, "left edge is white");
+            assert_eq!(
+                map[row * LUMA_CELLS + LUMA_CELLS - 1],
+                0,
+                "right edge is black"
+            );
+        }
+    }
+
+    /// The complaint this answers: a dark-mode menu opened over a white page
+    /// came out white. It was frosted, and blurred, and still wrong — a menu
+    /// belongs to its theme first and to the page behind it second.
+    #[test]
+    fn a_menu_over_an_opposite_page_holds_its_theme() {
+        for (mode, dark, page) in [
+            (ThemeMode::Dark, true, 255_u8),
+            (ThemeMode::Light, false, 0_u8),
+        ] {
+            let mut palette = resolve(mode, dark, AccentColor::Lavender);
+            palette.translucency = Translucency::Frosted;
+            palette.backdrop = Some(Backdrop {
+                luma: [page; LUMA_CELLS * LUMA_CELLS],
+                ..palette_with_backdrop().backdrop.unwrap()
+            });
+            let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
+
+            let thin = Material::GLASS.frosted_fill;
+            let thick = palette.tint_over(card, thin);
+            assert!(thick > thin, "{mode:?}: the tint has to thicken: {thick}");
+            assert!(thick < 1.0, "{mode:?}: and stay glass: {thick}");
+
+            let seen = palette.brightness_under(card).expect("on the page");
+            if dark {
+                assert!(seen <= DARKEST_LIGHT + 1e-3, "dark menu read {seen} light");
+            } else {
+                assert!(seen >= LIGHTEST_DARK - 1e-3, "light menu read {seen} dark");
+            }
+            // And because it held its theme, the theme's own text still reads
+            // on it. The two rules are the same rule from opposite ends.
+            assert_eq!(palette.over(card).text, palette.text);
+        }
+    }
+
+    /// Over a page the theme already agrees with, nothing happens at all — the
+    /// material's own number, untouched.
+    #[test]
+    fn the_tint_is_left_alone_over_an_agreeable_page() {
+        let mut palette = palette_with_backdrop();
+        palette.translucency = Translucency::Frosted;
+        palette.backdrop.as_mut().unwrap().luma = [10; LUMA_CELLS * LUMA_CELLS];
+        let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
+        let thin = Material::GLASS.frosted_fill;
+        assert_eq!(palette.tint_over(card, thin), thin);
+    }
+
+    /// The text rule is the backstop for when the tint cannot hold the theme:
+    /// a material whose surfaces are a mid tone has nowhere to pull to, and
+    /// that is exactly what a third-party theme is free to be.
+    #[test]
+    fn the_ink_flips_when_the_tint_cannot_hold_the_theme() {
+        let mut palette = palette_with_backdrop();
+        palette.translucency = Translucency::Frosted;
+        palette.bg = Color32::from_gray(115);
+        palette.backdrop.as_mut().unwrap().luma = [255; LUMA_CELLS * LUMA_CELLS];
+        let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
+
+        let seen = palette.brightness_under(card).expect("on the page");
+        assert!(
+            seen > DARKEST_LIGHT,
+            "the premise: this surface cannot get dark enough, {seen}"
+        );
+        assert_eq!(
+            palette.over(card).text,
+            DARK_INK.0,
+            "so the text has to leave the theme behind instead"
+        );
+    }
+
+    /// Solid is the step that means what it says. An opaque surface shows
+    /// nothing of the page, so the theme already knows what its text lands on
+    /// and the page has no vote.
+    #[test]
+    fn a_solid_surface_keeps_the_theme_s_text() {
+        let mut palette = palette_with_backdrop();
+        palette.translucency = Translucency::Solid;
+        palette.backdrop.as_mut().unwrap().luma = [255; LUMA_CELLS * LUMA_CELLS];
+        let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
+        assert_eq!(palette.over(card).text, palette.text);
+    }
+
+    /// Only the panels that float over a page get an opinion. Everything drawn
+    /// on the chrome keeps the theme's, or the two would disagree along the
+    /// edge of the window.
+    #[test]
+    fn text_is_left_alone_where_there_is_nothing_underneath() {
+        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
+        assert!(palette.brightness_under(card).is_none());
+        assert_eq!(palette.over(card).text, palette.text);
+        assert_eq!(palette.over(card).text_muted, palette.text_muted);
     }
 
     #[test]

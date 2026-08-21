@@ -180,7 +180,7 @@ pub struct View<'a> {
     pub texture: Option<&'a egui::TextureHandle>,
     /// The blurred copy, handed to the palette so every surface over the
     /// picture is frosted against it.
-    pub frost: Option<&'a egui::TextureHandle>,
+    pub frost: Option<&'a crate::theme::Frost>,
     pub credit: &'a Credit,
     pub error: Option<&'a str>,
     pub loading: bool,
@@ -334,7 +334,7 @@ const MAX_SIDE: u32 = 2048;
 /// the texture sampler's own bilinear filtering smooths it further, for free.
 /// Storing it at full size would be storing a megabyte of information that has
 /// already been thrown away.
-const FROST_SIDE: u32 = 640;
+pub const FROST_SIDE: u32 = 640;
 /// How far the frost is blurred, in pixels of the small copy, before the
 /// reader's setting scales it.
 ///

@@ -307,9 +307,12 @@ pub fn draw(
     // frosts itself against it — the cards, the search box, the header pills,
     // and anything anyone adds later — without one of them being told to.
     let restore = chrome.palette;
-    if let (Some((uv, arrival)), Some(frost)) = (painted, chrome.wallpaper.frost) {
+    if let (Some((uv, arrival)), Some(frost)) = (painted, chrome.wallpaper.frost)
+        && chrome.palette.translucency == theme::Translucency::Frosted
+    {
         chrome.palette = chrome.palette.with_backdrop(Some(theme::Backdrop {
             texture: frost.id(),
+            luma: frost.luma(),
             rect: content_rect,
             uv,
             alpha: arrival,

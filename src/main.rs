@@ -176,13 +176,13 @@ struct RunningApp {
     /// mutex because egui requires a paint callback to be `Send + Sync`, not
     /// because anything here is on another thread. It never contends.
     page_backdrop: Arc<std::sync::Mutex<backdrop::PageBackdrop>>,
-    page_backdrop_texture: Option<egui::TextureHandle>,
+    page_backdrop_texture: Option<theme::Frost>,
     /// The uploaded textures for it: the picture, and the blurred copy every
     /// glass surface over it is frosted against. Held here rather than in the
     /// manager because making one needs an egui context, and the manager runs
     /// on a thread that has none.
     wallpaper_texture: Option<egui::TextureHandle>,
-    wallpaper_frost: Option<egui::TextureHandle>,
+    wallpaper_frost: Option<theme::Frost>,
     /// Retained frosted-glass backdrop, kept so its material can be retuned.
     #[cfg(target_os = "macos")]
     _vibrancy: Option<vibrancy::Vibrancy>,
@@ -856,7 +856,8 @@ impl RunningApp {
         if let Ok(mut backdrop) = self.page_backdrop.lock()
             && let Some(image) = backdrop.take()
         {
-            self.page_backdrop_texture = Some(self.egui_glow.egui_ctx.load_texture(
+            self.page_backdrop_texture = Some(theme::Frost::upload(
+                &self.egui_glow.egui_ctx,
                 "zervo-page-backdrop",
                 image,
                 egui::TextureOptions::LINEAR,
@@ -879,7 +880,8 @@ impl RunningApp {
             // The frost is the other way round: a small picture magnified,
             // where plain bilinear filtering is exactly what is wanted, since
             // smoothing between its pixels is more blur.
-            self.wallpaper_frost = Some(self.egui_glow.egui_ctx.load_texture(
+            self.wallpaper_frost = Some(theme::Frost::upload(
+                &self.egui_glow.egui_ctx,
                 "zervo-wallpaper-frost",
                 image.frost,
                 egui::TextureOptions::LINEAR,
@@ -920,18 +922,24 @@ impl RunningApp {
         // Handed to the paint callback, which runs inside `run` and so cannot
         // borrow `self`. Only asked for when it is due, so an idle window is
         // not stalling its own pipeline on a readback every frame.
-        let capture = self
-            .page_backdrop
-            .lock()
-            .is_ok_and(|backdrop| backdrop.due())
-            .then(|| self.page_backdrop.clone());
+        // Nothing shows through a solid surface, so nothing needs copying:
+        // under Solid this whole path — the readback, the blur, the upload —
+        // costs nothing at all rather than costing a little.
+        let frosting = palette.translucency == theme::Translucency::Frosted;
+        let capture = (frosting
+            && self
+                .page_backdrop
+                .lock()
+                .is_ok_and(|backdrop| backdrop.due()))
+        .then(|| self.page_backdrop.clone());
         // Every glass surface inside the content rect frosts against the page,
         // the same way the new tab page's cards frost against its wallpaper —
         // the new tab page then replaces it with the wallpaper's own, since
         // that is what is behind *its* cards.
-        let palette = match (&self.page_backdrop_texture, self.settings_open) {
-            (Some(texture), false) => palette.with_backdrop(Some(theme::Backdrop {
-                texture: texture.id(),
+        let palette = match (&self.page_backdrop_texture, self.settings_open || !frosting) {
+            (Some(frost), false) => palette.with_backdrop(Some(theme::Backdrop {
+                texture: frost.id(),
+                luma: frost.luma(),
                 rect: self.content_rect_points,
                 uv: egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 alpha: 1.0,

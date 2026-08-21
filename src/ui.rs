@@ -1208,7 +1208,7 @@ fn hover_card(
     key: &str,
     anchor: Rect,
     size: egui::Vec2,
-    add: impl FnOnce(&mut Ui, Rect),
+    add: impl FnOnce(&mut Ui, Rect, Palette),
 ) -> Option<Rect> {
     let ctx = root.ctx().clone();
     let id = Id::new(key);
@@ -1272,7 +1272,11 @@ fn hover_card(
             // top of a whole one rather than a squashed one — and so its
             // widgets are not interactive before they are visible.
             ui.set_clip_rect(drawn);
-            add(ui, card);
+            // The card knows where it landed; its contents do not. Handing the
+            // palette down rather than letting the closure capture the outer
+            // one is what lets pale text turn dark when this card opens over a
+            // white page in dark mode.
+            add(ui, card, palette.over(drawn));
             ui.advance_cursor_after_rect(drawn);
         });
     Some(drawn)
@@ -1294,6 +1298,7 @@ fn popup_menu<T: Clone>(
         Rect::from_min_size(at, vec2(width, rows.len() as f32 * ROW + 12.0)),
         ctx.content_rect(),
     );
+    let palette = &palette.over(rect);
     let mut chosen = None;
     egui::Area::new(key)
         .order(egui::Order::Foreground)
@@ -1375,7 +1380,7 @@ fn draw_favourites_card(
         "zervo_favourites_card",
         star,
         size,
-        |ui, card| {
+        |ui, card, palette| {
             let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
 
             // ── Header: what this is, and how to show it.
@@ -1699,7 +1704,7 @@ fn draw_downloads_card(
         "zervo_downloads_card",
         anchor,
         size,
-        |ui, card| {
+        |ui, card, palette| {
             let ctx = ui.ctx().clone();
             let pointer = ctx.input(|input| input.pointer.latest_pos());
 
@@ -2453,6 +2458,7 @@ fn draw_navbar_config(
         ),
         ctx.content_rect(),
     );
+    let palette = palette.over(tray);
     egui::Area::new(Id::new("zervo_nav_tray"))
         .order(egui::Order::Foreground)
         .fixed_pos(tray.min)

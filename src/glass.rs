@@ -416,8 +416,13 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // every card, pill and menu on top of it frosted without saying anything
     // at the call site — and a change to the recipe below reaches all of them
     // at once, which is the point of having a material rather than a habit.
-    let backdrop = material
-        .frosts
+    //
+    // Solid takes its name seriously: an opaque surface shows nothing of what
+    // is behind it, so it does not ask. The callers that supply the picture
+    // skip the work of making one under Solid, but the rule belongs here — it
+    // is a property of the material, not something two call sites have to
+    // remember in step.
+    let backdrop = (material.frosts && palette.translucency == crate::theme::Translucency::Frosted)
         .then(|| palette.backdrop_under(rect))
         .flatten();
 
@@ -433,7 +438,14 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
         .tint
         .unwrap_or(palette.surface)
         .gamma_multiply(if backdrop.is_some() {
-            material.frosted_fill + material.frosted_fill_strength * strength
+            // Thickened, but only over a page that would otherwise overrule the
+            // theme — a dark menu opened over a white page has to stay a dark
+            // menu. Over a page the theme agrees with, this is the material's
+            // own number untouched.
+            palette.tint_over(
+                rect,
+                material.frosted_fill + material.frosted_fill_strength * strength,
+            )
         } else {
             material.fill + material.fill_strength * strength
         });
@@ -519,4 +531,75 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // shadow and the accent glow, not from faked highlights.
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{
+        AccentColor, Backdrop, LUMA_CELLS, Surface, ThemeMode, Translucency, resolve,
+    };
+    use egui::{Rect, TextureId, pos2};
+
+    /// A page filling 100,100 → 900,700, as the content rect does.
+    fn frosting_palette() -> Palette {
+        let mut palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        palette.translucency = Translucency::Frosted;
+        palette.backdrop = Some(Backdrop {
+            texture: TextureId::default(),
+            rect: Rect::from_min_max(pos2(100.0, 100.0), pos2(900.0, 700.0)),
+            uv: Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            luma: [128; LUMA_CELLS * LUMA_CELLS],
+            alpha: 1.0,
+        });
+        palette
+    }
+
+    /// Every shape carrying the blurred copy, and the rectangle it covers.
+    fn frosted_area(shapes: &[Shape]) -> Vec<Rect> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(rect) if rect.brush.is_some() => Some(rect.rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The seam in the screenshot: a downloads card anchored under a toolbar
+    /// button overhangs the top of the page by a few points, and used to draw
+    /// as glass below that line and flat above it.
+    #[test]
+    fn a_card_overhanging_the_page_is_frosted_edge_to_edge() {
+        let palette = frosting_palette();
+        // Sitting six points above the page's top edge, like a hover card
+        // hanging off the toolbar.
+        let card = Rect::from_min_max(pos2(300.0, 94.0), pos2(660.0, 300.0));
+        let frosted = frosted_area(&shapes(card, &palette, Glass::of(Surface::Menu)));
+        assert_eq!(
+            frosted,
+            vec![card],
+            "one frosted rectangle, covering the whole card"
+        );
+    }
+
+    /// And the case that must keep working: nothing to frost against means no
+    /// frost, rather than a smear of the page's edge under a menu that is
+    /// nowhere near it.
+    #[test]
+    fn a_card_away_from_the_page_is_not_frosted() {
+        let palette = frosting_palette();
+        let card = Rect::from_min_max(pos2(0.0, 0.0), pos2(90.0, 90.0));
+        assert!(frosted_area(&shapes(card, &palette, Glass::of(Surface::Menu))).is_empty());
+    }
+
+    /// Solid is opaque, whatever is behind the window.
+    #[test]
+    fn a_solid_card_is_not_frosted() {
+        let mut palette = frosting_palette();
+        palette.translucency = Translucency::Solid;
+        let card = Rect::from_min_max(pos2(300.0, 200.0), pos2(660.0, 400.0));
+        let solid = shapes(card, &palette, Glass::of(Surface::Menu).opaque(palette.bg));
+        assert!(frosted_area(&solid).is_empty());
+    }
 }
