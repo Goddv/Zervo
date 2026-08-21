@@ -576,10 +576,10 @@ impl servo::WebViewDelegate for AppState {
         keyboard_types::ShortcutMatcher::from_event(keyboard_event.event)
             .shortcut(CMD_OR_CONTROL, 'R', || webview.reload())
             .shortcut(CMD_OR_CONTROL, '=', || {
-                webview.set_page_zoom(webview.page_zoom() + 0.1)
+                webview.set_page_zoom(webview.page_zoom() + 0.1);
             })
             .shortcut(CMD_OR_CONTROL, '-', || {
-                webview.set_page_zoom(webview.page_zoom() - 0.1)
+                webview.set_page_zoom(webview.page_zoom() - 0.1);
             })
             .shortcut(CMD_OR_CONTROL, '0', || webview.set_page_zoom(1.0));
     }
@@ -669,7 +669,7 @@ impl servo::WebViewDelegate for AppState {
             ConsoleLogLevel::Error => log::error!(target: "console", "{message}"),
             ConsoleLogLevel::Warn => log::warn!(target: "console", "{message}"),
             ConsoleLogLevel::Debug | ConsoleLogLevel::Trace => {
-                log::debug!(target: "console", "{message}")
+                log::debug!(target: "console", "{message}");
             },
             _ => log::info!(target: "console", "{message}"),
         }

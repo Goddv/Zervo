@@ -777,7 +777,6 @@ fn draw_header(
 /// — or a dark one on a dark photograph — is a control nobody can find. Giving
 /// them the same material as the cards costs a little ink and means the header
 /// reads the same on every wallpaper and in both themes.
-#[allow(clippy::too_many_arguments)]
 fn header_button(
     root: &mut Ui,
     palette: &Palette,
@@ -912,7 +911,7 @@ fn draw_backdrop_menu(
     rows.extend(
         NewTabBackground::ALL
             .into_iter()
-            .filter(|kind| kind.animated())
+            .filter(super::settings::NewTabBackground::animated)
             .map(generated),
     );
     rows.push(Row::Heading("Wallpaper provider"));
@@ -1322,7 +1321,7 @@ fn draw_handles(
 
 /// The corner that resizes by whole cells, with a preview of what it would
 /// come to.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw_resizer(
     area: &mut Ui,
     palette: &Palette,
@@ -1452,7 +1451,7 @@ fn card_id(index: usize) -> Id {
     Id::new("zervo_newtab_card").with(index)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw_tile(
     area: &mut Ui,
     chrome: &mut ChromeContext,
@@ -1576,7 +1575,6 @@ fn draw_narrow(
 
 // ── Cards ──────────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 fn draw_search(
     area: &mut Ui,
     chrome: &mut ChromeContext,
@@ -1716,6 +1714,30 @@ fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
     false
 }
 
+/// A timezone from its IANA name, remembered.
+///
+/// `parse` walks the compiled-in zone table — some six hundred entries — and
+/// this was called for every clock on the card, on every frame it was drawn.
+/// The set of names is tiny and only changes when somebody edits the card, so
+/// the answers are worth keeping. The failures too: a name that is not a zone
+/// this year will not be one on the next frame either.
+fn timezone(name: &str) -> Option<chrono_tz::Tz> {
+    thread_local! {
+        static KNOWN: std::cell::RefCell<
+            std::collections::HashMap<String, Option<chrono_tz::Tz>>,
+        > = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    KNOWN.with(|known| {
+        let mut known = known.borrow_mut();
+        if let Some(found) = known.get(name) {
+            return *found;
+        }
+        let parsed = name.parse::<chrono_tz::Tz>().ok();
+        known.insert(name.to_owned(), parsed);
+        parsed
+    })
+}
+
 fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &Ink) -> bool {
     let palette = chrome.palette;
     let zones = &chrome.settings.newtab_world_clocks;
@@ -1737,7 +1759,7 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
             ),
             cell,
         );
-        let Ok(tz) = zone.name.parse::<chrono_tz::Tz>() else {
+        let Some(tz) = timezone(&zone.name) else {
             area.painter().text(
                 slot.center(),
                 Align2::CENTER_CENTER,
@@ -2525,7 +2547,7 @@ fn draw_mark(area: &mut Ui, palette: &Palette, rect: Rect, ink: &Ink) {
 // ── Small pieces every card uses ───────────────────────────────────────────
 
 /// One row of a list card: a letter badge, a title, and a hover fill.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn list_row(
     area: &mut Ui,
     palette: &Palette,

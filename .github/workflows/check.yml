@@ -1,12 +1,22 @@
 name: Check
 
-# Cheap checks only. Anything that compiles the crate also compiles the Servo
-# engine (about an hour), so type-checking and linting are not run here — see
-# macos.yml. Formatting needs no compilation and is worth enforcing.
+# Everything here has to run on a pull request, which rules out anything that
+# compiles the Servo engine — that is the better part of an hour. For a long
+# time that was read as "so nothing can be checked", and CONTRIBUTING.md's
+# promise that CI enforces `cargo clippy` was simply not true: clippy ran in no
+# workflow at all, and neither did `cargo test`.
+#
+# The engine-independent half of the browser now lives in `zervo-core`, which
+# builds against nothing heavier than egui and rustls. Linting and testing it
+# takes about ten seconds from cold. The half that does need the engine is
+# checked in the release builds, where it is compiled anyway.
 on:
   push:
     branches: [main]
   pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   fmt:
@@ -16,6 +26,38 @@ jobs:
       - uses: actions/checkout@v5
       - run: rustup component add rustfmt
       - run: cargo fmt --all --check
+
+  core:
+    name: Lint and test zervo-core
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust toolchain
+        # Pinned by rust-toolchain.toml, which also brings clippy.
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: core-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Clippy
+        # `-D warnings` is the point: the lint policy lives in the workspace's
+        # `[lints]` table, and this is what makes it mean something.
+        run: cargo clippy -p zervo-core --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test -p zervo-core
+
+  deny:
+    name: Advisories and licences
+    runs-on: ubuntu-24.04
+    # Reads Cargo.lock; compiles nothing. A vulnerable dependency should not
+    # need an hour of engine build to be noticed.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
 
   shell:
     name: Shell scripts

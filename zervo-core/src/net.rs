@@ -371,3 +371,162 @@ fn dechunk(mut body: &[u8], limit: usize) -> Result<Vec<u8>, String> {
         body = &body[(size + 2).min(body.len())..];
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn done(raw: &[u8], limit: usize) -> Response {
+        match parse(raw, limit) {
+            Ok(Hop::Done(response)) => response,
+            other => panic!("expected a body, got {:?}", other.map(|_| "a redirect")),
+        }
+    }
+
+    #[test]
+    fn a_plain_response_comes_apart_into_headers_and_body() {
+        let response = done(
+            b"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nbody",
+            100,
+        );
+        assert_eq!(response.content_type, "image/jpeg");
+        assert_eq!(response.body, b"body");
+    }
+
+    /// Header names are case-insensitive on the wire, and a server that sends
+    /// `content-type` is not sending something else.
+    #[test]
+    fn header_names_are_matched_without_regard_to_case() {
+        let response = done(
+            b"HTTP/1.1 200 OK\r\nCoNtEnT-TyPe:  image/png \r\n\r\nx",
+            100,
+        );
+        assert_eq!(response.content_type, "image/png");
+    }
+
+    #[test]
+    fn a_redirect_is_reported_rather_than_followed_here() {
+        match parse(b"HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\n\r\n", 100) {
+            Ok(Hop::Redirect(to)) => assert_eq!(to, "/elsewhere"),
+            other => panic!("expected a redirect, got {:?}", other.is_ok()),
+        }
+        // A redirect with nowhere to go is not a redirect.
+        assert!(parse(b"HTTP/1.1 302 Found\r\n\r\n", 100).is_err());
+    }
+
+    #[test]
+    fn anything_that_is_not_a_success_is_an_error() {
+        assert!(parse(b"HTTP/1.1 404 Not Found\r\n\r\nnope", 100).is_err());
+        assert!(parse(b"HTTP/1.1 500 Oops\r\n\r\n", 100).is_err());
+        // No header block at all.
+        assert!(parse(b"garbage", 100).is_err());
+        assert!(parse(b"", 100).is_err());
+        // A status line with no status in it.
+        assert!(parse(b"HTTP/1.1\r\n\r\n", 100).is_err());
+    }
+
+    #[test]
+    fn a_chunked_body_is_reassembled() {
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
+                    4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
+        assert_eq!(done(raw, 100).body, b"Wikipedia");
+    }
+
+    /// A chunk size may carry extensions after a semicolon, and a server is
+    /// entitled to send them.
+    #[test]
+    fn a_chunk_extension_is_ignored_rather_than_choked_on() {
+        assert_eq!(
+            dechunk(b"3;name=value\r\nabc\r\n0\r\n\r\n", 100).unwrap(),
+            b"abc"
+        );
+    }
+
+    /// Everything here is server-controlled, so every malformed shape has to
+    /// come back as an error rather than a panic or a hang.
+    #[test]
+    fn a_malformed_chunked_body_is_refused_and_does_not_panic() {
+        // A size that is not hexadecimal.
+        assert!(dechunk(b"zz\r\nabc\r\n0\r\n\r\n", 100).is_err());
+        // A size larger than what follows it.
+        assert!(dechunk(b"ff\r\nabc\r\n", 100).is_err());
+        // No terminator at all.
+        assert!(dechunk(b"3\r\nabc\r\n", 100).is_err());
+        // A header line that never ends.
+        assert!(dechunk(b"3", 100).is_err());
+        assert!(dechunk(b"", 100).is_err());
+        // A size that would overflow a usize parses as an error, not a wrap.
+        assert!(dechunk(b"ffffffffffffffffffff\r\nx\r\n", 100).is_err());
+    }
+
+    /// The ceiling is the only thing standing between a hostile host and this
+    /// process's memory, so it has to hold part-way through a body as well as
+    /// at the end of one.
+    #[test]
+    fn the_byte_ceiling_holds_mid_body() {
+        assert!(dechunk(b"a\r\n0123456789\r\n0\r\n\r\n", 4).is_err());
+        let long = format!("HTTP/1.1 200 OK\r\n\r\n{}", "x".repeat(50));
+        assert!(parse(long.as_bytes(), 10).is_err());
+    }
+
+    /// `Content-Length` is the sender's claim about the sender, and the sender
+    /// is the party being defended against — so it must not be what bounds the
+    /// read.
+    #[test]
+    fn a_lying_content_length_changes_nothing() {
+        let response = done(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 99999999\r\n\r\nshort",
+            100,
+        );
+        assert_eq!(response.body, b"short");
+    }
+
+    #[test]
+    fn reading_stops_at_the_ceiling() {
+        let mut source = std::io::Cursor::new(vec![b'x'; 64 * 1024]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        assert!(read_capped(&mut source, 1024, deadline).is_err());
+
+        let mut small = std::io::Cursor::new(b"hello".to_vec());
+        assert_eq!(
+            read_capped(&mut small, 1024, deadline).unwrap(),
+            b"hello".to_vec()
+        );
+    }
+
+    /// The check that keeps a stranger's search result from pointing this
+    /// browser at something inside the network it is running on.
+    #[test]
+    fn only_addresses_out_on_the_internet_are_fetched_from() {
+        let public = ["1.1.1.1", "93.184.216.34", "2606:4700:4700::1111"];
+        for address in public {
+            assert!(
+                is_public(address.parse().unwrap()),
+                "{address} should be reachable"
+            );
+        }
+        let private = [
+            "127.0.0.1",        // loopback
+            "0.0.0.0",          // unspecified
+            "10.0.0.1",         // private
+            "192.168.1.1",      // private
+            "172.16.0.1",       // private
+            "169.254.169.254",  // link-local, and the cloud metadata service
+            "100.64.0.1",       // carrier-grade NAT
+            "192.0.0.1",        // IETF protocol assignments
+            "255.255.255.255",  // broadcast
+            "240.0.0.1",        // reserved
+            "::1",              // v6 loopback
+            "fc00::1",          // v6 unique-local
+            "fe80::1",          // v6 link-local
+            "::ffff:127.0.0.1", // v4 loopback wearing a v6 coat
+            "::ffff:10.0.0.1",
+        ];
+        for address in private {
+            assert!(
+                !is_public(address.parse().unwrap()),
+                "{address} should be refused"
+            );
+        }
+    }
+}

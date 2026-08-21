@@ -129,6 +129,32 @@ jobs:
           [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
           ./scripts/bundle-macos.sh "${ARGS[@]}"
 
+      - name: Lint and test the binary
+        # The half of the tree that needs the engine, checked where the engine
+        # is already compiled. `zervo-core` is linted and tested on every pull
+        # request (see check.yml); this covers everything that is not in it,
+        # including the `engine-downloads` paths, which cannot be type-checked
+        # at all against the published Servo crate.
+        #
+        # Clippy re-checks the dependency graph rather than reusing the build's
+        # artifacts — sccache keys on the rustc invocation, and `--emit=metadata`
+        # is not `--emit=link` — so this is not free. On a job already budgeted
+        # at three hours, for something that runs on release tags, it is worth
+        # knowing before the release rather than after it.
+        continue-on-error: true
+        run: |
+          FEATURES=""
+          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
+            FEATURES="engine-downloads"
+          fi
+          if [ "${{ inputs.media }}" != "false" ]; then
+            FEATURES="${FEATURES:+$FEATURES,}media"
+          fi
+          ARGS=()
+          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
+          cargo clippy --all-targets "${ARGS[@]}" -- -D warnings
+          cargo test "${ARGS[@]}"
+
       - name: sccache stats
         run: sccache --show-stats
 

@@ -196,7 +196,9 @@ fn encode(secret: &str) -> String {
 }
 
 fn decode(stored: &str) -> Option<String> {
-    if stored.is_empty() || stored.len() % 2 != 0 || !stored.bytes().all(|b| b.is_ascii_hexdigit())
+    if stored.is_empty()
+        || !stored.len().is_multiple_of(2)
+        || !stored.bytes().all(|b| b.is_ascii_hexdigit())
     {
         return None;
     }
@@ -412,5 +414,86 @@ fn run(command: &mut Command, what: &str) -> Result<(), Failure> {
             Err(format!("Could not {what}: {}", detail.trim()))
         },
         Err(error) => Err(format!("Could not {what}: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The entire reason `encode` exists: `security find-generic-password -w`
+    /// prints a password as-is when it is printable ASCII and as a hex dump
+    /// when it is not, with nothing to say which you got. Anything that does
+    /// not survive this round trip comes back as gibberish.
+    #[test]
+    fn a_password_survives_the_round_trip_whatever_is_in_it() {
+        for secret in [
+            "hunter2",
+            "pässwörd",
+            "日本語のパスワード",
+            "🔐 emoji 🔑",
+            " leading and trailing ",
+            "quotes \" and ' and \\ backslash",
+        ] {
+            assert_eq!(
+                decode(&encode(secret)).as_deref(),
+                Some(secret),
+                "{secret:?} did not survive"
+            );
+        }
+    }
+
+    #[test]
+    fn anything_that_is_not_an_encoded_secret_is_refused() {
+        assert_eq!(decode(""), None);
+        // Odd length — half a byte.
+        assert_eq!(decode("abc"), None);
+        // Not hexadecimal.
+        assert_eq!(decode("zzzz"), None);
+        // Valid hex that is not valid UTF-8.
+        assert_eq!(decode("ff"), None);
+    }
+
+    /// A login is saved against a host, and a host is what a challenge names.
+    #[test]
+    fn a_site_is_reduced_to_its_host() {
+        assert_eq!(normalise("https://example.com/login"), "example.com");
+        assert_eq!(normalise("  HTTPS://Example.COM/  "), "example.com");
+        assert_eq!(normalise("example.com"), "example.com");
+        assert_eq!(normalise("example.com/path"), "example.com");
+    }
+
+    /// The rule that decides which saved password a challenge is offered.
+    #[test]
+    fn the_most_specific_saved_login_wins() {
+        let vault = Vault {
+            logins: vec![
+                Login {
+                    site: "example.com".to_owned(),
+                    username: "broad".to_owned(),
+                },
+                Login {
+                    site: "sub.example.com".to_owned(),
+                    username: "narrow".to_owned(),
+                },
+            ],
+        };
+
+        // Exact match.
+        assert_eq!(vault.for_host("example.com").unwrap().username, "broad");
+        // A parent domain covers a host beneath it...
+        assert_eq!(vault.for_host("www.example.com").unwrap().username, "broad");
+        // ...but the most specific one wins. Taking the first match in sort
+        // order handed `deep.sub.example.com` the `example.com` login: the
+        // wrong one, and the one shared with more of the internet.
+        assert_eq!(
+            vault.for_host("deep.sub.example.com").unwrap().username,
+            "narrow"
+        );
+
+        // A host that merely ends with the same letters is not a subdomain.
+        assert!(vault.for_host("notexample.com").is_none());
+        assert!(vault.for_host("example.com.evil.test").is_none());
+        assert!(vault.for_host("elsewhere.test").is_none());
     }
 }

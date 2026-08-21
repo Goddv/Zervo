@@ -11573,6 +11573,21 @@ dependencies = [
  "url",
  "webpki-roots",
  "winit",
+ "zervo-core",
+]
+
+[[package]]
+name = "zervo-core"
+version = "0.4.0"
+dependencies = [
+ "egui",
+ "log",
+ "rustls",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots",
+ "winit",
 ]
 
 [[package]]
