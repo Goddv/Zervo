@@ -209,9 +209,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         .and_then(|url| url.host_str().map(str::to_owned))
         .unwrap_or_else(|| "This page".to_owned());
     let scale = root.pixels_per_point();
-    chrome
-        .controls
-        .draw(root, &chrome.palette, content_rect, scale, &origin);
+    chrome.controls.draw(
+        root,
+        &chrome.palette,
+        content_rect,
+        scale,
+        &origin,
+        chrome.vault,
+    );
     let controls_open = !chrome.controls.is_empty();
 
     UiOutput {

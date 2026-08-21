@@ -26,12 +26,9 @@ use crate::state::{BrowserState, TabId};
 /// Engine-driven download traffic, queued for the UI thread.
 #[cfg(feature = "engine-downloads")]
 pub enum DownloadEvent {
-    /// Servo cannot render this response and is offering it to us.
-    Offered {
-        request_id: servo::RequestId,
-        url: String,
-        default_filename: String,
-    },
+    // There was an `Offered` here. An offer is no longer something that has
+    // already happened and needs reporting — it is a question, and it waits in
+    // `Controls` for an answer instead of travelling down this queue.
     Chunk {
         request_id: servo::RequestId,
         chunk: Vec<u8>,
@@ -506,19 +503,19 @@ impl servo::WebViewDelegate for AppState {
     /// the engine keeps doing the transfer, so cookies, auth and redirects
     /// all still apply.
     #[cfg(feature = "engine-downloads")]
-    fn notify_unsupported_response(
-        &self,
-        _webview: WebView,
-        mut response: servo::UnsupportedResponse,
-    ) {
-        self.download_events
-            .borrow_mut()
-            .push(DownloadEvent::Offered {
-                request_id: response.request_id,
-                url: response.url.to_string(),
-                default_filename: response.default_filename.clone(),
-            });
-        response.accept();
+    fn notify_unsupported_response(&self, _webview: WebView, response: servo::UnsupportedResponse) {
+        // Not accepted here. `accept()` used to be called inline, before
+        // anything reached the screen — and since the engine offers the
+        // embedder every response carrying `Content-Disposition: attachment`,
+        // that let any page write a file of any size into the downloads folder
+        // with no interaction whatsoever. The offer goes on screen instead, and
+        // `Controls` accepts it if the user says so.
+        let filename = if response.default_filename.trim().is_empty() {
+            crate::downloads::filename_from_url(&response.url.to_string())
+        } else {
+            crate::downloads::sanitize_public(&response.default_filename)
+        };
+        self.controls.borrow_mut().push_offer(response, filename);
         self.window.request_redraw();
     }
 
@@ -606,18 +603,37 @@ impl servo::WebViewDelegate for AppState {
     /// HTTP authentication. This is the one place the engine asks the embedder
     /// for credentials, so it is the one place a saved login can be used.
     fn request_authentication(&self, _webview: WebView, request: servo::AuthenticationRequest) {
-        let host = request.url().host_str().unwrap_or_default().to_owned();
-        match self.vault.borrow().for_host(&host) {
-            Some((login, password)) => {
-                log::info!("using the saved login for {host}");
-                request.authenticate(login.username, password);
-            },
-            None => {
-                // Dropping it cancels, which is the safe answer: there is no
-                // dialog for this yet, and guessing is worse than failing.
-                log::info!("no saved login for {host}; not authenticating");
-            },
+        // Dropping the request cancels, which is the safe answer to every case
+        // below that does not reach the prompt.
+        let url = request.url().clone();
+        let host = url.host_str().unwrap_or_default().to_owned();
+
+        // HTTP Basic puts the password on the wire in base64, which is not
+        // encryption. This used to read the host and discard the scheme, so any
+        // page anywhere could embed `<img src="http://saved-site/x">`, take the
+        // 401, and have the password sent in the clear to a host the user never
+        // chose. A saved login is for the secure version of a site or it is for
+        // nothing.
+        if url.scheme() != "https" {
+            log::warn!(
+                "refusing to send a saved login to {host} over {}",
+                url.scheme()
+            );
+            return;
         }
+
+        let Some(login) = self.vault.borrow().for_host(&host) else {
+            log::info!("no saved login for {host}; not authenticating");
+            return;
+        };
+
+        // Queued, not answered. Sending a stored credential is not something to
+        // do on a page's say-so — the challenge is unsolicited, it can come
+        // from a subresource the user never navigated to, and a login saved for
+        // a domain covers every host under it. So it goes on screen, naming the
+        // host asking and the login being offered, and waits.
+        self.controls.borrow_mut().push_auth(request, host, login);
+        self.window.request_redraw();
     }
 
     /// Media session state, which is what makes the player widgets real rather

@@ -83,22 +83,29 @@ impl Vault {
     }
 
     /// The best match for a host, used when the engine asks for HTTP
-    /// authentication. Exact host first, then a parent domain, so a login for
-    /// `example.com` covers `www.example.com`.
-    pub fn for_host(&self, host: &str) -> Option<(Login, String)> {
+    /// authentication. Exact host first, then the *most specific* parent
+    /// domain, so a login for `example.com` covers `www.example.com`.
+    ///
+    /// Most specific rather than first found: the list is sorted by site, so a
+    /// challenge from `deep.sub.example.com` with logins saved for both
+    /// `example.com` and `sub.example.com` used to be offered `example.com` —
+    /// the wrong one, and the one shared with more of the internet.
+    ///
+    /// No password comes back with it. What to do about a match is a question
+    /// for the person sitting there, and the secret is read only once they have
+    /// answered it.
+    pub fn for_host(&self, host: &str) -> Option<Login> {
         let host = normalise(host);
-        let matched = self
-            .logins
+        self.logins
             .iter()
-            .find(|login| login.site == host)
-            .or_else(|| {
-                self.logins
-                    .iter()
-                    .find(|login| host.ends_with(&format!(".{}", login.site)))
-            })?
-            .clone();
-        let password = read_secret(&matched.site, &matched.username)?;
-        Some((matched, password))
+            .filter(|login| login.site == host || host.ends_with(&format!(".{}", login.site)))
+            .max_by_key(|login| login.site.len())
+            .cloned()
+    }
+
+    /// The secret behind a login, read at the moment it is wanted.
+    pub fn secret(&self, login: &Login) -> Option<String> {
+        read_secret(&login.site, &login.username)
     }
 
     /// Write every login, passwords included, as JSON.
