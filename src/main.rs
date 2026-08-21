@@ -45,7 +45,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::error::Error;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use egui::LayerId;
 use egui_glow::{CallbackFn, EguiGlow};
@@ -177,6 +177,9 @@ struct RunningApp {
     /// because anything here is on another thread. It never contends.
     page_backdrop: Arc<std::sync::Mutex<backdrop::PageBackdrop>>,
     page_backdrop_texture: Option<theme::Frost>,
+    /// Owns the little program that takes the card's corners out of the
+    /// framebuffer; it is compiled on first use inside a paint callback.
+    corner_eraser: Arc<Mutex<backdrop::Eraser>>,
     /// The uploaded textures for it: the picture, and the blurred copy every
     /// glass surface over it is frosted against. Held here rather than in the
     /// manager because making one needs an egui context, and the manager runs
@@ -368,6 +371,7 @@ impl ApplicationHandler<WakerEvent> for App {
             wallpaper,
             page_backdrop: Arc::new(std::sync::Mutex::new(backdrop::PageBackdrop::default())),
             page_backdrop_texture: None,
+            corner_eraser: Arc::new(Mutex::new(backdrop::Eraser::default())),
             wallpaper_texture: None,
             wallpaper_frost: None,
             #[cfg(target_os = "macos")]
@@ -920,6 +924,9 @@ impl RunningApp {
         // under Solid this whole path — the readback, the blur, the upload —
         // costs nothing at all rather than costing a little.
         let frosting = palette.translucency == theme::Translucency::Frosted;
+        // Handed to the paint callback, which runs inside `run` and so cannot
+        // borrow `self`.
+        let eraser = self.corner_eraser.clone();
         let capture = (frosting
             && self
                 .page_backdrop
@@ -1038,6 +1045,7 @@ impl RunningApp {
                             &root.layer_painter(LayerId::background()),
                             content_rect,
                             theme::CONTENT_RADIUS,
+                            &eraser,
                         );
                         blitted = true;
                     }
