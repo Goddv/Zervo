@@ -1034,8 +1034,12 @@ impl RunningApp {
                 !output.settings_open,
                 settings.top_glow,
                 settings.content_border,
-                settings.content_shadow,
-                settings.content_halo.then_some(settings.content_halo_tint),
+                settings
+                    .content_shadow
+                    .then_some(settings.content_shadow_amount),
+                settings
+                    .content_halo
+                    .then_some((settings.content_halo_tint, settings.content_halo_amount)),
             );
 
             ui_output = Some(output);

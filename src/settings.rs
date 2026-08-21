@@ -211,6 +211,11 @@ pub struct Settings {
     /// A soft glow around the content card, and what colours it.
     pub content_halo: bool,
     pub content_halo_tint: HaloTint,
+    /// How far each spreads, as a multiple of the shape they were drawn at
+    /// before either was adjustable. One is what the shadow has always looked
+    /// like, and the halo is tuned to match it rather than to its own scale.
+    pub content_shadow_amount: f32,
+    pub content_halo_amount: f32,
     /// How much comes through every surface the material draws — the cards,
     /// the menus, the shelf, the new tab page. One setting for the whole
     /// application rather than one per group of things.
@@ -275,6 +280,8 @@ impl Default for Settings {
             content_shadow: false,
             content_halo: false,
             content_halo_tint: HaloTint::Accent,
+            content_shadow_amount: 1.0,
+            content_halo_amount: 1.0,
             translucency: crate::theme::Translucency::Frosted,
             gestures: crate::gestures::Gestures::default(),
             newtab_tiles: crate::newtab::Tile::defaults(),

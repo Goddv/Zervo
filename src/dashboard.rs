@@ -350,7 +350,16 @@ pub fn draw(
     // whole cards rather than squashed ones — it uncovers the strip rather
     // than compressing it.
     let mut root = root.new_child(egui::UiBuilder::new().max_rect(area));
-    root.set_clip_rect(area);
+    // Room for the shadows, which are painted outside their widgets. Clipping
+    // tight to the shelf scissored them off along its edges, so a card in the
+    // strip had three sides of shadow and one hard one. Sideways and upward
+    // only: the bottom edge is where the strip is uncovered from, and letting
+    // anything past it shows the cards before they have arrived.
+    let room = glass::room(palette.radius(crate::theme::Tier::Card));
+    root.set_clip_rect(Rect::from_min_max(
+        pos2(area.min.x - room, area.min.y - room),
+        pos2(area.max.x + room, area.max.y),
+    ));
     let root = &mut root;
 
     let drag_id = Id::new("zervo_widget_drag");

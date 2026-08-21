@@ -400,8 +400,9 @@ fn paint_card_halo(
     radius: f32,
     palette: &Palette,
     top_glow: f32,
-    tint: crate::settings::HaloTint,
+    halo: (crate::settings::HaloTint, f32),
 ) {
+    let (tint, amount) = halo;
     // The square box has to be covered, not merely approached. Its furthest
     // point from the arc is radius * (sqrt(2) - 1) at each corner, and a
     // falloff that begins at the silhouette has decayed to a third of its
@@ -411,8 +412,11 @@ fn paint_card_halo(
     painter.add(glass::shadow_tinted(
         rect,
         radius,
-        wedge + radius * 0.42 + 6.0,
-        wedge,
+        (wedge + radius * 0.42 + 6.0) * amount,
+        // The held stretch covers the page's square corners, which sit a fixed
+        // distance out — turning the halo up spreads it further, it does not
+        // move what it is covering.
+        wedge.min(wedge * amount),
         glass::Inner::Outside,
         |at| match tint {
             crate::settings::HaloTint::Accent => palette.accent,
@@ -426,12 +430,28 @@ fn paint_card_halo(
 /// `Outside`, unlike every other surface: what is inside this silhouette is
 /// the web page, blitted pixel for pixel, and a feather row drawn over it
 /// leaves a dark fringe around the whole page.
-fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: &Palette) {
+/// What a spread slider reads, calling out the shape both were drawn at before
+/// either was adjustable rather than leaving it to be guessed from the handle.
+fn spread_note(amount: f32) -> String {
+    if (amount - 1.0).abs() < 0.02 {
+        "Default.".to_owned()
+    } else {
+        format!("{:.0}% of default.", amount * 100.0)
+    }
+}
+
+fn paint_card_shadow(
+    painter: &egui::Painter,
+    rect: Rect,
+    radius: f32,
+    palette: &Palette,
+    amount: f32,
+) {
     painter.add(glass::shadow(
         rect,
         radius,
-        palette.shadow.gamma_multiply(0.9),
-        9.0,
+        palette.shadow.gamma_multiply((0.9 * amount).min(1.0)),
+        9.0 * amount,
         glass::Inner::Outside,
     ));
 }
@@ -444,8 +464,8 @@ pub fn finish_content_frame(
     mask_corners: bool,
     top_glow: f32,
     border: bool,
-    shadow: bool,
-    halo: Option<crate::settings::HaloTint>,
+    shadow: Option<f32>,
+    halo: Option<(crate::settings::HaloTint, f32)>,
 ) {
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     // The oversized fans must only bleed inward over the blit — clip them so
@@ -566,7 +586,16 @@ pub fn finish_content_frame(
                 *true_arc.last().expect("arc"),
             ] {
                 let along = end - corner;
-                let normal = if along.x.abs() > along.y.abs() {
+                let horizontal = along.x.abs() > along.y.abs();
+                // Not along the top edge. What sits above the card is the
+                // toolbar, which is opaque chrome in its own right, so there is
+                // no translucent neighbour to bridge to — fading the mask into
+                // it only smudges the toolbar, which is what this did to the
+                // top corners the first time round.
+                if horizontal && outward.y < 0.0 {
+                    continue;
+                }
+                let normal = if horizontal {
                     vec2(0.0, outward.y)
                 } else {
                     vec2(outward.x, 0.0)
@@ -618,7 +647,7 @@ pub fn finish_content_frame(
     // Drawn AFTER the corner masks: filling it beforehand works on internal
     // pages but not on web pages, where the blit wipes the square content rect
     // and leaves unshadowed patches in the corners.
-    if let Some(tint) = halo {
+    if let Some((tint, amount)) = halo {
         paint_card_halo(
             root,
             &painter,
@@ -626,11 +655,11 @@ pub fn finish_content_frame(
             radius,
             palette,
             top_glow,
-            tint,
+            (tint, amount),
         );
     }
-    if shadow {
-        paint_card_shadow(&painter, content_rect, radius, palette);
+    if let Some(amount) = shadow {
+        paint_card_shadow(&painter, content_rect, radius, palette, amount);
     }
 
     // Flat: a single accent-tinted edge all the way around the card — no
@@ -4399,6 +4428,22 @@ fn settings_appearance(
                 .size(11.5)
                 .color(palette.text_muted),
         );
+        if chrome.settings.content_shadow {
+            ui.add_space(6.0);
+            if widgets::slider(
+                ui,
+                &mut chrome.settings.content_shadow_amount,
+                0.2..=2.0,
+                palette,
+            ) {
+                actions.push(UiAction::SettingsChanged);
+            }
+            ui.label(
+                RichText::new(spread_note(chrome.settings.content_shadow_amount))
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
+        }
         ui.add_space(10.0);
 
         if widgets::toggle(
@@ -4428,6 +4473,20 @@ fn settings_appearance(
                 chrome.settings.content_halo_tint = crate::settings::HaloTint::ALL[picked];
                 actions.push(UiAction::SettingsChanged);
             }
+            ui.add_space(6.0);
+            if widgets::slider(
+                ui,
+                &mut chrome.settings.content_halo_amount,
+                0.2..=2.0,
+                palette,
+            ) {
+                actions.push(UiAction::SettingsChanged);
+            }
+            ui.label(
+                RichText::new(spread_note(chrome.settings.content_halo_amount))
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
         }
     });
 
