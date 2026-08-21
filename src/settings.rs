@@ -185,6 +185,9 @@ pub struct Settings {
     /// the menus, the shelf, the new tab page. One setting for the whole
     /// application rather than one per group of things.
     pub translucency: crate::theme::Translucency,
+    /// How far down from Frosted the sheerest step is taken, 0..=1. Only
+    /// offered, and only read, when the level is Sheer.
+    pub sheer: f32,
     /// How far a material blurs what is behind it, for materials that blur at
     /// all. Ignored by any that does not.
     pub blur: crate::theme::Blur,
@@ -246,6 +249,7 @@ impl Default for Settings {
             top_glow: 1.0,
             content_border: true,
             translucency: crate::theme::Translucency::Frosted,
+            sheer: 1.0,
             blur: crate::theme::Blur::Medium,
             gestures: crate::gestures::Gestures::default(),
             newtab_tiles: crate::newtab::Tile::defaults(),
