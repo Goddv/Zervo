@@ -223,6 +223,14 @@ fn panel<R>(
     radius: u8,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
+    let contrasted;
+    let palette = match scrim {
+        Some(_) => palette,
+        None => {
+            contrasted = palette.over(rect);
+            &contrasted
+        },
+    };
     egui::Area::new(Id::new(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)

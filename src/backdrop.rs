@@ -12,27 +12,40 @@
 //! This takes the page as drawn and makes a blur of it, so the same machinery
 //! that frosts a card against a wallpaper frosts a menu against a web page.
 //!
-//! It is cheap because it is tiny. The copy is a couple of hundred pixels
-//! across — it is about to be blurred past anything finer — and the
-//! downsampling is a `glBlitFramebuffer`, which the GPU does on its way past.
-//! What is left is one small `glReadPixels`, throttled, because a readback
-//! stalls the pipeline and the page behind a hover card does not change while
-//! you are reading it.
+//! It is cheap because it is small. The downsampling is a `glBlitFramebuffer`,
+//! which the GPU does on its way past; what is left is one small `glReadPixels`,
+//! throttled, because a readback stalls the pipeline and the page behind a
+//! hover card does not change while you are reading it.
 
 use std::time::{Duration, Instant};
 
 use glow::HasContext as _;
 
-/// The longest side of the copy. Small on purpose: the blur removes anything
-/// this resolution would have carried, and the texture is magnified back up
-/// where the sampler's own filtering smooths it further.
-const SIDE: i32 = 220;
+/// The longest side of the copy.
+///
+/// This started at 220, on the reasoning that the blur removes anything finer
+/// anyway. It does — that is the problem. Shrinking a window to a fifth of its
+/// width is itself a heavy blur, and blurring *that* left a flat wash with no
+/// structure in it at all, which does not read as frosted glass. It reads as a
+/// grey rectangle, which is the exact complaint the file was written to fix.
+///
+/// What makes a surface look like glass is seeing the shapes behind it soften,
+/// not seeing them go. So this matches the wallpaper's frost, which has always
+/// looked right, at the same fraction of it.
+const SIDE: i32 = crate::wallpaper::FROST_SIDE as i32 * 3 / 4;
 /// How far it is blurred, in pixels of the copy.
-const BLUR: f32 = 5.0;
+///
+/// Taken from the material at the same blur-to-size ratio the wallpaper uses,
+/// so a card over a page and a card over a photograph are the same glass. Left
+/// to itself the number means nothing: blur is only ever relative to the size
+/// of the thing being blurred.
+const BLUR: f32 =
+    crate::theme::Material::GLASS.blur * (SIDE as f32) / (crate::wallpaper::FROST_SIDE as f32);
 /// A readback stalls the pipeline, so it is worth doing only about as often as
 /// what it is copying actually changes.
 const EVERY: Duration = Duration::from_millis(120);
 
+#[derive(Default)]
 pub struct PageBackdrop {
     framebuffer: Option<glow::Framebuffer>,
     texture: Option<glow::Texture>,
@@ -40,18 +53,6 @@ pub struct PageBackdrop {
     /// The most recent copy, waiting for the main thread to upload it.
     ready: Option<egui::ColorImage>,
     taken_at: Option<Instant>,
-}
-
-impl Default for PageBackdrop {
-    fn default() -> Self {
-        Self {
-            framebuffer: None,
-            texture: None,
-            size: (0, 0),
-            ready: None,
-            taken_at: None,
-        }
-    }
 }
 
 impl PageBackdrop {
