@@ -62,8 +62,6 @@ pub struct AppState {
     /// Webviews render here, sized to the content rect; blitted under the chrome.
     pub rendering_context: Rc<OffscreenRenderingContext>,
     pub browser: RefCell<BrowserState>,
-    /// Set when Servo has a new frame or the chrome needs redrawing.
-    pub needs_repaint: Cell<bool>,
     /// Popups created by script (window.open) waiting to be adopted as tabs.
     pub pending_popups: RefCell<Vec<WebView>>,
     /// Webviews closed by script (window.close) waiting for tab removal.
@@ -194,7 +192,6 @@ impl AppState {
             }
         }
         drop(browser);
-        self.needs_repaint.set(true);
         self.window.request_redraw();
     }
 
@@ -206,7 +203,6 @@ impl AppState {
         if let Some(next) = next {
             self.activate_tab(next);
         }
-        self.needs_repaint.set(true);
         self.window.request_redraw();
     }
 
@@ -439,8 +435,34 @@ impl servo::WebViewDelegate for AppState {
         })
     }
 
-    fn notify_new_frame_ready(&self, _webview: WebView) {
-        self.needs_repaint.set(true);
+    fn notify_new_frame_ready(&self, webview: WebView) {
+        // Only for the tab that is actually on screen.
+        //
+        // The engine signals this at the display's refresh rate, and it does so
+        // whether or not the frame it just produced is one anybody can see. On
+        // an internal page — `zervo://newtab`, Settings, downloads — the active
+        // tab has no webview at all and the engine's output is not composited,
+        // yet every one of those signals asked for a full chrome repaint: the
+        // whole UI re-run, tessellated and uploaded, a hundred and twelve times
+        // a second, for a page that is a still image. That is the "idle CPU
+        // near zero" line in docs/TESTING.md, and it had never been true on the
+        // new tab page.
+        //
+        // A frame from a background tab is likewise not worth a repaint; the
+        // tab is hidden and throttled, and switching to it asks for one anyway.
+        let showing = self
+            .browser
+            .borrow()
+            .active_tab()
+            .and_then(|tab| {
+                tab.webview
+                    .as_ref()
+                    .map(|active| active.id() == webview.id())
+            })
+            .unwrap_or(false);
+        if !showing {
+            return;
+        }
         self.window.request_redraw();
     }
 
