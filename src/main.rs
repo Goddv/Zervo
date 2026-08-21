@@ -1035,7 +1035,6 @@ impl RunningApp {
                 settings.top_glow,
                 settings.content_border,
                 settings.content_shadow,
-                palette.chrome_tint(),
             );
 
             ui_output = Some(output);
