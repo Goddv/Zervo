@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+**Cards are made of the same glass as the window.** They were not, and it
+showed: the window's blur comes from the system, which blurs what is behind it
+at full strength however opaque the chrome is, and paints a tint over the top.
+A card was thinning its *blur* along with its tint, so it mixed a blurred
+backdrop with the sharp one underneath — a smear rather than glass, and visibly
+a different material from the window holding it. A card's blur is full strength
+now and only its tint answers to the setting, exactly as the chrome does. The
+two also drew from separately tuned numbers, which is how they drifted; there
+is one number now.
+
 **One glass setting, not two.** Chrome opacity has gone as a separate control:
 it and the material setting were two answers to the same question, and keeping
 them in agreement was your job. The three steps drive both, and they are
