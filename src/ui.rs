@@ -16,7 +16,7 @@ use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
 use crate::settings::{AppIcon, NewTabBackground, NewTabPage, SearchEngine, Settings};
 use crate::state::{BrowserState, TabId, TabKind};
-use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier};
+use crate::theme::{self, AccentColor, Palette, Surface, ThemeMode, Tier};
 use crate::widgets;
 
 #[derive(Debug)]
@@ -1261,7 +1261,8 @@ fn hover_card(
             for shape in glass::shapes(
                 drawn,
                 palette,
-                Glass::tier(Tier::Panel)
+                Glass::of(Surface::Menu)
+                    .radius(Tier::Panel)
                     .opaque(palette.bg)
                     .border(palette.border),
             ) {
@@ -1303,7 +1304,7 @@ fn popup_menu<T: Clone>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::tier(Tier::Card)
+                Glass::of(Surface::Menu)
                     .opaque(palette.bg)
                     .border(palette.border),
             ) {
@@ -2457,7 +2458,8 @@ fn draw_navbar_config(
         .fixed_pos(tray.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            for shape in glass::shapes(tray, &palette, Glass::tier(Tier::Card).opaque(palette.bg)) {
+            for shape in glass::shapes(tray, &palette, Glass::of(Surface::Menu).opaque(palette.bg))
+            {
                 ui.painter().add(shape);
             }
             ui.painter().text(

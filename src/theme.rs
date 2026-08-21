@@ -232,6 +232,13 @@ impl Translucency {
             Translucency::Frosted => 0.34,
         }
     }
+
+    /// How far a class's own weight is scaled at this step. Solid takes
+    /// everything to opaque; Frosted leaves each class as the material wrote
+    /// it, so the hierarchy between them survives the setting.
+    pub fn scales(self) -> bool {
+        self == Translucency::Solid
+    }
 }
 
 /// How much the platform's own backdrop should let through, for platforms that
@@ -247,6 +254,28 @@ pub enum SystemBackdrop {
     /// The clearest frost the platform offers — the colours behind the window
     /// survive it.
     Frosted,
+}
+
+/// What kind of surface this is — a class, in the sense a stylesheet means it.
+///
+/// The call site names the role and the material decides what that role is
+/// made of: its tint, its corners, how far it lifts off the page. Changing
+/// what a menu looks like everywhere is then one line in a material rather
+/// than a search through every place that draws one, and a surface added later
+/// picks a class instead of picking numbers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Surface {
+    /// Cards: settings sections, the shelf's widgets, the new tab page's.
+    /// They sit *in* the chrome and are read against it.
+    Card,
+    /// Things that float over everything and have to be legible against
+    /// whatever they happen to land on — menus, dropdowns, hover cards,
+    /// dialogs. Heavier than a card, because a card knows what is behind it
+    /// and one of these does not.
+    Menu,
+    /// Something you type into. The heaviest, because a text field is the one
+    /// place where what is behind it competes with what you are reading.
+    Input,
 }
 
 /// The corner-radius tier every rounded thing in Zervo picks from.
@@ -313,8 +342,8 @@ pub struct Material {
     pub name: &'static str,
 
     // ── What a surface is filled with
-    /// How much of a surface's own colour it carries at rest, and how much
-    /// more at full strength.
+    /// What a [`Surface::Card`] carries at rest, and how much more at full
+    /// strength.
     pub fill: f32,
     pub fill_strength: f32,
     /// Whether this material honours the reader's translucency setting.
@@ -323,6 +352,12 @@ pub struct Material {
     /// of translucency — a flat GTK or Fluent one — sets this false and its
     /// surfaces stay exactly as it drew them, whatever the setting says.
     pub translucency: bool,
+    /// What a floating panel and a text field carry instead of `fill`. Both
+    /// are heavier, and for the same reason the reference is: its panels are a
+    /// third opaque and its URL bar nearly two thirds, while the window behind
+    /// them is clear.
+    pub menu_fill: f32,
+    pub input_fill: f32,
     /// The same pair over a blurred backdrop, where the fill is a tint on the
     /// blur rather than a substitute for it.
     pub frosted_fill: f32,
@@ -376,6 +411,8 @@ impl Material {
         fill: 0.55,
         fill_strength: 0.4,
         translucency: true,
+        menu_fill: 0.55,
+        input_fill: 0.62,
         frosted_fill: 0.58,
         frosted_fill_strength: 0.16,
         sheen_dark: 9.0,
@@ -458,9 +495,19 @@ impl Palette {
         self.translucency.chrome()
     }
 
-    /// The tint on anything the material draws.
-    pub fn surface_tint(&self) -> f32 {
-        self.translucency.surface()
+    /// The tint on a surface of this class.
+    ///
+    /// At Solid everything is opaque and the classes collapse into one; below
+    /// that each carries the weight the material gave it.
+    pub fn tint_for(&self, surface: Surface) -> f32 {
+        if self.translucency.scales() {
+            return 1.0;
+        }
+        match surface {
+            Surface::Card => self.translucency.surface(),
+            Surface::Menu => self.material.menu_fill,
+            Surface::Input => self.material.input_fill,
+        }
     }
 
     /// A surface's fill, for the things egui draws itself rather than through
@@ -470,7 +517,8 @@ impl Palette {
     /// without this a combo box's dropdown is an opaque slab in the middle of
     /// a window made of glass — which is exactly how it looked.
     pub fn surface_fill(&self) -> Color32 {
-        let tint = self.surface_tint();
+        // A menu: these are the popups egui floats over everything.
+        let tint = self.tint_for(Surface::Menu);
         Color32::from_rgba_unmultiplied(
             self.bg.r(),
             self.bg.g(),
@@ -486,7 +534,7 @@ impl Palette {
     /// reference makes the same distinction — its panels are a third opaque
     /// and its URL bar is nearly two thirds.
     pub fn input_fill(&self) -> Color32 {
-        let tint = (self.surface_tint() * 1.8).clamp(0.0, 1.0);
+        let tint = self.tint_for(Surface::Input);
         Color32::from_rgba_unmultiplied(
             self.surface.r(),
             self.surface.g(),
@@ -914,6 +962,36 @@ mod tests {
             Frosted.surface() > Frosted.chrome() * 2.0,
             "surfaces need more tint than the chrome they sit on"
         );
+    }
+
+    /// The classes have to stay in their hierarchy, or a menu floating over a
+    /// bright page is thinner than the card it came from and the words on it
+    /// have nothing to sit on. This is the whole point of there being classes
+    /// rather than one number.
+    #[test]
+    fn a_menu_is_heavier_than_a_card_and_an_input_heavier_still() {
+        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender)
+            .with_translucency(Translucency::Frosted);
+        let card = palette.tint_for(Surface::Card);
+        let menu = palette.tint_for(Surface::Menu);
+        let input = palette.tint_for(Surface::Input);
+        assert!(card < menu, "a menu ({menu}) must outweigh a card ({card})");
+        assert!(
+            menu < input,
+            "an input ({input}) must outweigh a menu ({menu})"
+        );
+        assert!(input <= 1.0);
+    }
+
+    /// At Solid the classes collapse: everything is opaque and none of the
+    /// hierarchy above means anything.
+    #[test]
+    fn solid_collapses_the_classes() {
+        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender)
+            .with_translucency(Translucency::Solid);
+        for class in [Surface::Card, Surface::Menu, Surface::Input] {
+            assert_eq!(palette.tint_for(class), 1.0);
+        }
     }
 
     /// Every tier has to resolve to something; a material that forgot one

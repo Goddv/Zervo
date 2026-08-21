@@ -9,7 +9,7 @@ use egui::{
     Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2,
 };
 
-use crate::theme::{Material, Palette, Tier};
+use crate::theme::{Material, Palette, Surface, Tier};
 
 /// Expo-style ease-out for interaction animations (cubic out).
 pub fn ease_out(t: f32) -> f32 {
@@ -41,6 +41,9 @@ impl Radius {
 }
 
 pub struct Glass {
+    /// Which class of surface this is. The material decides what that class is
+    /// made of; the call site only says which one it is.
+    pub surface: Surface,
     pub radius: Radius,
     /// Material prominence, 0..1 — drives fill, sheen, and shadow strength.
     pub strength: f32,
@@ -66,16 +69,44 @@ pub struct Glass {
 impl Glass {
     /// A surface whose corners the material decides. Prefer this.
     pub fn tier(tier: Tier) -> Self {
-        Self::of(Radius::Tier(tier))
+        Self::at(Radius::Tier(tier))
     }
 
     /// A surface with a corner radius the caller worked out itself.
     pub fn new(radius: u8) -> Self {
-        Self::of(Radius::Exact(radius))
+        Self::at(Radius::Exact(radius))
     }
 
-    fn of(radius: Radius) -> Self {
+    /// A surface of this class, with the corners its class implies. The way to
+    /// spell a menu, a card or a text field.
+    pub fn of(surface: Surface) -> Self {
+        let tier = match surface {
+            Surface::Card => Tier::Card,
+            Surface::Menu => Tier::Card,
+            Surface::Input => Tier::Pill,
+        };
         Self {
+            surface,
+            ..Self::at(Radius::Tier(tier))
+        }
+    }
+
+    /// Override the corners the class implied, with a tier.
+    pub fn radius(mut self, tier: Tier) -> Self {
+        self.radius = Radius::Tier(tier);
+        self
+    }
+
+    /// Override them with a number the caller worked out — a pill whose
+    /// corners are half its height, and little else.
+    pub fn radius_exact(mut self, radius: u8) -> Self {
+        self.radius = Radius::Exact(radius);
+        self
+    }
+
+    fn at(radius: Radius) -> Self {
+        Self {
+            surface: Surface::Card,
             radius,
             strength: 1.0,
             glow: 0.0,
@@ -348,7 +379,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // How much of this surface's own material survives, per the reader's
     // setting — unless the material has opted out of having one.
     let sheer = if material.translucency {
-        palette.surface_tint()
+        palette.tint_for(glass.surface)
     } else {
         1.0
     };
