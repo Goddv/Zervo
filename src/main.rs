@@ -243,7 +243,13 @@ impl ApplicationHandler<WakerEvent> for App {
 
         let attributes = Window::default_attributes()
             .with_title("Zervo")
-            .with_inner_size(LogicalSize::new(1200.0, 800.0));
+            .with_inner_size(LogicalSize::new(1200.0, 800.0))
+            // Shown further down, once the AccessKit adapter exists — it
+            // refuses to be created for a window that has already been made
+            // visible, and aborts the process saying so. Waiting also means the
+            // first frame anybody sees is already themed, rather than a flash
+            // of default grey while the palette is resolved.
+            .with_visible(false);
         #[cfg(target_os = "macos")]
         let attributes = {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -368,7 +374,6 @@ impl ApplicationHandler<WakerEvent> for App {
             window_rendering_context,
             rendering_context,
             browser: RefCell::new(BrowserState::new(start_url.as_str())),
-            needs_repaint: Cell::new(false),
             pending_popups: RefCell::new(Vec::new()),
             pending_closes: RefCell::new(Vec::new()),
             pending_keyboard_events: RefCell::new(HashMap::new()),
@@ -399,6 +404,10 @@ impl ApplicationHandler<WakerEvent> for App {
             .active_tab
             .expect("initial tab exists");
         state.open_tab(initial_tab, start_url);
+
+        // Everything is in place: the GL context, the accessibility adapter, the
+        // theme and the first tab. Now it can be looked at.
+        state.window.set_visible(true);
 
         let applied_theme = (
             settings.theme,
@@ -899,7 +908,6 @@ impl RunningApp {
 
         // Adopt popups, drop script-closed tabs, refresh tab titles/urls.
         state.sync();
-        state.needs_repaint.set(false);
         #[cfg(feature = "engine-downloads")]
         {
             // Downloads the engine handed us (Servo does the transfer; we store).
