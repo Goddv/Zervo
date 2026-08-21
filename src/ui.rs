@@ -4353,57 +4353,15 @@ fn settings_appearance(
             .color(palette.text_muted),
         );
 
-        // Only the sheerest step is hand-set. The other two are the two looks
-        // worth having; a slider on either would be a hundred ways to make
-        // them slightly worse.
-        if chrome.settings.translucency == crate::theme::Translucency::Sheer {
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new("How sheer")
-                    .size(12.0)
-                    .color(palette.text_muted),
-            );
-            if widgets::slider(ui, &mut chrome.settings.sheer, 0.0..=1.0, palette) {
-                actions.push(UiAction::SettingsChanged);
-            }
-            ui.label(
-                RichText::new(if chrome.settings.sheer >= 0.99 {
-                    "Frosted's own tint, without its blur.".to_owned()
-                } else if chrome.settings.sheer <= 0.01 {
-                    "No tint at all — surfaces are their edges and their words.".to_owned()
-                } else {
-                    format!(
-                        "{:.0}% of Frosted's tint, without its blur.",
-                        chrome.settings.sheer * 100.0
-                    )
-                })
-                .size(11.5)
-                .color(palette.text_muted),
-            );
-        }
-
-        // Only offered by a material that blurs. One that refracts instead, or
-        // one for a flat toolkit, has nothing for this to mean.
-        if palette.material.frosts {
-            ui.add_space(14.0);
-            ui.label(RichText::new("Blur").size(12.0).color(palette.text_muted));
-            let levels = crate::theme::Blur::ALL;
-            let labels: Vec<&str> = levels.iter().map(|level| level.label()).collect();
-            let current = levels
-                .iter()
-                .position(|level| *level == chrome.settings.blur)
-                .unwrap_or(0);
-            if let Some(index) = widgets::segmented(ui, current, &labels, palette) {
-                chrome.settings.blur = levels[index];
-                actions.push(UiAction::SettingsChanged);
-            }
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(chrome.settings.blur.note())
-                    .size(11.5)
-                    .color(palette.text_muted),
-            );
-        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Frosted asks the system for the backdrop behind the window and tints \
+                 it. Solid asks for none and paints over it.",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
+        );
     });
 }
 
