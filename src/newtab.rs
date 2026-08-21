@@ -328,6 +328,14 @@ pub fn draw(
             base,
         );
     }
+    // The background is finished and nothing has been drawn on it yet, which
+    // is the only moment a copy of it is worth having. Every kind of backdrop
+    // has landed by here — the photograph, the gradients, the animated ones —
+    // so a menu opened over this page frosts against whichever one it is,
+    // rather than against a photograph or nothing.
+    if let Some(capture) = &chrome.capture {
+        crate::backdrop::capture_into(&backdrop, content_rect, capture);
+    }
 
     let ink = Ink::new(&chrome.palette, over_photo);
 

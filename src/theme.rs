@@ -190,7 +190,8 @@ pub fn luma_map(image: &egui::ColorImage) -> [u8; LUMA_CELLS * LUMA_CELLS] {
                     count += 1;
                 }
             }
-            map[cell_y * LUMA_CELLS + cell_x] = if count == 0 { 0 } else { (total / count) as u8 };
+            map[cell_y * LUMA_CELLS + cell_x] =
+                total.checked_div(count).unwrap_or(0).min(255) as u8;
         }
     }
     map
@@ -199,9 +200,8 @@ pub fn luma_map(image: &egui::ColorImage) -> [u8; LUMA_CELLS * LUMA_CELLS] {
 /// Rec. 601 luma, which is what everything deciding between black and white
 /// text uses.
 fn luminance_of(color: Color32) -> u8 {
-    ((0.299 * f32::from(color.r()) + 0.587 * f32::from(color.g()) + 0.114 * f32::from(color.b()))
-        as u8)
-        .min(255)
+    (0.299 * f32::from(color.r()) + 0.587 * f32::from(color.g()) + 0.114 * f32::from(color.b()))
+        .clamp(0.0, 255.0) as u8
 }
 
 /// A blurred picture uploaded for frosting, carrying the luminance map that

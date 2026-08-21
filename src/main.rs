@@ -847,12 +847,6 @@ impl RunningApp {
         // The page's blurred copy, taken by last frame's paint callback. On an
         // internal page there is nothing to copy, and a stale copy of the page
         // you were on before is worse than none.
-        if self.settings_open
-            && let Ok(mut backdrop) = self.page_backdrop.lock()
-        {
-            backdrop.clear();
-            self.page_backdrop_texture = None;
-        }
         if let Ok(mut backdrop) = self.page_backdrop.lock()
             && let Some(image) = backdrop.take()
         {
@@ -936,7 +930,7 @@ impl RunningApp {
         // the same way the new tab page's cards frost against its wallpaper —
         // the new tab page then replaces it with the wallpaper's own, since
         // that is what is behind *its* cards.
-        let palette = match (&self.page_backdrop_texture, self.settings_open || !frosting) {
+        let palette = match (&self.page_backdrop_texture, !frosting) {
             (Some(frost), false) => palette.with_backdrop(Some(theme::Backdrop {
                 texture: frost.id(),
                 luma: frost.luma(),
@@ -972,6 +966,7 @@ impl RunningApp {
                 favicons: &favicons,
                 downloads: &self.downloads,
                 wallpaper,
+                capture: capture.clone(),
             };
             let output = ui::draw(root, &mut chrome);
             drop(browser);
@@ -1020,26 +1015,12 @@ impl RunningApp {
                         // purpose: a frame later and it would contain the
                         // cards, which would then be frosting against
                         // themselves.
-                        if let Some(capture) = capture.clone() {
-                            root.layer_painter(LayerId::background())
-                                .add(egui::PaintCallback {
-                                    rect: content_rect,
-                                    callback: Arc::new(CallbackFn::new(move |info, painter| {
-                                        let clip = info.viewport_in_pixels();
-                                        let Ok(mut backdrop) = capture.lock() else {
-                                            return;
-                                        };
-                                        backdrop.capture(
-                                            painter.gl(),
-                                            [
-                                                clip.left_px,
-                                                clip.from_bottom_px,
-                                                clip.width_px,
-                                                clip.height_px,
-                                            ],
-                                        );
-                                    })),
-                                });
+                        if let Some(capture) = &capture {
+                            backdrop::capture_into(
+                                &root.layer_painter(LayerId::background()),
+                                content_rect,
+                                capture,
+                            );
                         }
                     }
                 }

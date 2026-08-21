@@ -128,6 +128,12 @@ pub struct ChromeContext<'a> {
     pub downloads: &'a crate::downloads::DownloadManager,
     /// The new tab page's photograph, and whatever is known about it.
     pub wallpaper: crate::wallpaper::View<'a>,
+    /// Where to take the blurred copy of the page, when one is due this frame.
+    ///
+    /// Handed to the page rather than taken by the window, because only the
+    /// page knows the moment it has finished its background and not yet drawn
+    /// anything that sits on it.
+    pub capture: Option<crate::backdrop::Capture>,
 }
 
 /// Draw the chrome into the root `Ui` handed to us by `EguiGlow::run`. The
@@ -4037,6 +4043,12 @@ fn draw_settings_page(
         },
         theme::mix(palette.surface, palette.bg, 0.75),
     );
+    // The page as a menu opened over it will see it: the base and the
+    // navigation column, and none of the controls that are about to be drawn
+    // on them.
+    if let Some(capture) = &chrome.capture {
+        crate::backdrop::capture_into(&painter, content_rect, capture);
+    }
 
     let mut nav_ui = root.new_child(
         egui::UiBuilder::new()
