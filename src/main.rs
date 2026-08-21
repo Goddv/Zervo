@@ -1035,6 +1035,7 @@ impl RunningApp {
                 settings.top_glow,
                 settings.content_border,
                 settings.content_shadow,
+                settings.content_halo.then_some(settings.content_halo_tint),
             );
 
             ui_output = Some(output);

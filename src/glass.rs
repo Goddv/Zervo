@@ -285,6 +285,45 @@ fn falloff(spread: f32, inner: Inner) -> Vec<(f32, f32)> {
 /// which is what a second, jagged outline around a card's corner turned out to
 /// be. The outer boundary has faded to nothing anyway; `inner` says where to
 /// put the row the inner one fades from.
+pub fn shadow_tinted(
+    rect: Rect,
+    radius: f32,
+    spread: f32,
+    hold: f32,
+    inner: Inner,
+    color_at: impl Fn(Pos2) -> Color32,
+) -> Shape {
+    let outline = outline(rect, radius, segments(radius));
+    let mut rows = falloff((spread - hold).max(0.0), inner);
+    // Push everything from the peak outward past the hold, and repeat the peak
+    // at the outline so the held stretch is flat rather than sloping.
+    let peak = match inner {
+        Inner::Under => 0.0,
+        Inner::Outside => FEATHER,
+    };
+    for row in &mut rows {
+        if row.0 >= peak {
+            row.0 += hold;
+        }
+    }
+    rows.insert(
+        rows.iter()
+            .position(|row| row.0 >= peak + hold)
+            .unwrap_or(1),
+        (peak, 1.0),
+    );
+
+    let mut mesh = Mesh::default();
+    for (offset, alpha) in &rows {
+        for (point, normal) in &outline {
+            let at = *point + *normal * *offset;
+            mesh.colored_vertex(at, color_at(at).gamma_multiply(*alpha));
+        }
+    }
+    stitch(&mut mesh, outline.len() as u32, rows.len());
+    Shape::mesh(mesh)
+}
+
 pub fn shadow(rect: Rect, radius: f32, base: Color32, spread: f32, inner: Inner) -> Shape {
     let rows: Vec<_> = falloff(spread, inner)
         .into_iter()
