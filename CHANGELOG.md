@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**Two steps, and every surface answers to them.** Appearance offers Solid and
+Frosted; Frosted is the default. The Sheer step and the blur control have gone
+— Sheer needed hand-tuning to be worth anything, and how far a material blurs
+is something the material already knows. The blur is pitched to match what the
+system's own backdrop does to the desktop, so a card on the wallpaper and the
+window on the desktop read as the same glass.
+
+And it really is every surface now. egui draws its own popups, menus, tooltips
+and dropdowns from a style that never saw the material, so the add-widget menu
+and every dropdown in Settings were opaque slabs in a window made of glass.
+They come from the material too, along with the fill behind anything you type
+into — pitched heavier than a card, because a text field is the one place where
+what is behind it competes with what you are reading.
+
 **Cards are made of the same glass as the window.** They were not, and it
 showed: the window's blur comes from the system, which blurs what is behind it
 at full strength however opaque the chrome is, and paints a tint over the top.
