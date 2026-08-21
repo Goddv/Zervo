@@ -268,10 +268,10 @@ pub enum Surface {
     /// Cards: settings sections, the shelf's widgets, the new tab page's.
     /// They sit *in* the chrome and are read against it.
     Card,
-    /// Things that float over everything and have to be legible against
-    /// whatever they happen to land on — menus, dropdowns, hover cards,
-    /// dialogs. Heavier than a card, because a card knows what is behind it
-    /// and one of these does not.
+    /// Things that float over everything — menus, dropdowns, hover cards,
+    /// dialogs. Glass, the same as a card: what is behind one of these is the
+    /// system's own blurred backdrop, and a tint heavy enough to be safe
+    /// against the worst case throws that away everywhere else.
     Menu,
     /// Something you type into. The heaviest, because a text field is the one
     /// place where what is behind it competes with what you are reading.
@@ -352,10 +352,14 @@ pub struct Material {
     /// of translucency — a flat GTK or Fluent one — sets this false and its
     /// surfaces stay exactly as it drew them, whatever the setting says.
     pub translucency: bool,
-    /// What a floating panel and a text field carry instead of `fill`. Both
-    /// are heavier, and for the same reason the reference is: its panels are a
-    /// third opaque and its URL bar nearly two thirds, while the window behind
-    /// them is clear.
+    /// What a floating panel and a text field carry instead of `fill`.
+    ///
+    /// A panel is the same weight as a card, deliberately. Both sit on a real
+    /// blur — a card on the wallpaper's, a panel on the system's, which is
+    /// what the window has behind it — and a tint heavy enough to make a panel
+    /// legible against the worst case mutes that blur into flat grey in every
+    /// other case. A text field is heavier because what you type into it has
+    /// to be read against whatever is behind it.
     pub menu_fill: f32,
     pub input_fill: f32,
     /// The same pair over a blurred backdrop, where the fill is a tint on the
@@ -411,7 +415,7 @@ impl Material {
         fill: 0.55,
         fill_strength: 0.4,
         translucency: true,
-        menu_fill: 0.55,
+        menu_fill: 0.34,
         input_fill: 0.62,
         frosted_fill: 0.58,
         frosted_fill_strength: 0.16,
@@ -964,21 +968,27 @@ mod tests {
         );
     }
 
-    /// The classes have to stay in their hierarchy, or a menu floating over a
-    /// bright page is thinner than the card it came from and the words on it
-    /// have nothing to sit on. This is the whole point of there being classes
-    /// rather than one number.
+    /// The classes have to stay in their hierarchy. What that hierarchy *is*
+    /// took a correction: a panel is glass like a card, not something heavier,
+    /// because both of them sit on a blur.
     #[test]
-    fn a_menu_is_heavier_than_a_card_and_an_input_heavier_still() {
+    fn a_panel_is_glass_like_a_card_and_an_input_is_heavier() {
         let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender)
             .with_translucency(Translucency::Frosted);
         let card = palette.tint_for(Surface::Card);
         let menu = palette.tint_for(Surface::Menu);
         let input = palette.tint_for(Surface::Input);
-        assert!(card < menu, "a menu ({menu}) must outweigh a card ({card})");
+        // A panel must never be heavier than a card. Both sit on a blur, and
+        // the moment a panel outweighs one it stops reading as the same glass
+        // — which is what a menu at half opacity looked like beside the new
+        // tab page's cards.
+        assert!(
+            menu <= card,
+            "a panel ({menu}) must be no heavier than a card ({card})"
+        );
         assert!(
             menu < input,
-            "an input ({input}) must outweigh a menu ({menu})"
+            "an input ({input}) must outweigh a panel ({menu})"
         );
         assert!(input <= 1.0);
     }
