@@ -977,6 +977,13 @@ impl RunningApp {
 
             let content_rect = output.content_rect;
             let scale = root.pixels_per_point();
+            // Whether the page arrived as a blit, and so had its corners cut
+            // out of the framebuffer. The masks that round them off are drawn
+            // at the chrome's own tint now, which is right over the
+            // transparency the cut leaves and wrong over anything else — an
+            // internal page draws itself with rounded corners already, so
+            // masking it would only lay a second tint over its own.
+            let mut blitted = false;
             if !output.settings_open {
                 if let Some(webview) = &active_webview {
                     let size = Size2D::new(
@@ -1016,6 +1023,10 @@ impl RunningApp {
                         // purpose: a frame later and it would contain the
                         // cards, which would then be frosting against
                         // themselves.
+                        // And the corners come out of it, so the chrome can
+                        // be drawn back over transparency rather than over the
+                        // page. Ordered after the copy so the copy is of the
+                        // page as the engine drew it.
                         if let Some(capture) = &capture {
                             backdrop::capture_into(
                                 &root.layer_painter(LayerId::background()),
@@ -1023,6 +1034,12 @@ impl RunningApp {
                                 capture,
                             );
                         }
+                        backdrop::cut_corners_into(
+                            &root.layer_painter(LayerId::background()),
+                            content_rect,
+                            theme::CONTENT_RADIUS,
+                        );
+                        blitted = true;
                     }
                 }
             }
@@ -1031,7 +1048,7 @@ impl RunningApp {
                 root,
                 content_rect,
                 &palette,
-                !output.settings_open,
+                blitted,
                 settings.top_glow,
                 settings.content_border,
                 settings
