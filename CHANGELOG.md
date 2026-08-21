@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+**Three steps of glass instead of a slider.** Card opacity is gone. It ran from
+"a card" to "not there", and almost everything in between is a surface that has
+stopped holding text up. Appearance now offers Solid, Frosted and Sheer, and it
+reaches every surface the material draws rather than a hand-picked few — the
+cards, the menus, the shelf, the sidebar, the new tab page. Only the fill is
+thinned; the hairline and the shadow keep their strength at every step, because
+they are what say where a surface ends.
+
+**Blur, in three steps too**, and only offered by a material that blurs. It
+scales the material's own radius rather than replacing it, so a material that
+blurs gently and one that blurs hard keep their character. Changing it re-bakes
+the frost from the picture already on disk — no refetch. A material built on
+refraction rather than blur, or a flat toolkit one, sets `frosts: false` and the
+setting stops being offered.
+
+**An accent colour of your own.** First in the row, marked with a pencil rather
+than pretending to be another swatch, opening a picker seeded from whatever is
+in force. Five more presets behind it: Coral, Teal, Violet, Lime and Graphite. A
+colour you mixed is kept as you mixed it in both themes.
+
+**The new tab page's backdrop is chosen on the new tab page.** All eight of them
+— Plain, Gradient, Grid, Mesh, Aurora, Waves, Particles and a photograph — are
+in the Backdrop menu in the page's own header, grouped into Static, Animated and
+Wallpaper provider, with the Openverse subjects and "Choose a file…" under the
+last of those. It is a decision about *that* page, taken while looking at it;
+making it from another window and coming back to see what it did is two steps
+and a memory test. The Settings page no longer carries a copy.
+
 ## 0.3.6 — 21 August 2026
 
 A new tab page you arrange yourself, tabs you can drag, trackpad swipes,
