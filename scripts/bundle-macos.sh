@@ -99,6 +99,25 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# Point zlib at the system copy.
+#
+# If GStreamer is installed, its `-sys` build scripts put the framework's lib
+# directory on the link path whether or not `--features media` asked for it, and
+# `-lz` finds the zlib in there before the system one. That copy's install name
+# is `@rpath/libz.1.dylib`, and nothing adds an rpath — so the app died at
+# launch with "Library not loaded", on the developer's machine only, and only
+# once they had installed GStreamer for something else.
+#
+# Done here rather than with a linker flag because a flag in `.cargo/config.toml`
+# is silently dropped when RUSTFLAGS is set in the environment, which is exactly
+# what CI does. This is unconditional, and a no-op when the link was already
+# right.
+BIN="$BIN_DIR/Zervo"
+if otool -L "$BIN" | grep -q "@rpath/libz.1.dylib"; then
+    echo "==> repointing zlib at the system copy"
+    install_name_tool -change @rpath/libz.1.dylib /usr/lib/libz.1.dylib "$BIN"
+fi
+
 # Ad-hoc signature: does not satisfy Gatekeeper, but keeps the bundle from
 # being rejected outright by newer macOS for having no signature at all.
 codesign --force --deep --sign - "$APP" 2>/dev/null || \
