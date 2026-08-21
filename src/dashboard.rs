@@ -621,20 +621,38 @@ pub fn over_menu(ctx: &egui::Context) -> bool {
 
 /// A floating list, used for every menu the chrome draws itself: the shelf's
 /// two, and the new tab page's.
+/// One line of a floating list: something to pick, or a heading over the next
+/// few things to pick.
+pub enum Row<T> {
+    Heading(&'static str),
+    Item(String, T, bool),
+}
+
+impl<T> Row<T> {
+    /// Headings are shorter than items — they carry small type and no hit
+    /// target, so giving them a whole row leaves a hole in the list.
+    fn height(&self) -> f32 {
+        match self {
+            Row::Heading(_) => 22.0,
+            Row::Item(..) => 28.0,
+        }
+    }
+}
+
 pub fn menu<T: Copy>(
     root: &mut Ui,
     palette: &Palette,
     id: &str,
     anchor: Rect,
     width: f32,
-    rows: &[(String, T, bool)],
+    rows: &[Row<T>],
 ) -> Option<T> {
-    const ROW: f32 = 28.0;
     let ctx = root.ctx().clone();
+    let height: f32 = rows.iter().map(Row::height).sum();
     let rect = crate::ui::clamp_into(
         Rect::from_min_size(
             pos2(anchor.min.x, anchor.max.y + 6.0),
-            vec2(width, rows.len() as f32 * ROW + 12.0),
+            vec2(width, height + 12.0),
         ),
         ctx.content_rect(),
     );
@@ -649,33 +667,64 @@ pub fn menu<T: Copy>(
             for shape in glass::shapes(
                 rect,
                 palette,
-                Glass::new(10).opaque(palette.bg).border(palette.border),
+                Glass::tier(crate::theme::Tier::Card)
+                    .opaque(palette.bg)
+                    .border(palette.border),
             ) {
                 painter.add(shape);
             }
-            for (index, (label, value, current)) in rows.iter().enumerate() {
+            let mut y = rect.min.y + 6.0;
+            for (index, entry) in rows.iter().enumerate() {
                 let row = Rect::from_min_size(
-                    pos2(rect.min.x + 6.0, rect.min.y + 6.0 + index as f32 * ROW),
-                    vec2(rect.width() - 12.0, ROW),
+                    pos2(rect.min.x + 6.0, y),
+                    vec2(rect.width() - 12.0, entry.height()),
                 );
-                let response = ui.interact(row, Id::new(id).with(index), Sense::click());
-                if response.hovered() {
-                    ui.painter()
-                        .rect_filled(row, CornerRadius::same(7), palette.surface_hover);
-                }
-                ui.painter().text(
-                    pos2(row.min.x + 8.0, row.center().y),
-                    Align2::LEFT_CENTER,
-                    label,
-                    FontId::proportional(13.0),
-                    if *current {
-                        palette.accent
-                    } else {
-                        palette.text
+                y += entry.height();
+                match entry {
+                    Row::Heading(label) => {
+                        ui.painter().text(
+                            pos2(row.min.x + 8.0, row.center().y + 2.0),
+                            Align2::LEFT_CENTER,
+                            label.to_uppercase(),
+                            FontId::proportional(10.0),
+                            palette.text_muted,
+                        );
                     },
-                );
-                if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                    chosen = Some(*value);
+                    Row::Item(label, value, current) => {
+                        let response = ui.interact(row, Id::new(id).with(index), Sense::click());
+                        if response.hovered() {
+                            ui.painter().rect_filled(
+                                row,
+                                CornerRadius::same(palette.radius(crate::theme::Tier::Control)),
+                                palette.surface_hover,
+                            );
+                        }
+                        ui.painter().text(
+                            pos2(row.min.x + 8.0, row.center().y),
+                            Align2::LEFT_CENTER,
+                            label,
+                            FontId::proportional(13.0),
+                            if *current {
+                                palette.accent
+                            } else {
+                                palette.text
+                            },
+                        );
+                        if *current {
+                            icons::draw_icon(
+                                ui.painter(),
+                                Rect::from_center_size(
+                                    pos2(row.max.x - 12.0, row.center().y),
+                                    vec2(11.0, 11.0),
+                                ),
+                                Icon::Check,
+                                palette.accent,
+                            );
+                        }
+                        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                            chosen = Some(*value);
+                        }
+                    },
                 }
             }
             ui.advance_cursor_after_rect(rect);
@@ -684,9 +733,9 @@ pub fn menu<T: Copy>(
 }
 
 pub fn add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<WidgetKind> {
-    let rows: Vec<(String, WidgetKind, bool)> = WidgetKind::ALL
+    let rows: Vec<Row<WidgetKind>> = WidgetKind::ALL
         .iter()
-        .map(|kind| (kind.label().to_owned(), *kind, false))
+        .map(|kind| Row::Item(kind.label().to_owned(), *kind, false))
         .collect();
     menu(
         root,
@@ -699,9 +748,9 @@ pub fn add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<Widget
 }
 
 fn draw_size_menu(root: &mut Ui, palette: &Palette, anchor: Rect, current: Size) -> Option<Size> {
-    let rows: Vec<(String, Size, bool)> = Size::CHOICES
+    let rows: Vec<Row<Size>> = Size::CHOICES
         .iter()
-        .map(|size| (size.label(), *size, *size == current))
+        .map(|size| Row::Item(size.label(), *size, *size == current))
         .collect();
     menu(
         root,
@@ -745,16 +794,16 @@ fn draw_widget(
     // Opaque, with the shadow left on: these stack over the content card, and
     // a translucent card in a pile does not read as a card.
     let material = match look {
-        Look::Held => Glass::new(10),
+        Look::Held => Glass::tier(crate::theme::Tier::Card),
         // Lit, so it is obvious which card is being traded with.
-        Look::Target => {
-            Glass::new(10).tint(crate::theme::mix(palette.surface, palette.accent, 0.30))
-        },
-        Look::Normal => Glass::new(10).strength(0.85),
+        Look::Target => Glass::tier(crate::theme::Tier::Card).tint(crate::theme::mix(
+            palette.surface,
+            palette.accent,
+            0.30,
+        )),
+        Look::Normal => Glass::tier(crate::theme::Tier::Card).strength(0.85),
     }
-    .opaque(palette.bg)
-    // The shelf's widgets are cards in the sense the setting means.
-    .fades();
+    .opaque(palette.bg);
     for shape in glass::shapes(rect, palette, material) {
         painter.add(shape);
     }

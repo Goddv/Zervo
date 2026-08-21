@@ -326,7 +326,7 @@ impl ApplicationHandler<WakerEvent> for App {
         // Whatever was cached last time, decoded on a thread so a launch never
         // waits on a photograph.
         let mut wallpaper = wallpaper::Wallpaper::default();
-        wallpaper.restore();
+        wallpaper.restore(settings.blur);
         *self = Self::Running(RunningApp {
             state,
             egui_glow,
@@ -841,13 +841,18 @@ impl RunningApp {
                 egui::TextureOptions::LINEAR,
             ));
         }
-        if self.settings.new_tab_background == settings::NewTabBackground::Photo
-            && self.wallpaper.due(
+        if self.settings.new_tab_background == settings::NewTabBackground::Photo {
+            if self.wallpaper.due(
                 &self.settings.wallpaper_source,
                 self.settings.wallpaper_cadence,
-            )
-        {
-            self.wallpaper.fetch(&self.settings.wallpaper_source);
+            ) {
+                self.wallpaper
+                    .fetch(&self.settings.wallpaper_source, self.settings.blur);
+            } else if self.wallpaper.needs_reblur(self.settings.blur) {
+                // The setting moved. The picture is already on disk, so this is
+                // a decode and a blur on a thread rather than a fetch.
+                self.wallpaper.restore(self.settings.blur);
+            }
         }
 
         let palette = self.palette();
@@ -1310,7 +1315,8 @@ impl RunningApp {
                 // switches to photographs if it was not already showing them.
                 self.settings.new_tab_background = settings::NewTabBackground::Photo;
                 self.settings.save();
-                self.wallpaper.fetch(&self.settings.wallpaper_source);
+                self.wallpaper
+                    .fetch(&self.settings.wallpaper_source, self.settings.blur);
                 state.window.request_redraw();
             },
             UiAction::PickWallpaper => {
@@ -1319,7 +1325,8 @@ impl RunningApp {
                         wallpaper::Source::File(path.to_string_lossy().into_owned());
                     self.settings.new_tab_background = settings::NewTabBackground::Photo;
                     self.settings.save();
-                    self.wallpaper.fetch(&self.settings.wallpaper_source);
+                    self.wallpaper
+                        .fetch(&self.settings.wallpaper_source, self.settings.blur);
                 }
                 state.window.request_redraw();
             },
@@ -1538,7 +1545,7 @@ impl RunningApp {
 
     fn target_palette(&self) -> Palette {
         theme::resolve(self.settings.theme, self.system_dark, self.settings.accent)
-            .with_card_opacity(self.settings.card_opacity)
+            .with_translucency(self.settings.translucency)
     }
 
     /// Begin crossing to whatever the settings now say, from wherever the

@@ -213,23 +213,28 @@ pub struct Wallpaper {
     pub error: Option<String>,
     /// Set once per launch, so `Each launch` means once.
     launched: bool,
+    /// What the frost was last blurred at. The blurred copy is baked when a
+    /// picture is decoded, so changing the setting has to decode it again —
+    /// off the cached file, with no network involved.
+    blurred_at: Option<crate::theme::Blur>,
 }
 
 impl Wallpaper {
     /// Pick up whatever was cached last time, decoding it on a thread so a
     /// launch never waits on a photograph.
-    pub fn restore(&mut self) {
+    pub fn restore(&mut self, blur: crate::theme::Blur) {
         let Some((credit, path, at)) = read_manifest() else {
             return;
         };
         self.credit = credit.clone();
         self.fetched_at = at;
+        self.blurred_at = Some(blur);
         let (sender, receiver) = channel();
         self.inbox = Some(receiver);
         std::thread::spawn(move || {
             let outcome = std::fs::read(&path)
                 .map_err(|error| error.to_string())
-                .and_then(|bytes| decode(&bytes))
+                .and_then(|bytes| decode(&bytes, blur))
                 .map(|image| Fetched {
                     credit,
                     image,
@@ -241,6 +246,12 @@ impl Wallpaper {
 
     pub fn is_loading(&self) -> bool {
         self.inbox.is_some()
+    }
+
+    /// True when the frost on disk was blurred at a different setting than the
+    /// one now in force, and wants baking again.
+    pub fn needs_reblur(&self, blur: crate::theme::Blur) -> bool {
+        !self.is_loading() && self.blurred_at.is_some_and(|was| was != blur)
     }
 
     pub fn credit(&self) -> &Credit {
@@ -266,17 +277,18 @@ impl Wallpaper {
 
     /// Start fetching. Returns without waiting; call [`Wallpaper::poll`] until
     /// it reports something arrived.
-    pub fn fetch(&mut self, source: &Source) {
+    pub fn fetch(&mut self, source: &Source, blur: crate::theme::Blur) {
         if self.is_loading() {
             return;
         }
         self.launched = true;
+        self.blurred_at = Some(blur);
         self.error = None;
         let source = source.clone();
         let (sender, receiver) = channel();
         self.inbox = Some(receiver);
         std::thread::spawn(move || {
-            let _ = sender.send(load(&source));
+            let _ = sender.send(load(&source, blur));
         });
     }
 
@@ -335,21 +347,22 @@ const MAX_SIDE: u32 = 2048;
 /// Storing it at full size would be storing a megabyte of information that has
 /// already been thrown away.
 const FROST_SIDE: u32 = 360;
-/// How far the frost is blurred, in pixels of the small copy. At this size it
-/// is equivalent to about a sixty-pixel blur of the original. The material's,
-/// since how frosted frosted glass is is a property of the material and not of
-/// the fetcher — this thread simply has no palette to ask.
+/// How far the frost is blurred, in pixels of the small copy, before the
+/// reader's setting scales it. At this size it is equivalent to about a
+/// sixty-pixel blur of the original. The material's, since how frosted frosted
+/// glass is is a property of the material and not of the fetcher — this thread
+/// simply has no palette to ask.
 const FROST_BLUR: f32 = crate::theme::Material::GLASS.blur;
 /// A picture this large is a mistake somewhere.
 const MAX_BYTES: usize = 24 * 1024 * 1024;
 /// Metadata is small; a megabyte of it is not metadata.
 const MAX_JSON: usize = 4 * 1024 * 1024;
 
-fn load(source: &Source) -> Result<Fetched, String> {
+fn load(source: &Source, blur: crate::theme::Blur) -> Result<Fetched, String> {
     match source {
         Source::File(path) => {
             let bytes = std::fs::read(path).map_err(|error| format!("{path}: {error}"))?;
-            let image = decode(&bytes)?;
+            let image = decode(&bytes, blur)?;
             Ok(Fetched {
                 credit: Credit {
                     title: Path::new(path)
@@ -363,15 +376,15 @@ fn load(source: &Source) -> Result<Fetched, String> {
                 cached: None,
             })
         },
-        Source::Commons => commons(),
-        Source::Openverse(subject) => openverse(*subject),
+        Source::Commons => commons(blur),
+        Source::Openverse(subject) => openverse(*subject, blur),
     }
 }
 
 /// Wikimedia Commons' picture of the day, from a day picked at random out of
 /// the last ten years. Today's would be the same picture for everyone all day;
 /// the archive is the interesting part.
-fn commons() -> Result<Fetched, String> {
+fn commons(blur: crate::theme::Blur) -> Result<Fetched, String> {
     let mut last = String::from("no picture of the day");
     // A handful of days have no picture in the feed. Try a few rather than
     // report a failure the user cannot act on.
@@ -415,7 +428,7 @@ fn commons() -> Result<Fetched, String> {
             .flatten()
         {
             match picture(&candidate) {
-                Ok((bytes, from)) => return finish(credit, &bytes, &from),
+                Ok((bytes, from)) => return finish(credit, &bytes, &from, blur),
                 Err(why) => last = why,
             }
         }
@@ -424,7 +437,7 @@ fn commons() -> Result<Fetched, String> {
 }
 
 /// Openverse, asked for a subject and given one of the answers.
-fn openverse(subject: Subject) -> Result<Fetched, String> {
+fn openverse(subject: Subject, blur: crate::theme::Blur) -> Result<Fetched, String> {
     // Openverse pages twenty at a time; a page picked at random out of the
     // first few is variety enough without asking for a page that is not there.
     let page = 1 + (random_u32(0) % 4);
@@ -481,7 +494,7 @@ fn openverse(subject: Subject) -> Result<Fetched, String> {
             source: "Openverse".to_owned(),
         };
         match picture(&url) {
-            Ok((bytes, from)) => return finish(credit, &bytes, &from),
+            Ok((bytes, from)) => return finish(credit, &bytes, &from, blur),
             Err(why) => last = why,
         }
     }
@@ -502,8 +515,13 @@ fn picture(url: &str) -> Result<(Vec<u8>, String), String> {
 }
 
 /// Cache the bytes, decode them, and hand both back.
-fn finish(credit: Credit, bytes: &[u8], from: &str) -> Result<Fetched, String> {
-    let image = decode(bytes)?;
+fn finish(
+    credit: Credit,
+    bytes: &[u8],
+    from: &str,
+    blur: crate::theme::Blur,
+) -> Result<Fetched, String> {
+    let image = decode(bytes, blur)?;
     let cached = cache(bytes, from);
     Ok(Fetched {
         credit,
@@ -515,7 +533,7 @@ fn finish(credit: Credit, bytes: &[u8], from: &str) -> Result<Fetched, String> {
 /// Decode and downscale, both on this thread. A six-megapixel photograph is
 /// several hundred milliseconds of work; doing it where the frames are drawn
 /// would be a visible stall for something nobody asked to wait for.
-fn decode(bytes: &[u8]) -> Result<Decoded, String> {
+fn decode(bytes: &[u8], blur: crate::theme::Blur) -> Result<Decoded, String> {
     let decoded = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
     let (width, height) = (decoded.width().max(1), decoded.height().max(1));
     let fit = |longest_allowed: u32| {
@@ -542,7 +560,7 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     let small = decoded
         .resize_exact(frost_w, frost_h, image::imageops::FilterType::Triangle)
         .to_rgba8();
-    let blurred = image::imageops::fast_blur(&small, FROST_BLUR);
+    let blurred = image::imageops::fast_blur(&small, FROST_BLUR * blur.scale());
 
     let as_image = |rgba: image::RgbaImage| {
         let size = [rgba.width() as usize, rgba.height() as usize];
