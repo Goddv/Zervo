@@ -54,6 +54,26 @@ impl SearchEngine {
 /// Both variants are composed from the same layered artwork authored in
 /// Apple's Icon Composer (`assets/icon/Zervo.icon`); the transparent variant
 /// is that document's translucency setting made visible.
+/// What the halo around the content card is coloured with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HaloTint {
+    /// The accent, so the card reads as lit by it.
+    Accent,
+    /// The chrome's own colour, so the halo is depth rather than colour.
+    Chrome,
+}
+
+impl HaloTint {
+    pub const ALL: [HaloTint; 2] = [HaloTint::Accent, HaloTint::Chrome];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            HaloTint::Accent => "Accent",
+            HaloTint::Chrome => "Chrome",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AppIcon {
     Default,
@@ -188,6 +208,9 @@ pub struct Settings {
     /// tracing the edge rather than as depth — but that depends on how big the
     /// window is and what is behind it, so it is a choice rather than a rule.
     pub content_shadow: bool,
+    /// A soft glow around the content card, and what colours it.
+    pub content_halo: bool,
+    pub content_halo_tint: HaloTint,
     /// How much comes through every surface the material draws — the cards,
     /// the menus, the shelf, the new tab page. One setting for the whole
     /// application rather than one per group of things.
@@ -250,6 +273,8 @@ impl Default for Settings {
             top_glow: 1.0,
             content_border: true,
             content_shadow: false,
+            content_halo: false,
+            content_halo_tint: HaloTint::Accent,
             translucency: crate::theme::Translucency::Frosted,
             gestures: crate::gestures::Gestures::default(),
             newtab_tiles: crate::newtab::Tile::defaults(),

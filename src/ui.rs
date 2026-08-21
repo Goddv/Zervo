@@ -392,6 +392,35 @@ fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) 
 /// The masks are oversized by a pixel so no sliver of the square blit can
 /// peek out at fractional DPI. `mask_corners` is false for internal pages
 /// whose fill is already rounded — masking there double-paints the corners.
+/// A soft glow around the content card, when asked for.
+fn paint_card_halo(
+    root: &Ui,
+    painter: &egui::Painter,
+    rect: Rect,
+    radius: f32,
+    palette: &Palette,
+    top_glow: f32,
+    tint: crate::settings::HaloTint,
+) {
+    // The square box has to be covered, not merely approached. Its furthest
+    // point from the arc is radius * (sqrt(2) - 1) at each corner, and a
+    // falloff that begins at the silhouette has decayed to a third of its
+    // strength by the time it gets there. So the ring holds full strength out
+    // to the wedge and only then fades.
+    let wedge = radius * (std::f32::consts::SQRT_2 - 1.0);
+    painter.add(glass::shadow_tinted(
+        rect,
+        radius,
+        wedge + radius * 0.42 + 6.0,
+        wedge,
+        glass::Inner::Outside,
+        |at| match tint {
+            crate::settings::HaloTint::Accent => palette.accent,
+            crate::settings::HaloTint::Chrome => chrome_color_at(root, at.y, palette, top_glow),
+        },
+    ));
+}
+
 /// A soft shadow hugging the content card.
 ///
 /// `Outside`, unlike every other surface: what is inside this silhouette is
@@ -407,6 +436,7 @@ fn paint_card_shadow(painter: &egui::Painter, rect: Rect, radius: f32, palette: 
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn finish_content_frame(
     root: &Ui,
     content_rect: Rect,
@@ -415,6 +445,7 @@ pub fn finish_content_frame(
     top_glow: f32,
     border: bool,
     shadow: bool,
+    halo: Option<crate::settings::HaloTint>,
 ) {
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     // The oversized fans must only bleed inward over the blit — clip them so
@@ -467,7 +498,11 @@ pub fn finish_content_frame(
     // antialias — in the same colour, feathering the boundary.
     if mask_corners {
         let mut mesh = Mesh::default();
+        let mut skirts = Mesh::default();
         let mut arc_edges: Vec<(Vec<egui::Pos2>, Color32)> = Vec::new();
+        // How far past the rect the mask fades. Wide enough to be a ramp rather
+        // than a step, narrow enough that nobody reads it as a glow.
+        const SKIRT: f32 = 3.0;
         for (corner, center, start_angle, outward) in corners {
             let corner_out = corner + outward * pad;
             let mut arc: Vec<egui::Pos2> = (0..=segments)
@@ -509,7 +544,9 @@ pub fn finish_content_frame(
             for segment in 0..segments as u32 {
                 mesh.add_triangle(base, base + 1 + segment, base + 2 + segment);
             }
-            // The true arc (endpoints not pushed out) for the AA pass.
+            // The true arc (endpoints not pushed out) for the AA pass and for
+            // anchoring the skirts, whose whole job is to start exactly where
+            // the mask stops.
             let true_arc: Vec<egui::Pos2> = (0..=segments)
                 .map(|segment| {
                     let angle = start_angle
@@ -520,9 +557,54 @@ pub fn finish_content_frame(
                     )
                 })
                 .collect();
+
+            // One skirt along each of the corner's two straight edges, from the
+            // corner — where the mask is thickest — out to where the arc meets
+            // the edge and the mask has thinned to nothing.
+            for end in [
+                *true_arc.first().expect("arc"),
+                *true_arc.last().expect("arc"),
+            ] {
+                let along = end - corner;
+                let normal = if along.x.abs() > along.y.abs() {
+                    vec2(0.0, outward.y)
+                } else {
+                    vec2(outward.x, 0.0)
+                };
+                let colour = |at: egui::Pos2, alpha: f32| {
+                    chrome_color_at(root, at.y, palette, top_glow).gamma_multiply(alpha)
+                };
+                let base = skirts.vertices.len() as u32;
+                skirts.colored_vertex(corner, colour(corner, 1.0));
+                skirts.colored_vertex(end, colour(end, 0.0));
+                skirts.colored_vertex(end + normal * SKIRT, colour(end, 0.0));
+                skirts.colored_vertex(corner + normal * SKIRT, colour(corner, 0.0));
+                skirts.add_triangle(base, base + 1, base + 2);
+                skirts.add_triangle(base, base + 2, base + 3);
+            }
+
             arc_edges.push((true_arc, chrome_color_at(root, corner.y, palette, top_glow)));
         }
         fan_painter.add(Shape::mesh(mesh));
+        // Bridge the step where the mask meets the chrome.
+        //
+        // A mask has to be opaque: what it covers is the page's square corner,
+        // blitted pixel for pixel. The chrome beside it is a thin tint over the
+        // system's backdrop, and that backdrop is composited by the window
+        // server outside this framebuffer — so we cannot read it, reproduce it,
+        // or match it. Opaque chrome colour lands about five per cent off, and
+        // the hard edge where the two meet reads as a jagged corner.
+        //
+        // It shows at the bottom and not the top because the toolbar above the
+        // card is opaque, so up there the two happen to agree.
+        //
+        // So the mask fades out over a few points past the rect, where there is
+        // no page to hide and nothing to lose. Only at the corners, tapering to
+        // nothing where the arc meets the edge — a ring all the way round would
+        // be the halo, which is a decision rather than a repair.
+        if !skirts.is_empty() {
+            painter.add(Shape::mesh(std::mem::take(&mut skirts)));
+        }
         // One physical pixel wide, so it feathers the mesh edge and no more.
         // At 1.4 points it was nearly three pixels, laid half over the page —
         // a chrome-coloured bite out of the page along the arcs but not along
@@ -536,6 +618,17 @@ pub fn finish_content_frame(
     // Drawn AFTER the corner masks: filling it beforehand works on internal
     // pages but not on web pages, where the blit wipes the square content rect
     // and leaves unshadowed patches in the corners.
+    if let Some(tint) = halo {
+        paint_card_halo(
+            root,
+            &painter,
+            content_rect,
+            radius,
+            palette,
+            top_glow,
+            tint,
+        );
+    }
     if shadow {
         paint_card_shadow(&painter, content_rect, radius, palette);
     }
@@ -4306,6 +4399,36 @@ fn settings_appearance(
                 .size(11.5)
                 .color(palette.text_muted),
         );
+        ui.add_space(10.0);
+
+        if widgets::toggle(
+            ui,
+            &mut chrome.settings.content_halo,
+            "Halo around content",
+            palette,
+        ) {
+            actions.push(UiAction::SettingsChanged);
+        }
+        ui.label(
+            RichText::new("A glow spreading out from the card's edge.")
+                .size(11.5)
+                .color(palette.text_muted),
+        );
+        if chrome.settings.content_halo {
+            ui.add_space(8.0);
+            let labels: Vec<&str> = crate::settings::HaloTint::ALL
+                .iter()
+                .map(|t| t.label())
+                .collect();
+            let current = crate::settings::HaloTint::ALL
+                .iter()
+                .position(|t| *t == chrome.settings.content_halo_tint)
+                .unwrap_or(0);
+            if let Some(picked) = widgets::segmented(ui, current, &labels, palette) {
+                chrome.settings.content_halo_tint = crate::settings::HaloTint::ALL[picked];
+                actions.push(UiAction::SettingsChanged);
+            }
+        }
     });
 
     settings_section(ui, palette, "Transparency", |ui| {

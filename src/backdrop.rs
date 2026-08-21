@@ -154,6 +154,13 @@ impl PageBackdrop {
                 std::num::NonZeroU32::new(previous_draw as u32).map(glow::NativeFramebuffer),
             );
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(framebuffer));
+            // Off for the blit, which must not be clipped to whatever egui was
+            // last drawing — and back on afterwards, because egui enables it
+            // once for the whole frame and every draw call after this one goes
+            // unclipped without it. Leaving it off painted the new tab page
+            // outside its own bounds for the length of a frame, eight times a
+            // second, which is what the blinking was.
+            let scissoring = gl.is_enabled(glow::SCISSOR_TEST);
             gl.disable(glow::SCISSOR_TEST);
             gl.blit_framebuffer(
                 x,
@@ -182,6 +189,9 @@ impl PageBackdrop {
 
             restore(glow::READ_FRAMEBUFFER, previous_read);
             restore(glow::DRAW_FRAMEBUFFER, previous_draw);
+            if scissoring {
+                gl.enable(glow::SCISSOR_TEST);
+            }
 
             self.ready = blur(pixels, small);
             self.taken_at = Some(Instant::now());
