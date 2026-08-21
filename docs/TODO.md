@@ -20,7 +20,10 @@ people do not write it twice.
 - **Run the Linux and Windows builds.** They compile, package and install and
   nobody has started one. This is the single most useful thing anyone with a
   Linux box or a Windows machine can do right now, and a report that it does not
-  start is as useful as one that says it does.
+  start is as useful as one that says it does. Windows had one known failure —
+  it died reading `GL_VERSION` from a context surfman's WGL backend never made
+  current — and 0.4.1 moves it to ANGLE; that fix was made from a crash log and
+  has not been watched.
 - **Session restore.** Workspaces and tabs written out and read back at launch.
   Pure chrome work, no engine involvement, and the most-missed thing after a
   crash. `state.rs` already holds everything that needs serialising.

@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.4.1 — 21 August 2026
+
+**Windows starts.** It did not: the process printed a warning about GPU
+selection symbols and then died reading `GL_VERSION`, before any window
+appeared. surfman's WGL backend creates its GL context, restores whichever
+context was current beforehand — none — and returns a context nobody has made
+current; the engine then asks glow to read the version string from it and the
+answer is a null pointer. Windows now composites through ANGLE, EGL over
+Direct3D 11, which is the backend Servo's own Windows builds use and the one
+that leaves the new context current. It also drops the requirement for
+`WGL_NV_DX_interop2`, an extension a good many drivers do not have. The zip
+carries `libEGL.dll` and `libGLESv2.dll` beside the exe, because it must. This
+is a fix made from a crash log; nobody has watched it start.
+
+The two GPU-selection symbols the warning asked for are exported as well, which
+is how an application tells an NVIDIA or AMD driver it wants the discrete chip
+rather than the integrated one. surfman ships a macro for it; the macro emits a
+bare `#[no_mangle]`, which edition 2024 rejects, so the statics are written out
+in `main.rs` instead.
+
+**The about page stops claiming Metal on Linux.** "WebGPU via Metal" was a
+constant string, true on exactly one of the three platforms. It now reads the
+driver's own `GL_RENDERER`, `GL_VENDOR` and `GL_VERSION`, once, while the
+window's context is current, and shows what they say — "Apple M3 Max", "4.1
+Metal - 91.7 — Apple", and whatever the equivalent turns out to be elsewhere.
+WebGPU itself was compiled in and switched off, so the line was doubly wrong;
+pages can reach it now, and it is asked for the platform's own API rather than
+wgpu's first choice: Metal on macOS, Vulkan on Linux, Direct3D 12 on Windows.
+
+**A saved password stopped going out on its own.** A 401 from `http://` sent
+the stored login as HTTP Basic — base64, in the clear — without asking, on a
+challenge any subresource can provoke, and to any host beneath the domain it
+was saved for. The scheme must be https now, the match picks the most specific
+domain rather than the broadest, and it asks, naming the host that raised the
+challenge and the login being offered. A download no longer starts on a page's
+say-so either.
+
+**The wallpaper fetcher had no overall deadline and no address check.** One
+`read` was bounded; the transfer as a whole was not, so a host sending a byte
+every twenty-nine seconds held a thread for hours. Redirects were checked for
+scheme and nothing else, and an Openverse result is third-party data — a name
+that resolves to a private address while holding a valid public certificate is
+ordinary, so a stranger's search result could have Zervo knock on whatever was
+listening inside the network. Addresses are filtered after resolution now,
+because the name is not what decides where the connection goes.
+
+**A `RefCell` double-borrow that took the browser down**, and every save was a
+non-atomic truncating write — an interruption left half a settings file, half a
+history or half a password index, and three of the five discarded the error
+too. Saves go through a write-and-rename with owner-only permissions.
+
+**Idle CPU: nineteen per cent to nought point two.** Servo's frame-ready signal
+asked for a full chrome repaint at the display's refresh rate even for internal
+pages the engine never composites, and a throttled background tab's spinner
+asked for one indefinitely. Spinners animate at thirty a second, which reads
+identically, and the byte count beside a download at four.
+
+**All four card corners are cut, not two.** The top pair were painted over
+rather than cut out, and the blend that filled them ran through `theme::mix`,
+which returns an opaque colour — over premultiplied translucent chrome that is
+very nearly black. The gradient interpolates in premultiplied space now, as
+ARCHITECTURE.md had warned all along, and both arcs tessellate from the same
+formula so the mask stops overhanging the cut.
+
+**CI runs more than rustfmt.** `cargo clippy`, `cargo test` and `cargo check`
+appeared in no workflow, so a pull request that did not compile passed as long
+as it was formatted. The engine-independent half of the browser — theme, glass,
+grid, gestures, the store, the little HTTPS client — is now `zervo-core`, which
+builds in eleven seconds from cold with its fifty-three tests, and a lint policy
+both crates share is written down where CI can act on it. cargo-deny watches
+advisories and licences, and knows which findings are this tree's and which are
+the engine's.
+
 ## 0.4.0 — 21 August 2026
 
 **A macOS release first.** Everything below is built and used on macOS. The

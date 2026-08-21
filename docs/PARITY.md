@@ -101,7 +101,8 @@ Each of these is a delegate method or a `WebView` call away.
   anything queued behind it waits. A page cannot reasonably need two answers at
   once, and stacked modals are worse than a queue.
 - **Linux and Windows have never been run.** The packages build and install;
-  whether the window opens is unknown. See the platform table in the README.
+  whether the window opens is unknown. Windows' one known crash is fixed in
+  0.4.1 and unconfirmed. See the platform table in the README.
 
 ## A note on where fixes go
 

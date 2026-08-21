@@ -190,18 +190,23 @@ Every release tag builds all three. Only one of them has been run.
 | **macOS** (Apple Silicon) | `.dmg`, GStreamer bundled | ✅ Used daily by its author |
 | **Debian / Ubuntu** | `.deb` | ⚠️ Builds and installs — never started |
 | **Fedora** | `.rpm` | ⚠️ Builds and installs — never started |
-| **Windows** x64 | self-contained `.exe` | ⚠️ Builds — never started |
+| **Windows** x64 | self-contained `.exe` | ⚠️ Builds — startup crash fixed in 0.4.1, unconfirmed |
 
-**0.4.0 is a macOS release first.** All three packages come from the same tag,
-and the material system itself is portable — it is drawn by egui and nothing
-else. But the window's frosted backdrop is an AppKit feature, and the corner
-compositing built on top of it has been tried nowhere else. Patches for Linux
-and Windows are 0.4.1.
+**Still a macOS release first.** All three packages come from the same tag, and
+the material system itself is portable — it is drawn by egui and nothing else.
+But the window's frosted backdrop is an AppKit feature, and the corner
+compositing built on top of it has been tried nowhere else.
 
-Nobody has started Zervo on Linux or Windows at all. The packages compile,
-package and install; whether a window opens is untested, and the rendering
-context, X11 versus Wayland and the GL setup have never been exercised.
-**A report that it does not start is as useful as one that says it does** —
+0.4.1 fixes the one thing Windows was known to do: die on startup, before any
+window, reading `GL_VERSION` from a context surfman's WGL backend had never
+made current. Windows now composites through ANGLE — EGL over Direct3D 11 —
+which is what Servo's own Windows builds do. That is a fix made from the crash
+log; nobody has watched it start.
+
+Nobody has started Zervo on Linux at all either. The packages compile, package
+and install; whether a window opens is untested, and X11 versus Wayland and the
+GL setup have never been exercised. **A report that it does not start is as
+useful as one that says it does** —
 [open an issue](https://github.com/Goddv/Zervo/issues) either way.
 
 Two things macOS keeps that the others do not: the frosted vibrancy behind the
