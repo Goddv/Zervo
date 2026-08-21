@@ -208,27 +208,39 @@ impl Translucency {
         }
     }
 
-    /// How much of a surface's own colour it carries, 0..=1 — the window's
-    /// chrome and everything the material draws alike.
+    /// The tint over the window's own chrome, 0..=1.
     ///
-    /// One number, deliberately, because two drifted. The chrome and the cards
-    /// were separately tuned and ended up looking like different materials in
-    /// the same window, which is the one thing a material system exists to
-    /// prevent.
+    /// Nearly nothing, because the system's blur is doing the work. This was
+    /// one number shared with `surface` for a while, on the reasonable-sounding
+    /// grounds that the chrome and the cards should be made of the same stuff.
+    /// They are — they sit on the same blur and take the same treatment — but
+    /// they are not the same *tint*, and making them so left the window too
+    /// murky and the cards too faint at the same time.
     ///
-    /// These are tints over the system's own blur, not opacities in their own
-    /// right — macOS is already darkening and blurring what is behind the
-    /// window, so the surface's job is to tint that, not to replace it. The
-    /// old slider's floor of 0.35 was still heavy enough to grey out whatever
-    /// showed through: you could tell something was back there, but not what
-    /// colour it was. `Frosted` sits where the colours behind survive;
-    /// `Sheer` is very nearly the bare material; `Solid` is for anyone who
-    /// never wanted any of it.
-    pub fn alpha(self) -> f32 {
+    /// The reference here is Zen's Transparent mod, which is what this was
+    /// measured against: its main browser background is `#00000000`, flatly
+    /// transparent, and every surface that has to hold text sits on top of
+    /// that with a tint of its own — 30% for the toolbar, 33% for a panel, 60%
+    /// for the URL bar. The base being clear is the whole effect; the surfaces
+    /// being tinted is what keeps it readable.
+    pub fn chrome(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.16,
-            Translucency::Sheer => 0.07,
+            Translucency::Frosted => 0.08,
+            Translucency::Sheer => 0.0,
+        }
+    }
+
+    /// The tint on anything the material draws over that chrome — cards,
+    /// menus, the shelf, the new tab page.
+    ///
+    /// Heavier than the chrome, deliberately and for the same reason the
+    /// reference is: these are the surfaces with words on them.
+    pub fn surface(self) -> f32 {
+        match self {
+            Translucency::Solid => 1.0,
+            Translucency::Frosted => 0.34,
+            Translucency::Sheer => 0.24,
         }
     }
 }
@@ -882,12 +894,10 @@ mod tests {
     #[test]
     fn the_steps_go_one_way() {
         use Translucency::{Frosted, Sheer, Solid};
-        assert!(Solid.alpha() > Frosted.alpha() && Frosted.alpha() > Sheer.alpha());
-        assert_eq!(
-            Solid.alpha(),
-            1.0,
-            "Solid has to mean no translucency at all"
-        );
+        assert!(Solid.chrome() > Frosted.chrome() && Frosted.chrome() >= Sheer.chrome());
+        assert!(Solid.surface() > Frosted.surface() && Frosted.surface() > Sheer.surface());
+        assert_eq!(Solid.chrome(), 1.0, "Solid has to mean an opaque window");
+        assert_eq!(Solid.surface(), 1.0, "Solid has to mean opaque surfaces");
     }
 
     /// The point of the middle step is that you can see what is behind the
@@ -896,15 +906,20 @@ mod tests {
     /// setting is for.
     #[test]
     fn frosted_is_actually_frosted() {
-        use Translucency::{Frosted, Sheer};
+        use Translucency::Frosted;
+        // The base has to be all but clear or the colours behind the window
+        // arrive as a grey suggestion of themselves. Measured against Zen's
+        // Transparent mod, whose own base is flatly transparent.
         assert!(
-            Frosted.alpha() <= 0.25,
-            "Frosted at {} washes out whatever is behind it",
-            Frosted.alpha()
+            Frosted.chrome() <= 0.12,
+            "a chrome tint of {} washes out whatever is behind it",
+            Frosted.chrome()
         );
+        // And the surfaces have to be heavier than the base, or the words on
+        // them have nothing to sit on.
         assert!(
-            Frosted.alpha() - Sheer.alpha() >= 0.05,
-            "Sheer is not far enough from Frosted to be worth choosing"
+            Frosted.surface() > Frosted.chrome() * 2.0,
+            "surfaces need more tint than the chrome they sit on"
         );
     }
 

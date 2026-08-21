@@ -970,7 +970,7 @@ impl RunningApp {
                 !output.settings_open,
                 settings.top_glow,
                 settings.content_border,
-                palette.translucency.alpha(),
+                palette.translucency.chrome(),
             );
 
             ui_output = Some(output);
