@@ -392,8 +392,7 @@ impl Controls {
                     content_rect,
                     origin,
                     dialog,
-                    escape,
-                    enter,
+                    Keys { escape, enter },
                 );
             },
             EmbedderControl::SelectElement(select) => {
@@ -406,9 +405,11 @@ impl Controls {
                     palette,
                     content_rect,
                     anchor,
-                    &options,
-                    &chosen,
-                    multiple,
+                    Select {
+                        options: &options,
+                        selected: &chosen,
+                        multiple,
+                    },
                     settled,
                 );
                 match picked {
@@ -594,6 +595,16 @@ fn button(ui: &mut Ui, label: &str, palette: &Palette, primary: bool) -> bool {
     response.on_hover_cursor(CursorIcon::PointingHand).clicked()
 }
 
+/// The two keys a dialog answers to.
+///
+/// Named rather than passed as two adjacent `bool`s: transposing them swaps
+/// Cancel and OK, and nothing would have complained.
+#[derive(Clone, Copy)]
+struct Keys {
+    escape: bool,
+    enter: bool,
+}
+
 fn draw_dialog(
     ctx: &egui::Context,
     measure: &egui::Painter,
@@ -601,9 +612,9 @@ fn draw_dialog(
     content_rect: Rect,
     origin: &str,
     dialog: &mut SimpleDialog,
-    escape: bool,
-    enter: bool,
+    keys: Keys,
 ) -> Option<Resolution> {
+    let Keys { escape, enter } = keys;
     let width = 420.0_f32.min(content_rect.width() - 48.0);
     let message = dialog.message().to_owned();
     let galley = measure.layout(
@@ -697,16 +708,27 @@ enum Picked {
     Cancel,
 }
 
+/// The `<select>` being drawn: what is in it, what is chosen, and whether more
+/// than one thing may be.
+struct Select<'a> {
+    options: &'a [SelectElementOptionOrOptgroup],
+    selected: &'a [usize],
+    multiple: bool,
+}
+
 fn draw_select(
     ctx: &egui::Context,
     palette: &Palette,
     content_rect: Rect,
     anchor: Rect,
-    options: &[SelectElementOptionOrOptgroup],
-    selected: &[usize],
-    multiple: bool,
+    select: Select<'_>,
     settled: bool,
 ) -> Option<Picked> {
+    let Select {
+        options,
+        selected,
+        multiple,
+    } = select;
     const ROW: f32 = 26.0;
     let mut rows = 0.0;
     for option in options {

@@ -38,7 +38,39 @@ pub struct Download {
     cancel: Arc<AtomicBool>,
 }
 
+/// One download as a list row wants it.
+///
+/// The three places that draw a download — the hover card, the
+/// `zervo://downloads` page and the new tab page's widget — each need the same
+/// handful of facts and none of the rest of a `Download`. Naming them is also
+/// what stops the copy taken for a row being a bare seven-tuple.
+#[derive(Clone)]
+pub struct RowView {
+    pub id: DownloadId,
+    pub filename: String,
+    pub url: String,
+    /// Completion in 0..1, when the total size is known.
+    pub fraction: Option<f32>,
+    pub received: u64,
+    pub total: Option<u64>,
+    pub state: DownloadState,
+}
+
 impl Download {
+    /// The facts a row needs, copied out so the list can be walked while the
+    /// manager is borrowed elsewhere.
+    pub fn row_view(&self) -> RowView {
+        RowView {
+            id: self.id,
+            filename: self.filename.clone(),
+            url: self.url.clone(),
+            fraction: self.fraction(),
+            received: self.received,
+            total: self.total,
+            state: self.state.clone(),
+        }
+    }
+
     /// Completion in 0..1 when the total size is known.
     pub fn fraction(&self) -> Option<f32> {
         let total = self.total?;
@@ -46,6 +78,7 @@ impl Download {
     }
 }
 
+#[derive(Default)]
 pub struct DownloadManager {
     pub items: Vec<Download>,
     next_id: DownloadId,
@@ -62,17 +95,6 @@ struct EngineDownload {
     part_path: PathBuf,
     final_path: PathBuf,
     received: u64,
-}
-
-impl Default for DownloadManager {
-    fn default() -> Self {
-        Self {
-            items: Vec::new(),
-            next_id: 0,
-            #[cfg(feature = "engine-downloads")]
-            engine: std::collections::HashMap::new(),
-        }
-    }
 }
 
 impl DownloadManager {
@@ -229,7 +251,9 @@ pub fn filename_from_url(url: &str) -> String {
         .and_then(|parsed| {
             parsed
                 .path_segments()
-                .and_then(|segments| segments.last().map(|segment| segment.to_owned()))
+                // `next_back`, not `last`: path segments iterate both ways, and
+                // `last` walks the whole path to reach the end of it.
+                .and_then(|mut segments| segments.next_back().map(std::borrow::ToOwned::to_owned))
         })
         .filter(|segment| !segment.is_empty())
         .unwrap_or_else(|| "download".to_owned());
@@ -345,7 +369,7 @@ fn unique_path(dir: &Path, filename: &str) -> PathBuf {
 /// Written with `xattr` rather than a binding, for the same reason
 /// `passwords.rs` shells out to `security`: the command is stable, this is not
 /// a hot path, and it keeps a dependency out of the build.
-#[cfg_attr(not(feature = "engine-downloads"), allow(dead_code))]
+#[cfg_attr(not(feature = "engine-downloads"), expect(dead_code))]
 fn quarantine(path: &Path) {
     #[cfg(target_os = "macos")]
     {

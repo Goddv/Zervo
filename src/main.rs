@@ -19,13 +19,14 @@ mod backdrop;
 mod controls;
 mod dashboard;
 mod downloads;
-mod gestures;
-mod glass;
-mod grid;
+// The engine-independent half of the browser, in its own crate so that clippy
+// and the tests can run on a pull request without compiling Servo first.
+// Re-exported at the root rather than referred to by its own name, so every
+// `crate::theme::…` in the tree carries on resolving and nothing had to move.
+pub use zervo_core::{gestures, glass, grid, net, store, theme};
 mod icons;
 mod keyboard;
 mod library;
-mod net;
 mod newtab;
 mod passwords;
 mod phosphor;
@@ -34,8 +35,6 @@ mod phosphor;
 mod platform;
 mod settings;
 mod state;
-mod store;
-mod theme;
 mod ui;
 #[cfg(target_os = "macos")]
 mod vibrancy;
@@ -92,14 +91,17 @@ impl RepaintAt {
         let Some(deadline) = std::time::Instant::now().checked_add(delay) else {
             return;
         };
-        let mut slot = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slot = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *slot = Some(slot.map_or(deadline, |at| at.min(deadline)));
     }
 
     fn take(&self) -> Option<std::time::Instant> {
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
     }
 }
@@ -135,6 +137,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(event_loop.run_app(&mut app)?)
 }
 
+// `Running` is about two kilobytes and `Initial` is a pointer, which clippy
+// reads as a reason to box. It is not one here: exactly one `App` exists, in
+// `main`, and it changes variant once when the window appears. Boxing would buy
+// nothing and put a dereference in front of every field the event loop touches.
+#[expect(clippy::large_enum_variant)]
 enum App {
     Initial(Waker),
     Running(RunningApp),
@@ -453,7 +460,8 @@ impl ApplicationHandler<WakerEvent> for App {
         if let Self::Running(app) = self {
             match app.pending_repaint_at {
                 Some(deadline) => {
-                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline))
+                    event_loop
+                        .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(deadline));
                 },
                 None => event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait),
             }
@@ -958,13 +966,13 @@ impl RunningApp {
                 egui::TextureOptions::LINEAR,
             ));
         }
-        if self.settings.new_tab_background == settings::NewTabBackground::Photo {
-            if self.wallpaper.due(
+        if self.settings.new_tab_background == settings::NewTabBackground::Photo
+            && self.wallpaper.due(
                 &self.settings.wallpaper_source,
                 self.settings.wallpaper_cadence,
-            ) {
-                self.wallpaper.fetch(&self.settings.wallpaper_source);
-            }
+            )
+        {
+            self.wallpaper.fetch(&self.settings.wallpaper_source);
         }
 
         let palette = self.palette();
@@ -1064,64 +1072,64 @@ impl RunningApp {
             // internal page draws itself with rounded corners already, so
             // masking it would only lay a second tint over its own.
             let mut blitted = false;
-            if !output.settings_open {
-                if let Some(webview) = &active_webview {
-                    let size = Size2D::new(
-                        content_rect.width().max(1.0),
-                        content_rect.height().max(1.0),
-                    ) * Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
-                    if size != webview.size() {
-                        // Also resizes the offscreen context, which must stay
-                        // sized to exactly the content viewport.
-                        webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
-                    }
-                    // Render Servo into the offscreen FBO before egui paints.
-                    webview.paint();
+            if !output.settings_open
+                && let Some(webview) = &active_webview
+            {
+                let size = Size2D::new(
+                    content_rect.width().max(1.0),
+                    content_rect.height().max(1.0),
+                ) * Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
+                if size != webview.size() {
+                    // Also resizes the offscreen context, which must stay
+                    // sized to exactly the content viewport.
+                    webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
+                }
+                // Render Servo into the offscreen FBO before egui paints.
+                webview.paint();
 
-                    // Blit the page under all chrome widgets. Only when a live
-                    // webview exists — otherwise the FBO holds a stale frame.
-                    if let Some(render_to_parent) = offscreen.render_to_parent_callback() {
-                        root.layer_painter(LayerId::background())
-                            .add(egui::PaintCallback {
-                                rect: content_rect,
-                                callback: Arc::new(CallbackFn::new(move |info, painter| {
-                                    let clip = info.viewport_in_pixels();
-                                    let rect_in_parent = euclid::default::Rect::new(
-                                        euclid::default::Point2D::new(
-                                            clip.left_px,
-                                            clip.from_bottom_px,
-                                        ),
-                                        euclid::default::Size2D::new(clip.width_px, clip.height_px),
-                                    );
-                                    render_to_parent(painter.gl(), rect_in_parent);
-                                })),
-                            });
+                // Blit the page under all chrome widgets. Only when a live
+                // webview exists — otherwise the FBO holds a stale frame.
+                if let Some(render_to_parent) = offscreen.render_to_parent_callback() {
+                    root.layer_painter(LayerId::background())
+                        .add(egui::PaintCallback {
+                            rect: content_rect,
+                            callback: Arc::new(CallbackFn::new(move |info, painter| {
+                                let clip = info.viewport_in_pixels();
+                                let rect_in_parent = euclid::default::Rect::new(
+                                    euclid::default::Point2D::new(
+                                        clip.left_px,
+                                        clip.from_bottom_px,
+                                    ),
+                                    euclid::default::Size2D::new(clip.width_px, clip.height_px),
+                                );
+                                render_to_parent(painter.gl(), rect_in_parent);
+                            })),
+                        });
 
-                        // And immediately after it, while the page is the only
-                        // thing on the framebuffer, take the blurred copy the
-                        // chrome frosts itself against. Ordered here on
-                        // purpose: a frame later and it would contain the
-                        // cards, which would then be frosting against
-                        // themselves.
-                        // And the corners come out of it, so the chrome can
-                        // be drawn back over transparency rather than over the
-                        // page. Ordered after the copy so the copy is of the
-                        // page as the engine drew it.
-                        if let Some(capture) = &capture {
-                            backdrop::capture_into(
-                                &root.layer_painter(LayerId::background()),
-                                content_rect,
-                                capture,
-                            );
-                        }
-                        backdrop::cut_corners_into(
+                    // And immediately after it, while the page is the only
+                    // thing on the framebuffer, take the blurred copy the
+                    // chrome frosts itself against. Ordered here on
+                    // purpose: a frame later and it would contain the
+                    // cards, which would then be frosting against
+                    // themselves.
+                    // And the corners come out of it, so the chrome can
+                    // be drawn back over transparency rather than over the
+                    // page. Ordered after the copy so the copy is of the
+                    // page as the engine drew it.
+                    if let Some(capture) = &capture {
+                        backdrop::capture_into(
                             &root.layer_painter(LayerId::background()),
                             content_rect,
-                            theme::CONTENT_RADIUS,
-                            &eraser,
+                            capture,
                         );
-                        blitted = true;
                     }
+                    backdrop::cut_corners_into(
+                        &root.layer_painter(LayerId::background()),
+                        content_rect,
+                        theme::CONTENT_RADIUS,
+                        &eraser,
+                    );
+                    blitted = true;
                 }
             }
             // Rounded-corner masks and border, drawn over the blit.
@@ -1234,6 +1242,9 @@ impl RunningApp {
         {
             use glow::HasContext as _;
             let gl = state.window_rendering_context.glow_gl_api();
+            // SAFETY: `prepare_for_rendering` just made this context current
+            // and bound the window framebuffer. Setting a clear colour and
+            // clearing the bound framebuffer need nothing beyond that.
             unsafe {
                 gl.clear_color(0.0, 0.0, 0.0, 0.0);
                 gl.clear(glow::COLOR_BUFFER_BIT);
@@ -1555,7 +1566,7 @@ impl RunningApp {
                 // egui remembers the panel's width itself, and would otherwise
                 // keep the old one until the next launch.
                 self.egui_glow.egui_ctx.data_mut(|data| {
-                    data.remove::<egui::PanelState>(egui::Id::new(ui::SIDEBAR_ID))
+                    data.remove::<egui::PanelState>(egui::Id::new(ui::SIDEBAR_ID));
                 });
                 state.window.request_redraw();
             },

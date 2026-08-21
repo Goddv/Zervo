@@ -497,7 +497,7 @@ fn paint_card_shadow(
     ));
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn finish_content_frame(
     root: &Ui,
     content_rect: Rect,
@@ -956,10 +956,10 @@ fn sidebar_body(
                     match out.drop_at {
                         Some(DropAt::Before) => target = Some((workspace_index, tab_index, None)),
                         Some(DropAt::After) => {
-                            target = Some((workspace_index, tab_index + 1, None))
+                            target = Some((workspace_index, tab_index + 1, None));
                         },
                         Some(DropAt::Onto) => {
-                            target = Some((workspace_index, tab_index, Some(tab.id)))
+                            target = Some((workspace_index, tab_index, Some(tab.id)));
                         },
                         None => {},
                     }
@@ -1769,31 +1769,13 @@ fn draw_downloads_card(
     const ROW: f32 = 46.0;
 
     let palette = chrome.palette;
-    let items: Vec<(
-        u64,
-        String,
-        String,
-        Option<f32>,
-        u64,
-        Option<u64>,
-        DownloadState,
-    )> = chrome
+    let items: Vec<crate::downloads::RowView> = chrome
         .downloads
         .items
         .iter()
         .rev()
         .take(8)
-        .map(|item| {
-            (
-                item.id,
-                item.filename.clone(),
-                item.url.clone(),
-                item.fraction(),
-                item.received,
-                item.total,
-                item.state.clone(),
-            )
-        })
+        .map(crate::downloads::Download::row_view)
         .collect();
     let rows = items.len().max(1) as f32;
     let size = vec2(360.0, rows * ROW + 52.0);
@@ -1855,9 +1837,16 @@ fn draw_downloads_card(
                 return;
             }
 
-            for (index, (download, filename, _url, fraction, received, total, state)) in
-                items.iter().enumerate()
-            {
+            for (index, entry) in items.iter().enumerate() {
+                let crate::downloads::RowView {
+                    id: download,
+                    filename,
+                    url: _,
+                    fraction,
+                    received,
+                    total,
+                    state,
+                } = entry;
                 let row = Rect::from_min_size(
                     pos2(body.min.x, body.min.y + index as f32 * ROW),
                     vec2(body.width(), ROW - 4.0),
@@ -2006,15 +1995,10 @@ fn draw_downloads_card(
             if let Some((download, at)) =
                 ctx.data(|data| data.get_temp::<(u64, egui::Pos2)>(menu_id))
             {
-                let url = items
-                    .iter()
-                    .find(|(id, ..)| *id == download)
-                    .map(|(_, _, url, ..)| url.clone())
-                    .unwrap_or_default();
-                let filename = items
-                    .iter()
-                    .find(|(id, ..)| *id == download)
-                    .map(|(_, name, ..)| name.clone())
+                let chosen = items.iter().find(|entry| entry.id == download);
+                let url = chosen.map(|entry| entry.url.clone()).unwrap_or_default();
+                let filename = chosen
+                    .map(|entry| entry.filename.clone())
                     .unwrap_or_default();
                 let rows = [
                     ("Copy download link".to_owned(), 0u8),
@@ -4234,16 +4218,16 @@ fn draw_settings_page(
                     ui.add_space(12.0);
                     match chrome.browser.settings_section {
                         crate::state::SettingsSection::Appearance => {
-                            settings_appearance(ui, chrome, &palette, actions)
+                            settings_appearance(ui, chrome, &palette, actions);
                         },
                         crate::state::SettingsSection::General => {
-                            settings_general(ui, chrome, &palette, actions)
+                            settings_general(ui, chrome, &palette, actions);
                         },
                         crate::state::SettingsSection::Layout => {
-                            settings_layout(ui, chrome, &palette, actions)
+                            settings_layout(ui, chrome, &palette, actions);
                         },
                         crate::state::SettingsSection::Passwords => {
-                            settings_passwords(ui, chrome, actions)
+                            settings_passwords(ui, chrome, actions);
                         },
                         crate::state::SettingsSection::About => settings_about(ui, &palette),
                     }
@@ -4260,7 +4244,10 @@ fn settings_appearance(
     actions: &mut Vec<UiAction>,
 ) {
     settings_section(ui, palette, "Theme", |ui| {
-        let labels: Vec<&str> = ThemeMode::ALL.iter().map(|mode| mode.label()).collect();
+        let labels: Vec<&str> = ThemeMode::ALL
+            .iter()
+            .map(super::theme::ThemeMode::label)
+            .collect();
         let current = ThemeMode::ALL
             .iter()
             .position(|mode| *mode == chrome.settings.theme)
@@ -4379,7 +4366,7 @@ fn settings_appearance(
 
     settings_section(ui, palette, "App icon", |ui| {
         let icons = AppIcon::ALL;
-        let labels: Vec<&str> = icons.iter().map(|icon| icon.label()).collect();
+        let labels: Vec<&str> = icons.iter().map(super::settings::AppIcon::label).collect();
         let current = icons
             .iter()
             .position(|icon| *icon == chrome.settings.app_icon)
@@ -5247,7 +5234,7 @@ fn url_escape(input: &str) -> String {
     for byte in input.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
+                out.push(byte as char);
             },
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{byte:02X}")),

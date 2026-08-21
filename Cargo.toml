@@ -1,3 +1,6 @@
+[workspace]
+members = ["zervo-core"]
+
 [package]
 name = "zervo"
 version = "0.4.0"
@@ -20,6 +23,46 @@ engine-downloads = []
 # default so a plain build needs nothing but Rust.
 media = ["servo/media-gstreamer"]
 
+# ── Lints ─────────────────────────────────────────────────────────────────
+# CONTRIBUTING.md has always said "cargo fmt and cargo clippy clean. CI
+# enforces both." Only the first half was true — clippy ran in no workflow at
+# all — so this is the policy written down where CI can act on it.
+#
+# `pedantic` is deliberately not on. It produces some five hundred warnings
+# here, almost all of them `cast_precision_loss` and `cast_possible_truncation`
+# on the float-to-integer conversions that layout arithmetic is made of. A wall
+# that size is not a standard, it is something everyone learns to scroll past.
+# What follows is the subset that catches things worth catching in this tree.
+[workspace.lints.rust]
+# Already the default in edition 2024; stated because the GL and AppKit code
+# leans on it and a future edition bump should not quietly relax it.
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# The one comment this codebase cannot do without.
+undocumented_unsafe_blocks = "warn"
+# `#[expect]` over `#[allow]`, so a suppression that has stopped being needed
+# says so instead of sitting there forever. Two of them already had.
+allow_attributes = "warn"
+# Debugging left behind.
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+# Style the tree already keeps to.
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_let_else = "warn"
+mem_forget = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+str_to_string = "warn"
+unnecessary_wraps = "warn"
+
+[lints]
+workspace = true
+
 [dependencies]
 # ── The engine ────────────────────────────────────────────────────────────
 # Servo publishes to crates.io (roughly monthly). Using the registry release
@@ -34,6 +77,8 @@ servo = { version = "0.5.0", default-features = false, features = [
     "js_jit",
     "webgpu",
 ] }
+
+zervo-core = { path = "zervo-core" }
 
 # ── Chrome ────────────────────────────────────────────────────────────────
 egui = "0.34.3"

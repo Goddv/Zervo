@@ -292,7 +292,7 @@ impl FromWinitKeyEvent for Key {
             WinitNamedKey::Soft2 => Key::Named(NamedKey::Soft2),
             WinitNamedKey::Soft3 => Key::Named(NamedKey::Soft3),
             WinitNamedKey::Soft4 => Key::Named(NamedKey::Soft4),
-            WinitNamedKey::Space => Key::Character(" ".to_string()),
+            WinitNamedKey::Space => Key::Character(" ".to_owned()),
             WinitNamedKey::SpeechCorrectionList => Key::Named(NamedKey::SpeechCorrectionList),
             WinitNamedKey::SpeechInputToggle => Key::Named(NamedKey::SpeechInputToggle),
             WinitNamedKey::SpellCheck => Key::Named(NamedKey::SpellCheck),
@@ -362,7 +362,7 @@ impl FromWinitKeyEvent for Location {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl FromWinitKeyEvent for Code {
     fn from_winit_key_event(key_event: &KeyEvent) -> Self {
         let key_code = match key_event.physical_key {

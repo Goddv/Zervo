@@ -122,8 +122,20 @@ impl PageBackdrop {
             ((height as f32 * scale) as i32).clamp(1, SIDE),
         );
 
-        // SAFETY: a current context, and every binding this changes is put
-        // back before returning.
+        // SAFETY: the caller guarantees a current context, which is what makes
+        // every call below sound at all.
+        //
+        // The one that needs more than that is `read_pixels`. glow hands the
+        // driver `pixels.as_mut_ptr()` and no length, so how many bytes get
+        // written is decided by `PACK_ALIGNMENT`, `PACK_ROW_LENGTH` and the
+        // `PACK_SKIP_*` values — none of which belong to this function. With
+        // the defaults the arithmetic below is exact; with a row length left
+        // set by another user of the context it would be a heap overflow. They
+        // are therefore set explicitly before the read and put back after,
+        // rather than assumed.
+        //
+        // Bindings this changes are restored too, but that is about not
+        // corrupting egui's next draw call, not about soundness.
         unsafe {
             if self.size != small {
                 self.release(gl);
@@ -162,6 +174,9 @@ impl PageBackdrop {
             // second, which is what the blinking was.
             let scissoring = gl.is_enabled(glow::SCISSOR_TEST);
             gl.disable(glow::SCISSOR_TEST);
+            // Drained first, so what is checked after the blit is the blit's
+            // own error and not one left lying about by an earlier call.
+            while gl.get_error() != glow::NO_ERROR {}
             gl.blit_framebuffer(
                 x,
                 y,
@@ -175,8 +190,33 @@ impl PageBackdrop {
                 glow::LINEAR,
             );
 
+            // A downscaling blit out of a multisampled read framebuffer is
+            // GL_INVALID_OPERATION, and so is one between incompatible formats.
+            // Either way nothing is written, and the read below would then hand
+            // back whatever the texture happened to contain — which is why it
+            // is allocated cleared, and why this is worth noticing rather than
+            // blurring and painting.
+            let blit_error = gl.get_error();
+            if blit_error != glow::NO_ERROR {
+                log::warn!("backdrop: the page copy failed (GL error {blit_error:#x})");
+                restore(glow::READ_FRAMEBUFFER, previous_read);
+                restore(glow::DRAW_FRAMEBUFFER, previous_draw);
+                if scissoring {
+                    gl.enable(glow::SCISSOR_TEST);
+                }
+                return;
+            }
+
             let mut pixels = vec![0_u8; (small.0 * small.1 * 4) as usize];
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuffer));
+            // See the SAFETY note above: these two decide how much the driver
+            // writes through the pointer, so they are stated rather than hoped
+            // for. A tightly packed RGBA row is a multiple of four bytes, so an
+            // alignment of 4 matches the buffer exactly.
+            let previous_alignment = gl.get_parameter_i32(glow::PACK_ALIGNMENT);
+            let previous_row_length = gl.get_parameter_i32(glow::PACK_ROW_LENGTH);
+            gl.pixel_store_i32(glow::PACK_ALIGNMENT, 4);
+            gl.pixel_store_i32(glow::PACK_ROW_LENGTH, 0);
             gl.read_pixels(
                 0,
                 0,
@@ -186,6 +226,8 @@ impl PageBackdrop {
                 glow::UNSIGNED_BYTE,
                 glow::PixelPackData::Slice(Some(&mut pixels)),
             );
+            gl.pixel_store_i32(glow::PACK_ALIGNMENT, previous_alignment);
+            gl.pixel_store_i32(glow::PACK_ROW_LENGTH, previous_row_length);
 
             restore(glow::READ_FRAMEBUFFER, previous_read);
             restore(glow::DRAW_FRAMEBUFFER, previous_draw);
@@ -198,14 +240,25 @@ impl PageBackdrop {
         }
     }
 
-    /// SAFETY: current context.
+    /// # Safety
+    ///
+    /// A GL context must be current on this thread.
     unsafe fn allocate(
         gl: &glow::Context,
         size: (i32, i32),
     ) -> Option<(glow::Framebuffer, glow::Texture)> {
+        // SAFETY: the caller promises a current context, which is the whole of
+        // what these calls need. The framebuffer binding is put back before
+        // returning.
         unsafe {
             let texture = gl.create_texture().ok()?;
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            // Given pixels rather than `Slice(None)`, which leaves the contents
+            // undefined. If a later blit into this ever fails — a multisampled
+            // source is enough — the read that follows returns whatever was in
+            // that video memory, and the chrome frosts itself against it. Clear
+            // is a poor backdrop; somebody else's freed texture is worse.
+            let blank = vec![0_u8; (size.0 as usize) * (size.1 as usize) * 4];
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -215,7 +268,7 @@ impl PageBackdrop {
                 0,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(None),
+                glow::PixelUnpackData::Slice(Some(&blank)),
             );
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D,
@@ -254,8 +307,13 @@ impl PageBackdrop {
         }
     }
 
-    /// SAFETY: current context.
+    /// # Safety
+    ///
+    /// A GL context must be current on this thread, and it must be the one
+    /// these objects were made on.
     unsafe fn release(&mut self, gl: &glow::Context) {
+        // SAFETY: the caller promises the right context. Each object is taken
+        // out of its `Option` as it is deleted, so nothing can be deleted twice.
         unsafe {
             if let Some(framebuffer) = self.framebuffer.take() {
                 gl.delete_framebuffer(framebuffer);
@@ -299,6 +357,10 @@ pub struct Eraser {
     program: Option<glow::Program>,
     array: Option<glow::VertexArray>,
     buffer: Option<glow::Buffer>,
+    /// Set once the GL objects could not be built, so it is not attempted
+    /// again. A driver that will not compile this shader today will not
+    /// compile it on the next frame either.
+    failed: bool,
 }
 
 /// How wide the erase fades, in physical pixels. One is what antialiasing is.
@@ -447,7 +509,58 @@ impl Eraser {
         {
             return Some((program, array, buffer));
         }
-        // SAFETY: a current context. Everything made here is kept.
+        if self.failed {
+            return None;
+        }
+        // SAFETY: a current context.
+        let built = unsafe { Self::build(gl) };
+        match built {
+            Some((program, array, buffer)) => {
+                self.program = Some(program);
+                self.array = Some(array);
+                self.buffer = Some(buffer);
+                Some((program, array, buffer))
+            },
+            None => {
+                // Remembered, and not retried. `cut_corners` runs every frame,
+                // so without this a driver that rejects the shader had a
+                // program and two shaders abandoned to it sixty times a second
+                // — none of them ever deleted, because nothing set
+                // `self.program` and nothing tidied up on the way out.
+                self.failed = true;
+                None
+            },
+        }
+    }
+
+    /// Delete a half-built program and whatever shaders were attached to it.
+    ///
+    /// # Safety
+    ///
+    /// A GL context must be current, and `program` and `shaders` must be live
+    /// objects belonging to it.
+    unsafe fn discard(gl: &glow::Context, program: glow::Program, shaders: &[glow::Shader]) {
+        // SAFETY: the caller promises live objects on a current context, and
+        // this is the only path that deletes them — `build` hands them over
+        // exactly once, on the way out.
+        unsafe {
+            for shader in shaders {
+                gl.detach_shader(program, *shader);
+                gl.delete_shader(*shader);
+            }
+            gl.delete_program(program);
+        }
+    }
+
+    /// # Safety
+    ///
+    /// A GL context must be current on this thread.
+    unsafe fn build(
+        gl: &glow::Context,
+    ) -> Option<(glow::Program, glow::VertexArray, glow::Buffer)> {
+        // SAFETY: the caller promises a current context. Everything made here
+        // is either returned or deleted before returning, so no name outlives
+        // this call unowned.
         unsafe {
             let program = gl.create_program().ok()?;
             const VERTEX: &str = "#version 150\n\
@@ -469,11 +582,16 @@ impl Eraser {
                 (glow::VERTEX_SHADER, VERTEX),
                 (glow::FRAGMENT_SHADER, FRAGMENT),
             ] {
-                let shader = gl.create_shader(kind).ok()?;
+                let Ok(shader) = gl.create_shader(kind) else {
+                    Self::discard(gl, program, &shaders);
+                    return None;
+                };
                 gl.shader_source(shader, source);
                 gl.compile_shader(shader);
                 if !gl.get_shader_compile_status(shader) {
                     log::warn!("corner eraser: {}", gl.get_shader_info_log(shader));
+                    gl.delete_shader(shader);
+                    Self::discard(gl, program, &shaders);
                     return None;
                 }
                 gl.attach_shader(program, shader);
@@ -488,13 +606,18 @@ impl Eraser {
             }
             if !gl.get_program_link_status(program) {
                 log::warn!("corner eraser: {}", gl.get_program_info_log(program));
+                gl.delete_program(program);
                 return None;
             }
-            let array = gl.create_vertex_array().ok()?;
-            let buffer = gl.create_buffer().ok()?;
-            self.program = Some(program);
-            self.array = Some(array);
-            self.buffer = Some(buffer);
+            let Ok(array) = gl.create_vertex_array() else {
+                gl.delete_program(program);
+                return None;
+            };
+            let Ok(buffer) = gl.create_buffer() else {
+                gl.delete_vertex_array(array);
+                gl.delete_program(program);
+                return None;
+            };
             Some((program, array, buffer))
         }
     }

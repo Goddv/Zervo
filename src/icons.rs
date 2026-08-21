@@ -15,11 +15,16 @@ use crate::theme::Palette;
 pub const PHOSPHOR_FAMILY: &str = "phosphor";
 
 pub fn phosphor_font(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(PHOSPHOR_FAMILY.into()))
+    // `FontFamily::Name` holds an `Arc<str>`, so `.into()` on a `&str`
+    // allocates — once per icon, per frame, across some sixty call sites in the
+    // chrome. Cloning a shared one is a refcount bump instead.
+    static FAMILY: std::sync::LazyLock<FontFamily> =
+        std::sync::LazyLock::new(|| FontFamily::Name(PHOSPHOR_FAMILY.into()));
+    FontId::new(size, FAMILY.clone())
 }
 
 #[derive(Clone, Copy, PartialEq)]
-#[allow(dead_code)] // The full pack vocabulary; not every glyph is placed yet.
+#[expect(dead_code)] // The full pack vocabulary; not every glyph is placed yet.
 pub enum Icon {
     Back,
     Forward,
