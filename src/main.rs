@@ -1600,11 +1600,16 @@ impl RunningApp {
         #[cfg(target_os = "macos")]
         if let Some(vibrancy) = &self._vibrancy {
             use objc2_app_kit::NSVisualEffectMaterial;
-            let material = match target.translucency.backdrop() {
+            let backdrop = target.translucency.backdrop();
+            let material = match backdrop {
                 theme::SystemBackdrop::Opaque => NSVisualEffectMaterial::WindowBackground,
-                theme::SystemBackdrop::Clear => NSVisualEffectMaterial::UnderWindowBackground,
+                _ => NSVisualEffectMaterial::UnderWindowBackground,
             };
             vibrancy.set_material_animated(material, THEME_FADE.as_secs_f64());
+            vibrancy.set_visible_animated(
+                backdrop != theme::SystemBackdrop::None,
+                THEME_FADE.as_secs_f64(),
+            );
         }
     }
 
