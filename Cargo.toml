@@ -78,7 +78,9 @@ servo = { version = "0.5.0", default-features = false, features = [
     "webgpu",
 ] }
 
-zervo-core = { path = "zervo-core" }
+# The version is here as well as the path so this is not a wildcard
+# dependency, which `cargo deny check bans` rejects and rightly so.
+zervo-core = { path = "zervo-core", version = "0.4.0" }
 
 # ── Chrome ────────────────────────────────────────────────────────────────
 egui = "0.34.3"

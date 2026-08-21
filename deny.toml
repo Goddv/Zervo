@@ -1,11 +1,32 @@
 # cargo-deny, run on every pull request. It reads Cargo.lock and compiles
 # nothing, so it is one of the very few whole-tree checks this project can
 # afford to gate a PR on.
+#
+# Almost everything in that tree is Servo's. Zervo's own dependency list is
+# two dozen crates; the lockfile is well over a thousand. So the policy below
+# distinguishes what this repository chooses from what it merely inherits: a
+# problem in something we picked should stop a pull request, and a problem
+# deep in the engine should be visible without blocking work nobody here can
+# do.
 
 [advisories]
-# Anything with a filed advisory fails. Servo's tree is large and moves fast;
-# hearing about it here beats hearing about it elsewhere.
+# A filed vulnerability fails the build, wherever it lives — with the
+# exceptions listed below, each of which is here for a stated reason rather
+# than because it was noisy.
 yanked = "deny"
+# Unmaintained crates are worth knowing about, but an unmaintained transitive
+# dependency of the engine is not a security event and there is nothing to do
+# about it from here. Servo's graph currently carries six: bincode, ttf-parser
+# and four of the `unic-*` family, all reached through
+# `servo-default-resources`.
+unmaintained = "workspace"
+ignore = [
+    # The Marvin Attack: a timing sidechannel in `rsa`, with no fixed version
+    # published. It arrives through Servo and cannot be resolved here. Zervo
+    # itself does no RSA; what reaches it is the engine's TLS. Worth revisiting
+    # on every engine bump — if `rsa` ever ships a fix, this line should go.
+    "RUSTSEC-2023-0071",
+]
 
 [bans]
 multiple-versions = "allow"   # Servo's graph guarantees plenty; not news.
@@ -21,11 +42,18 @@ allow = [
     "BSD-3-Clause",
     "BSL-1.0",
     "CC0-1.0",
+    # The Community Data License Agreement, on Mozilla's CA root bundle as
+    # shipped by `webpki-roots`. A data licence for the certificate set, not
+    # code.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MIT-0",
     "MPL-2.0",
-    "OpenSSL",
+    # Font licences, from `epaint_default_fonts` — egui's bundled faces. Both
+    # permit redistribution, which is the only thing being done with them.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
