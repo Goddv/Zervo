@@ -348,7 +348,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // How much of this surface's own material survives, per the reader's
     // setting — unless the material has opted out of having one.
     let sheer = if material.translucency {
-        palette.translucency.surface()
+        palette.surface_tint()
     } else {
         1.0
     };
@@ -414,9 +414,14 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     let wash = Color32::from_white_alpha((sheen * strength) as u8);
     let mut fill = over(wash, core);
     // An opaque backing is what a surface asks for when it has nothing behind
-    // it worth showing. A frosted one does, so the backing is what it would
-    // paint over.
+    // it worth showing. Two things can make that untrue. A frosted one has its
+    // own blurred backdrop, which is the thing worth showing. And once the
+    // reader has asked for glass at all, an opaque backing is the one way a
+    // surface can refuse to give it to them — a card that paints itself solid
+    // before the material ever sees it is not translucent at any setting. So
+    // the backing is honoured only when nothing is meant to come through.
     if backdrop.is_none()
+        && palette.translucency == crate::theme::Translucency::Solid
         && let Some(backing) = glass.opaque
     {
         fill = over(fill, backing);

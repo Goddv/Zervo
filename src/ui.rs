@@ -143,7 +143,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         root,
         &chrome.palette,
         chrome.settings.top_glow,
-        chrome.palette.translucency.chrome(),
+        chrome.palette.chrome_tint(),
     );
 
     // Autohide reveal: decided before the sidebar is drawn, but painted last
@@ -4352,6 +4352,35 @@ fn settings_appearance(
             .size(11.5)
             .color(palette.text_muted),
         );
+
+        // Only the sheerest step is hand-set. The other two are the two looks
+        // worth having; a slider on either would be a hundred ways to make
+        // them slightly worse.
+        if chrome.settings.translucency == crate::theme::Translucency::Sheer {
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("How sheer")
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+            if widgets::slider(ui, &mut chrome.settings.sheer, 0.0..=1.0, palette) {
+                actions.push(UiAction::SettingsChanged);
+            }
+            ui.label(
+                RichText::new(if chrome.settings.sheer >= 0.99 {
+                    "Frosted's own tint, without its blur.".to_owned()
+                } else if chrome.settings.sheer <= 0.01 {
+                    "No tint at all — surfaces are their edges and their words.".to_owned()
+                } else {
+                    format!(
+                        "{:.0}% of Frosted's tint, without its blur.",
+                        chrome.settings.sheer * 100.0
+                    )
+                })
+                .size(11.5)
+                .color(palette.text_muted),
+            );
+        }
 
         // Only offered by a material that blurs. One that refracts instead, or
         // one for a flat toolkit, has nothing for this to mean.

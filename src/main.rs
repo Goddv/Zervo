@@ -970,7 +970,7 @@ impl RunningApp {
                 !output.settings_open,
                 settings.top_glow,
                 settings.content_border,
-                palette.translucency.chrome(),
+                palette.chrome_tint(),
             );
 
             ui_output = Some(output);
@@ -1565,7 +1565,7 @@ impl RunningApp {
 
     fn target_palette(&self) -> Palette {
         theme::resolve(self.settings.theme, self.system_dark, self.settings.accent)
-            .with_translucency(self.settings.translucency)
+            .with_translucency(self.settings.translucency, self.settings.sheer)
     }
 
     /// Begin crossing to whatever the settings now say, from wherever the

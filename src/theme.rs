@@ -227,8 +227,11 @@ impl Translucency {
     pub fn chrome(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.08,
-            Translucency::Sheer => 0.0,
+            // Sheer starts where Frosted sits and is taken down from there by
+            // hand — see `Palette::chrome_tint`. What already separates the two
+            // without touching a tint is that Sheer has no system blur behind
+            // it at all.
+            Translucency::Frosted | Translucency::Sheer => 0.08,
         }
     }
 
@@ -240,8 +243,7 @@ impl Translucency {
     pub fn surface(self) -> f32 {
         match self {
             Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.34,
-            Translucency::Sheer => 0.24,
+            Translucency::Frosted | Translucency::Sheer => 0.34,
         }
     }
 }
@@ -497,6 +499,7 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         // Not a colour and not part of the theme, so it does not cross over —
         // it is whatever the setting says, on both sides of the fade.
         translucency: b.translucency,
+        sheer: b.sheer,
         backdrop: b.backdrop,
         // Not a colour either. A crossfade between two *materials* would mean
         // interpolating corner radii and metrics, which is a different and
@@ -508,9 +511,35 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
 impl Palette {
     /// Stamp the reader's translucency setting on. `resolve` has no business
     /// knowing about Settings, so main.rs does this once a frame.
-    pub fn with_translucency(mut self, translucency: Translucency) -> Self {
+    pub fn with_translucency(mut self, translucency: Translucency, sheer: f32) -> Self {
         self.translucency = translucency;
+        // Deserialised from a text file, so it can be anything at all, and it
+        // reaches `gamma_multiply`, which debug-asserts on a non-finite factor.
+        self.sheer = if sheer.is_finite() {
+            sheer.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         self
+    }
+
+    /// The tint over the window's own chrome, with the hand-set sheerness
+    /// applied.
+    pub fn chrome_tint(&self) -> f32 {
+        self.translucency.chrome() * self.sheerness()
+    }
+
+    /// The tint on anything the material draws, likewise.
+    pub fn surface_tint(&self) -> f32 {
+        self.translucency.surface() * self.sheerness()
+    }
+
+    /// The hand-set factor, which only the sheerest step has.
+    fn sheerness(&self) -> f32 {
+        match self.translucency {
+            Translucency::Sheer => self.sheer,
+            _ => 1.0,
+        }
     }
 
     /// How round a surface of this size is, per the material.
@@ -620,6 +649,10 @@ pub struct Palette {
     /// and main.rs stamps the setting on, the same way `dark` is a fact about
     /// the theme rather than a colour.
     pub translucency: Translucency,
+    /// How far down from `Frosted` the sheerest step has been taken by hand,
+    /// 0..=1. One means "the same tint as Frosted"; zero means no tint at all.
+    /// Read only when `translucency` is `Sheer`.
+    pub sheer: f32,
     /// What surfaces are made of: corner radii, fills, edges, shadows, the
     /// lot. See [`Material`].
     pub material: Material,
@@ -714,6 +747,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
             translucency: Translucency::Solid,
+            sheer: 1.0,
             material: Material::GLASS,
             backdrop: None,
         }
@@ -730,6 +764,7 @@ pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palet
             border: Color32::from_rgb(204, 204, 204),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
             translucency: Translucency::Solid,
+            sheer: 1.0,
             material: Material::GLASS,
             backdrop: None,
         }
@@ -900,10 +935,43 @@ mod tests {
     #[test]
     fn the_steps_go_one_way() {
         use Translucency::{Frosted, Sheer, Solid};
-        assert!(Solid.chrome() > Frosted.chrome() && Frosted.chrome() >= Sheer.chrome());
-        assert!(Solid.surface() > Frosted.surface() && Frosted.surface() > Sheer.surface());
         assert_eq!(Solid.chrome(), 1.0, "Solid has to mean an opaque window");
         assert_eq!(Solid.surface(), 1.0, "Solid has to mean opaque surfaces");
+        // Sheer starts where Frosted sits: what separates them without anyone
+        // touching the slider is that Sheer has no system blur behind it.
+        assert_eq!(Frosted.chrome(), Sheer.chrome());
+        assert_eq!(Frosted.surface(), Sheer.surface());
+        assert_ne!(Frosted.backdrop(), Sheer.backdrop());
+    }
+
+    /// The slider only bites on the step it is offered for. Reaching the other
+    /// two would let a value left behind at zero make the whole window
+    /// invisible the next time somebody chose Solid.
+    #[test]
+    fn the_sheer_slider_reaches_one_step_only() {
+        let base = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        for level in [Translucency::Solid, Translucency::Frosted] {
+            let palette = base.with_translucency(level, 0.0);
+            assert_eq!(palette.chrome_tint(), level.chrome());
+            assert_eq!(palette.surface_tint(), level.surface());
+        }
+        let sheer = base.with_translucency(Translucency::Sheer, 0.0);
+        assert_eq!(sheer.chrome_tint(), 0.0);
+        assert_eq!(sheer.surface_tint(), 0.0);
+        let full = base.with_translucency(Translucency::Sheer, 1.0);
+        assert_eq!(full.surface_tint(), Translucency::Frosted.surface());
+    }
+
+    /// A value out of a text file cannot be trusted; it reaches
+    /// `gamma_multiply`, which debug-asserts on anything non-finite.
+    #[test]
+    fn a_nonsense_sheerness_is_ignored() {
+        let base = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        for bad in [f32::NAN, f32::INFINITY, -5.0, 12.0] {
+            let palette = base.with_translucency(Translucency::Sheer, bad);
+            assert!(palette.surface_tint().is_finite());
+            assert!((0.0..=1.0).contains(&palette.sheer));
+        }
     }
 
     /// The point of the middle step is that you can see what is behind the
