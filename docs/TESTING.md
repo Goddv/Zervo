@@ -111,6 +111,40 @@ engine bump or a chrome change, walk this list.
 - [ ] A link opening a new tab (`target=_blank`) is adopted as a tab.
 - [ ] Favicons appear in tab rows.
 
+## Notifications and permissions
+
+A page is needed that raises them; `new Notification(...)` from the console is
+not enough, because a notification only counts as user-initiated once the page
+holds permission. Any local file with a few buttons on it does.
+
+- [ ] `Notification.requestPermission()` raises a Zervo prompt naming the host
+      rather than the whole URL. Denying is respected — the promise resolves to
+      `denied` and nothing appears.
+- [ ] Granting, then raising one: it grows **out of the bell** in the address
+      bar rather than appearing beside it, and the text fades in partway
+      through rather than being there from the first frame.
+- [ ] The bell appears in the address bar only once something has been raised,
+      carries a count from two upward, and reads `9+` past nine.
+- [ ] After about six seconds the toast hides itself and the bell stays. Click
+      the bell: the notification is still there. This is the whole reason the
+      bell exists — one missed by six seconds is the one worth going back for.
+- [ ] Three notifications sharing a `tag`: only ever one on screen, showing the
+      most recent, and its six seconds restart each time it is replaced.
+- [ ] `requireInteraction: true` does not time out, however long you leave it.
+- [ ] Clicking a toast dismisses that one and leaves the rest. Dismissing the
+      last one takes the bell away with it.
+- [ ] With the tray open and more than one in it, a "Clear all" row sits under
+      the stack and empties it.
+- [ ] Raise twenty-five: the history caps at twenty and keeps the newest, and
+      at most six are drawn at once.
+- [ ] An empty title, a four-hundred-character title and mixed scripts with an
+      emoji all stay inside the card rather than spilling out of it.
+- [ ] **Idle after.** Once everything has lingered out, CPU falls back to
+      near zero. A notification that keeps the event loop awake forever is the
+      same bug the repaint scheduler already had once.
+- [ ] Notifications are drawn in the same glass as menus: switch theme and
+      translucency and they follow.
+
 ## Downloads (`--features engine-downloads`)
 - [ ] Navigating to a `.zip` **asks** before saving, naming the host and the
       filename it will land under. Cancelling writes nothing at all — check the

@@ -49,6 +49,7 @@ mod icons;
 mod keyboard;
 mod library;
 mod newtab;
+mod notifications;
 mod passwords;
 mod phosphor;
 // macOS has its own paths inline, using the AppKit bindings it already has.
@@ -136,7 +137,9 @@ enum PointerOwner {
 }
 
 use crate::app::AppState;
-use crate::keyboard::{CMD_OR_ALT, CMD_OR_CONTROL, keyboard_event_from_winit};
+use crate::keyboard::{
+    CMD_OR_ALT, CMD_OR_CONTROL, CMD_OR_CONTROL_SHIFT, keyboard_event_from_winit,
+};
 use crate::settings::{NewTabPage, Settings};
 use crate::state::{BrowserState, TabId, TabKind};
 use crate::theme::Palette;
@@ -245,6 +248,17 @@ struct RunningApp {
     /// Owns the little program that takes the card's corners out of the
     /// framebuffer; it is compiled on first use inside a paint callback.
     corner_eraser: Arc<Mutex<backdrop::Eraser>>,
+    /// Whether an erased pixel shows a backdrop rather than nothing.
+    ///
+    /// The card's corners are rounded by cutting them out of the framebuffer
+    /// and drawing the chrome back over the hole — same paint, same backdrop,
+    /// nothing left to match. That only works where the window composites with
+    /// alpha and something sits behind it, which today means macOS with its
+    /// `NSVisualEffectView`. Everywhere else the window is opaque, and the
+    /// destination-out pass takes the colour with it and leaves black.
+    ///
+    /// So this decides between the two techniques rather than assuming one.
+    translucent_window: bool,
     /// The uploaded textures for it: the picture, and the blurred copy every
     /// glass surface over it is frosted against. Held here rather than in the
     /// manager because making one needs an egui context, and the manager runs
@@ -291,6 +305,14 @@ impl ApplicationHandler<WakerEvent> for App {
         // Frosted-glass backdrop behind the (translucent) chrome.
         #[cfg(target_os = "macos")]
         let vibrancy = vibrancy::install(&window, objc2_app_kit::NSVisualEffectMaterial::Sidebar);
+
+        // Only true where the window was created transparent *and* a backdrop
+        // was actually installed behind it. If the effect view failed to go in,
+        // an erased corner would be a hole onto nothing.
+        #[cfg(target_os = "macos")]
+        let translucent_window = vibrancy.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let translucent_window = false;
 
         let display_handle = event_loop
             .display_handle()
@@ -363,12 +385,70 @@ impl ApplicationHandler<WakerEvent> for App {
             let _ = std::fs::create_dir_all(&dir);
             opts.config_dir = Some(dir);
         }
+        // The colour the engine clears to, and the root default background, so
+        // a page that has not painted yet shows the chrome rather than white.
+        // Every navigation used to flash white first, which in a dark theme is
+        // the most visible thing the browser does. A page with a background of
+        // its own still wins: this is only the default underneath.
+        let start = theme::resolve(settings.theme, system_dark, settings.accent);
+        let shell_background = {
+            let bg = start.bg;
+            let channel = |v: u8| f64::from(v) / 255.0;
+            [
+                channel(bg.r()),
+                channel(bg.g()),
+                channel(bg.b()),
+                channel(bg.a()),
+            ]
+        };
         let mut preferences = servo::Preferences {
             // WebGPU is compiled in (the `webgpu` engine feature), so let
             // pages reach it, and name the backend rather than taking wgpu's
             // first choice from its PRIMARY set. See `gpu::webgpu_backend`.
             dom_webgpu_enabled: true,
             dom_webgpu_wgpu_backend: gpu::webgpu_backend().to_owned(),
+            // WebGL 2. The `webgl` engine feature brings the implementation;
+            // this is what puts `WebGL2RenderingContext` on the page. WebGL 1
+            // is unaffected — a canvas asking for `webgl` still gets it, so
+            // this adds a context rather than replacing one.
+            dom_webgl2_enabled: true,
+            shell_background_color_rgba: shell_background,
+
+            // ── The web platform block ──────────────────────────────────
+            // All of these ship in the engine and are simply switched off by
+            // default. Every one of them is on Servo's own vetted list in
+            // `ports/servoshell/prefs.rs`.
+            //
+            // Without IntersectionObserver, lazy-loaded images and infinite
+            // feeds never load: the observer never fires, so the placeholder
+            // is permanent. It is the single most visible one.
+            dom_intersection_observer_enabled: true,
+            // Every "Copy" button on GitHub, StackOverflow and most docs sites
+            // goes through `navigator.clipboard`. Servo's own default clipboard
+            // delegate services it through arboard, which Zervo already links
+            // for the `clipboard` feature, so this needs no code.
+            dom_async_clipboard_enabled: true,
+            // Constructed stylesheets — how web components ship their styling.
+            // Without it Lit and friends render unstyled.
+            dom_adoptedstylesheet_enabled: true,
+            // `@container`, and multi-column layout. Both fall back to
+            // something wrong-looking rather than something absent.
+            layout_container_queries_enabled: true,
+            layout_columns_enabled: true,
+            // Variable fonts, which most modern type on the web now is.
+            layout_variable_fonts_enabled: true,
+            dom_visual_viewport_enabled: true,
+
+            // ── Permissions ─────────────────────────────────────────────
+            // `navigator.permissions.query()` is the only general path that
+            // reaches the embedder, and it is gated behind this. Notifications
+            // are the one feature that then actually asks. See the delegate in
+            // `app.rs` and the note in docs/PARITY.md about what is *not*
+            // reachable: camera, microphone and geolocation never send a
+            // request at all, which is an engine gap rather than an embedder
+            // one.
+            dom_permissions_enabled: true,
+            dom_notification_enabled: true,
             ..Default::default()
         };
         if settings.user_agent_compat {
@@ -399,7 +479,7 @@ impl ApplicationHandler<WakerEvent> for App {
             .or_else(|| Url::parse(&settings.homepage).ok())
             .unwrap_or_else(|| Url::parse("https://servo.org").expect("valid default URL"));
 
-        let resolved_dark = theme::resolve(settings.theme, system_dark, settings.accent).dark;
+        let resolved_dark = start.dark;
         let state = Rc::new(AppState {
             servo,
             window_rendering_context,
@@ -419,6 +499,8 @@ impl ApplicationHandler<WakerEvent> for App {
             content_origin: Cell::new((0.0, 0.0)),
             #[cfg(feature = "engine-downloads")]
             download_events: RefCell::new(Vec::new()),
+            status_text: RefCell::new(None),
+            toasts: RefCell::new(crate::notifications::Toasts::default()),
             last_window_title: RefCell::new(String::new()),
             window,
         });
@@ -476,6 +558,7 @@ impl ApplicationHandler<WakerEvent> for App {
             page_backdrop: Arc::new(std::sync::Mutex::new(backdrop::PageBackdrop::default())),
             page_backdrop_texture: None,
             corner_eraser: Arc::new(Mutex::new(backdrop::Eraser::default())),
+            translucent_window,
             wallpaper_texture: None,
             wallpaper_frost: None,
             #[cfg(target_os = "macos")]
@@ -902,6 +985,9 @@ impl RunningApp {
                 state.browser.borrow_mut().focus_address = true;
                 state.window.request_redraw();
             })
+            .shortcut(CMD_OR_CONTROL_SHIFT, 'L', || {
+                self.apply_action(UiAction::FillSavedLogin);
+            })
             .shortcut(CMD_OR_CONTROL, 'X', || {
                 if let Some(webview) = &active_webview {
                     webview.notify_input_event(InputEvent::EditingAction(EditingActionEvent::Cut));
@@ -939,6 +1025,11 @@ impl RunningApp {
     fn redraw(&mut self) {
         let state = self.state.clone();
         let _ = state.rendering_context.make_current();
+
+        // One reading of the clock for the whole frame. What gets drawn and
+        // what gets scheduled have to agree about what time it is, or a toast
+        // that falls due between the two is painted and then never woken for.
+        let frame_now = std::time::Instant::now();
 
         // Adopt popups, drop script-closed tabs, refresh tab titles/urls.
         state.sync();
@@ -1050,6 +1141,7 @@ impl RunningApp {
         // Handed to the paint callback, which runs inside `run` and so cannot
         // borrow `self`.
         let eraser = self.corner_eraser.clone();
+        let translucent_window = self.translucent_window;
         let capture = (frosting
             && self
                 .page_backdrop
@@ -1086,6 +1178,23 @@ impl RunningApp {
             let mut library = state.library.borrow_mut();
             let mut vault = state.vault.borrow_mut();
             let media = state.media.borrow().clone();
+            // Cloned rather than borrowed across the pass: `ui.rs` holds four
+            // `RefMut`s already, and a fifth live borrow is one more way to
+            // meet the panic in `AppState::sync`.
+            let status = state.status_text.borrow().clone();
+            // Same reason: a snapshot rather than a `Ref` held across the pass.
+            // Time is read here, once, rather than by the chrome — `ui.rs`
+            // reads no clock, and the wake that brings us here was scheduled
+            // off `next_deadline` below.
+            let (toasts, toast_count, toasts_open) = {
+                let held = state.toasts.borrow();
+                // `frame_now` rather than a fresh reading: the wake scheduled
+                // further down must agree with what was drawn here. Two
+                // readings straddle the whole draw pass and the engine's paint,
+                // so a toast that expires in between is painted and then never
+                // woken for — and sits over the page until unrelated input.
+                (held.view(frame_now), held.count(), held.is_open())
+            };
             let mut chrome = ui::ChromeContext {
                 browser: &mut browser,
                 controls: &mut controls,
@@ -1098,6 +1207,12 @@ impl RunningApp {
                 downloads: &self.downloads,
                 wallpaper,
                 capture: capture.clone(),
+                status: status.as_deref(),
+                notifications: crate::notifications::View {
+                    visible: &toasts,
+                    count: toast_count,
+                    open: toasts_open,
+                },
             };
             let output = ui::draw(root, &mut chrome);
             drop(browser);
@@ -1165,12 +1280,19 @@ impl RunningApp {
                             capture,
                         );
                     }
-                    backdrop::cut_corners_into(
-                        &root.layer_painter(LayerId::background()),
-                        content_rect,
-                        theme::CONTENT_RADIUS,
-                        &eraser,
-                    );
+                    // Only where a hole shows a backdrop. On an opaque window
+                    // the destination-out pass takes the colour with it and
+                    // leaves black, which is worse than the square corner it
+                    // was cutting away — there, the mask below is drawn opaque
+                    // over the page instead.
+                    if translucent_window {
+                        backdrop::cut_corners_into(
+                            &root.layer_painter(LayerId::background()),
+                            content_rect,
+                            theme::CONTENT_RADIUS,
+                            &eraser,
+                        );
+                    }
                     blitted = true;
                 }
             }
@@ -1179,15 +1301,24 @@ impl RunningApp {
                 root,
                 content_rect,
                 &palette,
-                blitted,
-                settings.top_glow,
-                settings.content_border,
-                settings
-                    .content_shadow
-                    .then_some(settings.content_shadow_amount),
-                settings
-                    .content_halo
-                    .then_some((settings.content_halo_tint, settings.content_halo_amount)),
+                if !blitted {
+                    // An internal page rounds itself.
+                    ui::Corners::AlreadyRounded
+                } else if translucent_window {
+                    ui::Corners::Cut
+                } else {
+                    ui::Corners::Masked
+                },
+                ui::CardFrame {
+                    top_glow: settings.top_glow,
+                    border: settings.content_border,
+                    shadow: settings
+                        .content_shadow
+                        .then_some(settings.content_shadow_amount),
+                    halo: settings
+                        .content_halo
+                        .then_some((settings.content_halo_tint, settings.content_halo_amount)),
+                },
             );
 
             ui_output = Some(output);
@@ -1243,6 +1374,22 @@ impl RunningApp {
                 self.pending_repaint_at
                     .map_or(deadline, |d| d.min(deadline)),
             );
+        }
+        // Nothing else will wake the loop when a notification's time is up, or
+        // while one is still growing out of the bell.
+        {
+            let toasts = state.toasts.borrow();
+            let mut due = toasts.next_deadline(frame_now);
+            if toasts.morphing(frame_now) {
+                let frame = frame_now + std::time::Duration::from_millis(16);
+                due = Some(due.map_or(frame, |at| at.min(frame)));
+            }
+            if let Some(deadline) = due {
+                self.pending_repaint_at = Some(
+                    self.pending_repaint_at
+                        .map_or(deadline, |at| at.min(deadline)),
+                );
+            }
         }
         if state.library.borrow().needs_save()
             && self.library_saved_at.elapsed() > std::time::Duration::from_secs(10)
@@ -1635,6 +1782,28 @@ impl RunningApp {
             UiAction::OpenSettings => {
                 let tab_id = state.browser.borrow_mut().find_or_create_settings_tab();
                 state.activate_tab(tab_id);
+            },
+            UiAction::DismissNotification(id) => {
+                state.toasts.borrow_mut().dismiss(id);
+                state.window.request_redraw();
+            },
+            UiAction::ToggleNotifications => {
+                state.toasts.borrow_mut().toggle();
+                state.window.request_redraw();
+            },
+            UiAction::ClearNotifications => {
+                state.toasts.borrow_mut().clear();
+                state.window.request_redraw();
+            },
+            UiAction::FillSavedLogin => {
+                // The status line is where the eye already is, and it is
+                // already ephemeral — the right place to say what happened
+                // without stealing focus from the form being filled.
+                let notice = match state.fill_saved_login() {
+                    Ok(message) | Err(message) => message,
+                };
+                *state.status_text.borrow_mut() = Some(notice);
+                state.window.request_redraw();
             },
             UiAction::CloseTab(tab_id) => state.close_tab(tab_id),
             UiAction::TogglePin(tab_id) => {

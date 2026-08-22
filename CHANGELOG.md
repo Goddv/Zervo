@@ -627,7 +627,7 @@ before this there was no way to quit that ran any of the shutdown at all.
 
 Servo has no download support, so this needs a patched engine, and until now that
 meant building one yourself. Released builds are now compiled against a
-[fork](https://github.com/Goddv/servo/tree/zervo-downloads) carrying the patch,
+[fork](https://github.com/Goddv/servo/tree/goddv-patches) carrying the patch,
 pinned to a revision. A plain `git clone` still builds against the published
 crate with no setup, because CI appends the patch line rather than it being
 committed.

@@ -60,6 +60,20 @@ The design follows what Servo's maintainers settled on in their Zulip
 discussion, and builds on a prototype branch by jdm
 (`jdm/servo:download-integration`).
 
+## The second patch: notifications with nothing to fetch
+
+`Notification`'s show steps wait for the image, icon and badge a notification
+may carry, and Servo calls `show` from the fetch completion handler once the
+last request lands. A notification carrying none of those queues no requests,
+so nothing ever completes and `show` is never reached — the notification is
+constructed, fires no `error`, and is simply never handed to the embedder.
+
+Since most pages raise a plain title-and-body notification, this made
+`show_notification` unreachable for the common case. Waiting for an empty set
+of fetches is over immediately, which is what the patch says.
+
+`patches/servo/0002-script-show-notification-without-resources.patch`.
+
 ### Applying it
 
 Cargo cannot patch a dependency in place, so build against a patched checkout:
@@ -68,19 +82,25 @@ Cargo cannot patch a dependency in place, so build against a patched checkout:
 # once
 gh repo fork servo/servo --clone   # or fork in the web UI and clone
 cd servo
-git checkout -b zervo-downloads f7cd7d88047…
+git checkout -b goddv-patches bd220a152bc…
 git apply /path/to/zervo/patches/servo/0001-embedder-file-downloads.patch
 git commit -am "embedder: offer unrenderable responses to the embedder"
-git push -u origin zervo-downloads
+git am  /path/to/zervo/patches/servo/0002-script-show-notification-without-resources.patch
+git push -u origin goddv-patches
 ```
 
-Then point Zervo at the fork, either permanently in `Cargo.toml`:
+The branch is called `goddv-patches` rather than something named after the one
+patch on it: it is the place engine patches live, and downloads is only the
+first. Anything else Zervo ever has to change in the engine goes on the same
+branch, so there is one thing to rebase when the engine moves.
 
-```toml
-servo = { git = "https://github.com/YOU/servo", branch = "zervo-downloads", … }
-```
+Zervo already points at the fork: `.cargo/config.toml` carries a
+`[patch.crates-io]` entry pinned to a revision of `goddv-patches`. Bumping the
+engine means editing that one line — it used to live in three workflow files as
+well, which is exactly the sort of thing that drifts.
 
-…or locally, without touching the manifest, in `.cargo/config.toml`:
+To work against a local checkout instead, replace the `git`/`rev` entry with a
+path:
 
 ```toml
 [patch.crates-io]
@@ -92,6 +112,12 @@ touches `servo-net` and `servo-script` too, you may need to redirect those
 sibling crates to the same checkout.
 
 and build with `--features engine-downloads`.
+
+The patch is *not* optional at the moment, even without that feature. Servo
+renamed `MouseButton`'s variants to `Primary`/`Secondary`/`Auxiliary` on
+21 August 2026 and `src/main.rs` follows the new names, while the newest `servo`
+on crates.io is still 0.5.0 with the old ones. Until a release carries the
+rename, the registry crate does not compile Zervo at all.
 
 ### Upstreaming
 

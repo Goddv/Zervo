@@ -75,6 +75,21 @@ servo = { version = "0.5.0", default-features = false, features = [
     "bundled_freetype",
     "clipboard",
     "js_jit",
+    # WebGL and WebCrypto are named because they stopped being free. In the
+    # published 0.5.0 crate `servo-webgl` was an ordinary dependency and the
+    # crypto stack came with `script`; upstream has since put both behind
+    # cargo features, so `default-features = false` — which this has always
+    # had — silently dropped them when the pin moved to the newer engine.
+    #
+    # It is not a subtle loss. `window.crypto` becomes undefined, so
+    # `crypto.randomUUID()` and `crypto.getRandomValues()` throw on a large
+    # slice of the web, and `canvas.getContext("webgl")` returns null. Neither
+    # produces an error that names the browser. Checked by diffing the
+    # lockfile across the bump: seventy-one crates left the graph, among them
+    # `servo-webgl`, `aes`, `rsa`, `ecdsa`, `ed25519-dalek`, `ml-kem` and
+    # `sha3`.
+    "webcrypto",
+    "webgl",
     "webgpu",
 ] }
 
