@@ -23,6 +23,11 @@ the one genuinely surprising thing in the codebase.
   The half that *does* need it is linted and tested in the release build.
   Locally, `cargo clippy` over everything is a few seconds once the engine has
   been built once.
+- **The packaging half is linted too.** `shellcheck -x`, `actionlint`,
+  PSScriptAnalyzer, `desktop-file-validate`, `appstreamcli`, `mandoc -Tlint`
+  and a render of both PKGBUILDs all run on every pull request, because almost
+  none of that can be *run* on a developer's machine — and the alternative to
+  a linter is finding the typo three hours into a release build.
 - **No new dependencies without a reason in the PR description.** The engine is
   already enormous; the chrome should stay small.
 - **`ui.rs` never touches the engine.** If you find yourself reaching for it
@@ -42,8 +47,9 @@ the one genuinely surprising thing in the codebase.
 [docs/TODO.md](docs/TODO.md) is the working queue and the better place to pick
 from. The easiest starts on it:
 
-- **Try the Linux or Windows build and say what happened.** They have never been
-  run. No Rust required.
+- **Try one of the Linux packages, the AppImage, or the Windows build and say
+  what happened.** None of them has ever been run. No Rust required — install
+  the artefact from a release and report whether it starts.
 - Session restore (workspaces and tabs across launches).
 - Clearing cookies and site data from Settings — the engine calls exist.
 - A favicon cache on disk, so history and favourites show icons.
