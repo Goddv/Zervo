@@ -245,6 +245,17 @@ struct RunningApp {
     /// Owns the little program that takes the card's corners out of the
     /// framebuffer; it is compiled on first use inside a paint callback.
     corner_eraser: Arc<Mutex<backdrop::Eraser>>,
+    /// Whether an erased pixel shows a backdrop rather than nothing.
+    ///
+    /// The card's corners are rounded by cutting them out of the framebuffer
+    /// and drawing the chrome back over the hole — same paint, same backdrop,
+    /// nothing left to match. That only works where the window composites with
+    /// alpha and something sits behind it, which today means macOS with its
+    /// `NSVisualEffectView`. Everywhere else the window is opaque, and the
+    /// destination-out pass takes the colour with it and leaves black.
+    ///
+    /// So this decides between the two techniques rather than assuming one.
+    translucent_window: bool,
     /// The uploaded textures for it: the picture, and the blurred copy every
     /// glass surface over it is frosted against. Held here rather than in the
     /// manager because making one needs an egui context, and the manager runs
@@ -291,6 +302,14 @@ impl ApplicationHandler<WakerEvent> for App {
         // Frosted-glass backdrop behind the (translucent) chrome.
         #[cfg(target_os = "macos")]
         let vibrancy = vibrancy::install(&window, objc2_app_kit::NSVisualEffectMaterial::Sidebar);
+
+        // Only true where the window was created transparent *and* a backdrop
+        // was actually installed behind it. If the effect view failed to go in,
+        // an erased corner would be a hole onto nothing.
+        #[cfg(target_os = "macos")]
+        let translucent_window = vibrancy.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let translucent_window = false;
 
         let display_handle = event_loop
             .display_handle()
@@ -476,6 +495,7 @@ impl ApplicationHandler<WakerEvent> for App {
             page_backdrop: Arc::new(std::sync::Mutex::new(backdrop::PageBackdrop::default())),
             page_backdrop_texture: None,
             corner_eraser: Arc::new(Mutex::new(backdrop::Eraser::default())),
+            translucent_window,
             wallpaper_texture: None,
             wallpaper_frost: None,
             #[cfg(target_os = "macos")]
@@ -1050,6 +1070,7 @@ impl RunningApp {
         // Handed to the paint callback, which runs inside `run` and so cannot
         // borrow `self`.
         let eraser = self.corner_eraser.clone();
+        let translucent_window = self.translucent_window;
         let capture = (frosting
             && self
                 .page_backdrop
@@ -1165,12 +1186,19 @@ impl RunningApp {
                             capture,
                         );
                     }
-                    backdrop::cut_corners_into(
-                        &root.layer_painter(LayerId::background()),
-                        content_rect,
-                        theme::CONTENT_RADIUS,
-                        &eraser,
-                    );
+                    // Only where a hole shows a backdrop. On an opaque window
+                    // the destination-out pass takes the colour with it and
+                    // leaves black, which is worse than the square corner it
+                    // was cutting away — there, the mask below is drawn opaque
+                    // over the page instead.
+                    if translucent_window {
+                        backdrop::cut_corners_into(
+                            &root.layer_painter(LayerId::background()),
+                            content_rect,
+                            theme::CONTENT_RADIUS,
+                            &eraser,
+                        );
+                    }
                     blitted = true;
                 }
             }
@@ -1179,15 +1207,24 @@ impl RunningApp {
                 root,
                 content_rect,
                 &palette,
-                blitted,
-                settings.top_glow,
-                settings.content_border,
-                settings
-                    .content_shadow
-                    .then_some(settings.content_shadow_amount),
-                settings
-                    .content_halo
-                    .then_some((settings.content_halo_tint, settings.content_halo_amount)),
+                if !blitted {
+                    // An internal page rounds itself.
+                    ui::Corners::AlreadyRounded
+                } else if translucent_window {
+                    ui::Corners::Cut
+                } else {
+                    ui::Corners::Masked
+                },
+                ui::CardFrame {
+                    top_glow: settings.top_glow,
+                    border: settings.content_border,
+                    shadow: settings
+                        .content_shadow
+                        .then_some(settings.content_shadow_amount),
+                    halo: settings
+                        .content_halo
+                        .then_some((settings.content_halo_tint, settings.content_halo_amount)),
+                },
             );
 
             ui_output = Some(output);

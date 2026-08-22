@@ -33,7 +33,7 @@ use settings_page::*;
 use text::*;
 
 pub use backdrops::{draw_zervo_mark, paint_newtab_background};
-pub use frame::{PANEL_REACH, finish_content_frame, vertical_gradient};
+pub use frame::{CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient};
 pub use text::{clamp_into, display_name, ellipsize, initial, normalize_url};
 
 #[derive(Debug)]

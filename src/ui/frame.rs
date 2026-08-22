@@ -299,17 +299,55 @@ pub(crate) fn paint_card_shadow(
     ));
 }
 
-#[expect(clippy::too_many_arguments)]
+/// How the content card's square corners get rounded off.
+///
+/// Which of these applies is not a style choice — it is what the window can
+/// actually do. Cutting a corner away and painting the chrome back over the
+/// hole gives a perfect match, because it is the same paint on the same
+/// backdrop as the chrome beside it; but an erased pixel is only a hole where
+/// the window composites with alpha and something sits behind it. On an opaque
+/// window the destination-out pass takes the colour with it and leaves black.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Corners {
+    /// An internal page, drawn by egui with rounded corners of its own.
+    /// Masking here would lay a second tint over the first.
+    AlreadyRounded,
+    /// Cut out of the framebuffer. Paint the chrome back at its own tint.
+    Cut,
+    /// Nothing could be cut, so the page's square corner is still there and
+    /// has to be hidden. Opaque, because that is what hiding means.
+    Masked,
+}
+
+/// What Appearance says the card should look like.
+///
+/// Bundled rather than passed as four positional arguments. `border` used to
+/// sit between two `f32`s and next to two `Option`s, and transposing any of
+/// them changed the render with nothing to complain about.
+#[derive(Clone, Copy)]
+pub struct CardFrame {
+    /// Strength of the lit band across the top of the window.
+    pub top_glow: f32,
+    pub border: bool,
+    /// Spread, when the card casts a shadow.
+    pub shadow: Option<f32>,
+    /// Tint and amount, when the card carries a halo.
+    pub halo: Option<(crate::settings::HaloTint, f32)>,
+}
+
 pub fn finish_content_frame(
     root: &Ui,
     content_rect: Rect,
     palette: &Palette,
-    mask_corners: bool,
-    top_glow: f32,
-    border: bool,
-    shadow: Option<f32>,
-    halo: Option<(crate::settings::HaloTint, f32)>,
+    corners_style: Corners,
+    frame: CardFrame,
 ) {
+    let CardFrame {
+        top_glow,
+        border,
+        shadow,
+        halo,
+    } = frame;
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     // The oversized fans must only bleed inward over the blit — clip them so
     // they can't notch the halo painted around the card.
@@ -385,7 +423,7 @@ pub fn finish_content_frame(
     // meets the page is a hard, stair-stepped edge. Each arc is therefore
     // retraced afterwards with a stroked line — which epaint *does*
     // antialias — in the same colour, feathering the boundary.
-    if mask_corners {
+    if corners_style != Corners::AlreadyRounded {
         let mut mesh = Mesh::default();
         let mut arc_edges: Vec<(Vec<egui::Pos2>, Color32)> = Vec::new();
         for (corner, center, start_angle, outward) in corners {
@@ -419,13 +457,21 @@ pub fn finish_content_frame(
             // the masks disappear into the top gradient instead of stamping
             // flat background patches over it.
             let base = mesh.vertices.len() as u32;
-            // The chrome's own tint, at every corner, over the hole the eraser
-            // cut. The top two used to be opaque instead, because they were
-            // painted over the page's square corner rather than over a hole —
-            // and an opaque patch cannot match a translucent surround, which is
-            // what made them read as dark notches. Now that all four are cut,
-            // all four are the same paint on the same backdrop.
-            let (opacity, glow) = (tint, top_glow);
+            // Over a cut corner the chrome's own tint is exactly right: it is
+            // the same paint on the same backdrop as the chrome beside it.
+            // Over an uncut one it would be a thin wash over the page's white
+            // square, so there it has to be opaque — that is the whole job.
+            //
+            // The glow applies either way. Leaving it out was a workaround for
+            // a bug in `chrome_fill_at`, not a decision: it blended with
+            // `theme::mix`, which returns an opaque colour, so a translucent
+            // glow came back nearly black. That is fixed, so the mask can carry
+            // the same lit band the chrome beside it carries.
+            let opacity = match corners_style {
+                Corners::Cut => tint,
+                _ => 1.0,
+            };
+            let glow = top_glow;
             mesh.colored_vertex(corner_out, chrome_at(corner_out.y, opacity, glow));
             for point in &arc {
                 mesh.colored_vertex(*point, chrome_at(point.y, opacity, glow));
