@@ -31,3 +31,28 @@ servo = { git = "https://github.com/Goddv/servo", rev = "73db5dc4f44c080837464cf
 # Unoptimised Stylo frames overflow the default 512 KB style-thread stack on
 # complex pages; Servo exposes this knob for exactly that reason.
 SERVO_STYLE_THREAD_STACK_SIZE_KB = "2048"
+
+# The oldest macOS a build is allowed to require.
+#
+# It was not set at all, so each target took rustc's default: 11.0 for
+# aarch64-apple-darwin and 10.12 for x86_64-apple-darwin. That was survivable
+# while only Apple Silicon was built; `lipo` will fuse two halves advertising
+# different floors without comment, so it stops being survivable the moment
+# both are shipped in one binary.
+#
+# 11.0 is the honest number rather than a chosen one: it is what the arm64
+# binary already records in its LC_BUILD_VERSION, and it is the floor of the
+# arm64 slice of the GStreamer framework Servo pins. The bundle's
+# `LSMinimumSystemVersion` used to say 13.0 — typed in beside the compiler
+# rather than derived from it — which turned macOS 11 and 12 away at launch
+# from a binary that would have run.
+#
+# Changing this invalidates every crate whose build script compiles C or C++,
+# which in this dependency graph is most of the expensive ones. It is a one-off
+# cost.
+#
+# `force = true` because cargo's `[env]` defaults to yielding to whatever is
+# already in the environment — which would make this line do nothing on exactly
+# the machine where it matters, and produce a universal binary whose two halves
+# disagree, silently.
+MACOSX_DEPLOYMENT_TARGET = { value = "11.0", force = true }
