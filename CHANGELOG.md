@@ -1,5 +1,106 @@
 # Changelog
 
+## Unreleased
+
+**A macOS build that runs on Intel.** Releases were Apple Silicon only, and the
+disk image said so. Building the other half turns out to cost minutes rather
+than hours — `mozjs` downloads a prebuilt SpiderMonkey for `x86_64-apple-darwin`
+instead of compiling it, and every dylib in the GStreamer framework Servo pins
+is already universal — so the two are `lipo`'d into one binary on one runner.
+One download, both architectures.
+
+**...and on macOS 11, which it always could.** `LSMinimumSystemVersion` said
+13.0. The binary's own floor was 11.0, because nobody had set a deployment
+target and that is rustc's default for aarch64. So the bundle turned away Big
+Sur and Monterey at launch from a binary that would have run on them.
+`MACOSX_DEPLOYMENT_TARGET` is now set in `.cargo/config.toml`, forced rather
+than merely suggested, and the plist reads it rather than repeating it — which
+also stops `lipo` fusing two halves that disagree, since the Intel default was
+10.12 and nothing would have said so.
+
+**Four more ways to install it on Linux.** An **AppImage** for x86_64 and
+aarch64, built inside Ubuntu 22.04 because glibc runs old binaries on new
+systems and never the reverse; a portable **tarball**; **`PKGBUILD`s** for the
+AUR, both `zervo` and `zervo-bin`, generated with the real checksums of the
+artefacts that were built and validated in an Arch container against everything
+the AUR's own hook would reject a push for; and `.deb`s for **arm64** as well as
+amd64, on **Ubuntu 26.04** as well as 24.04. Fedora moves to **44**, on both
+architectures.
+
+The AppImage deliberately bundles neither the graphics stack nor GStreamer. A
+bundled `libwayland-client` against a newer host Mesa makes `eglGetDisplay`
+return `EGL_BAD_PARAMETER` and the browser never draws a frame; a
+`GST_PLUGIN_SYSTEM_PATH_1_0` pointed at a directory that does not exist
+corrupts the user's GStreamer registry for every other application on the
+machine. The build refuses to produce a file if any of the host-coupled
+libraries got in.
+
+**The Linux packages stopped lying about their dependencies.** `zenity` opens
+the file chooser, `xdg-open` opens a finished download, `secret-tool` stores a
+password. None of them is linked, so neither `dpkg-shlibdeps` nor `rpmbuild`
+ever found them, and the features silently did nothing on a machine without
+them. They are `Recommends` now. The `.deb` also registers `x-www-browser`, and
+declares an installed size, and the `.rpm` drops a `BuildArch` that was the
+wrong tag for a package containing an ELF binary.
+
+**A Windows installer, and GStreamer beside the exe.** There was a zip. There is
+now also a per-user NSIS installer — per-user because an unsigned installer
+asking for administrator rights is the combination Windows objects to most
+loudly, and nothing here needs to live outside a profile — which registers
+Zervo's capability to handle `http` and `https`, so it appears in Settings →
+Default apps. The Visual C++ runtime travels with the exe, which it always
+should have, and with `-GStreamerRoot` so does GStreamer, which means audio and
+video on Windows for the first time. Nobody has watched any of it run.
+
+Windows on ARM is wired and switched off. `aarch64-pc-windows-msvc` is Rust tier
+1 and `mozjs` publishes a SpiderMonkey for it, but MSVC's `<arm_fp16.h>`
+typedefs `float16_t` and the vendored `glsl-optimizer` declares a struct of the
+same name; both the upstream fix and the Servo PR carrying it are open and
+unmerged, and there is no GStreamer build for Windows on ARM at all. The x64
+build runs on those machines under Prism, which does not emulate the GPU path.
+
+**One workflow owns a release.** Three of them used to attach their own
+artefacts to the tag as they finished — a create-or-update race, no way to
+produce a `SHA256SUMS` spanning platforms, and a pipeline that would break the
+day immutable releases were switched on. Now: draft, attach everything to the
+draft, publish last, with checksums and build provenance over the lot. If any
+platform fails the draft stays a draft. The hour-long build jobs hold no write
+token and check out with `persist-credentials: false`, so a release token is
+never in reach of a build script from any of the thousand-odd crates in the
+graph.
+
+**`~/.cargo/git/db` was in no cache step.** The engine is a pinned revision of a
+Servo fork, which is a very large bare clone, and every job in every workflow
+re-fetched it. That, the toolchain install, sccache and `CARGO_INCREMENTAL=0`
+now live in one composite action instead of four copies that had drifted apart.
+Every `cargo` invocation passes `--locked`: a tagged release must resolve the
+graph the lockfile describes and nothing else.
+
+**Half the repository could not be checked at all.** None of the packaging can
+be run on the machine it is written on, and the only alternative to a linter was
+finding the typo three hours into a release build. Every pull request now runs
+`shellcheck -x` over the scripts and the shared library they source,
+`actionlint` over the workflows, PSScriptAnalyzer over the PowerShell,
+`desktop-file-validate` and `appstreamcli` over the freedesktop metadata,
+`mandoc` over the new man page, and a render of both PKGBUILDs.
+
+**And a pile of small things that were each one release away from mattering.**
+The version was read as the first `version =` at column zero in `Cargo.toml`,
+which a `[workspace.package]` block would have quietly stamped onto every
+package. `dpkg-shlibdeps` exits non-zero for ordinary reasons, and under
+`set -e` with `pipefail` that killed the script before the fallback it had —
+silently, with the error discarded. An unrecognised architecture was passed
+through into `Architecture:` and produced a package that built cleanly and could
+not be installed. `codesign` failing was a warning even when a real Developer ID
+had been asked for, and the loop it ran in was a subshell where `set -e` could
+not reach. The ANGLE DLLs were picked from whichever build directory the
+filesystem offered first. A 1024×1024 icon was installed as
+`hicolor/256x256/apps/zervo.png`, which every icon cache believes. The RPM
+changelog date was typed by hand next to a weekday `rpmbuild` checks. And the
+desktop entry and AppStream metadata are now named after the application ID, so
+GNOME Software and KDE Discover show a description and screenshots rather than a
+bare name.
+
 ## 0.4.1 — 21 August 2026
 
 **Windows starts.** It did not: the process printed a warning about GPU

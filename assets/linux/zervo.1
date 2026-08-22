@@ -1,0 +1,44 @@
+.\" Manual page for Zervo. Deliberately short: the browser has one argument.
+.TH ZERVO 1 "2026-08-22" "Zervo" "User Commands"
+.SH NAME
+zervo \- a sidebar-first browser built on the Servo engine
+.SH SYNOPSIS
+.B zervo
+.RI [ URL ]
+.SH DESCRIPTION
+.B Zervo
+is a browser chrome \(em sidebar, workspaces, tabs, settings \(em wrapped around
+Servo, the independent web engine written in Rust. There is no Chromium and no
+Gecko underneath.
+.PP
+Servo is not yet a complete web engine, so some sites will not work. This is an
+experiment rather than a browser to depend on.
+.SH OPTIONS
+.TP
+.I URL
+Open this address instead of the configured homepage. A bare word that is not a
+URL is put through the configured search engine. An address beginning
+.B zervo://
+names one of Zervo's own pages and is opened over the homepage.
+.SH ENVIRONMENT
+.TP
+.B SERVO_STYLE_THREAD_STACK_SIZE_KB
+Size, in kilobytes, of the stack given to each style thread. Unoptimised Stylo
+frames overflow the engine's 512\ KB default on complex pages.
+.TP
+.B RUST_LOG
+Log filter, in the usual
+.BR env_logger (3)
+syntax.
+.SH FILES
+.TP
+.I ~/.config/Zervo/
+Settings, history, bookmarks and the password index.
+.SH BUGS
+Report problems at
+.UR https://github.com/Goddv/Zervo/issues
+.UE .
+.SH SEE ALSO
+.UR https://servo.org
+The Servo engine
+.UE .

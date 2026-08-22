@@ -1,0 +1,86 @@
+name: Set up a Zervo build
+description: >
+  The toolchain, the cargo cache and sccache — the three steps every platform
+  build repeated verbatim, and drifted apart in.
+
+inputs:
+  key:
+    description: Cache discriminator, so jobs with different feature sets do not fight over one entry
+    required: true
+  sccache:
+    description: Install sccache and point RUSTC_WRAPPER at it
+    required: false
+    default: "true"
+  sccache-version:
+    description: >
+      Pinned deliberately. sccache namespaces its cache by its own version, so
+      letting this float to "latest release" throws the entire cache away the
+      day upstream publishes — in the middle of a release, for a build measured
+      in hours.
+    required: false
+    default: v0.17.0
+
+runs:
+  using: composite
+  steps:
+    - name: Install the pinned Rust toolchain
+      shell: bash
+      # `rustup toolchain install` with no argument reads rust-toolchain.toml,
+      # and is idempotent. The old `rustup show active-toolchain || rustup
+      # toolchain install` was a guard around a command that does not fail in
+      # the way it was guarding against.
+      run: |
+        rustup toolchain install --profile minimal
+        rustup show active-toolchain
+        cargo --version && rustc --version
+
+    - name: Cache the cargo registry and git database
+      uses: actions/cache@v6
+      with:
+        # Exactly what the Cargo book says to cache, and nothing else.
+        # registry/src and git/checkouts are deliberately absent: cargo
+        # recreates both from the compressed copies faster than a cache
+        # restores them.
+        #
+        # git/db matters more here than anywhere: the engine is a pinned
+        # revision of a Servo fork, and that is a very large bare clone to
+        # fetch on every single run. It was missing from every cache step.
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
+          cargo-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install sccache
+      if: inputs.sccache == 'true'
+      uses: mozilla-actions/sccache-action@v0.0.11
+      with:
+        version: ${{ inputs.sccache-version }}
+
+    - name: Point the compilers at sccache
+      if: inputs.sccache == 'true'
+      shell: bash
+      # RUSTC_WRAPPER covers rustc. CMAKE_*_COMPILER_LAUNCHER covers the C and
+      # C++ that Servo's build scripts drive through cmake, which rustc's
+      # wrapper never sees and which is a large share of a cold build.
+      #
+      # CARGO_INCREMENTAL=0 is not optional: sccache cannot cache incremental
+      # compilation, so leaving it on silently defeats the cache for any
+      # profile that has it — which includes the dev-fast profile this repo
+      # offers as a build option.
+      run: |
+        {
+          # Without this sccache falls back to a local disk cache, which on a
+          # fresh runner is empty — so it wraps every compiler invocation,
+          # stores everything, and throws the lot away at the end of the job.
+          # It used to be set in each workflow's `env:` and was lost when those
+          # three steps moved in here.
+          echo "SCCACHE_GHA_ENABLED=true"
+          echo "RUSTC_WRAPPER=sccache"
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          echo "CARGO_INCREMENTAL=0"
+        } >> "$GITHUB_ENV"

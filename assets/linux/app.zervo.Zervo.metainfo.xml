@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata. This is what GNOME Software, KDE Discover and the AppImage
+  tooling read; without it Zervo appears in a software centre as a bare name with
+  no description, no screenshots and no licence.
+
+  The component id matches the desktop file's basename, which is what ties the
+  two together. appimagetool looks for this file under a *different* name —
+  <desktop-basename>.appdata.xml — so the AppImage build installs a second copy
+  under that name. Same file, two conventions.
+
+  Validated in CI by check.yml, with appstreamcli in offline mode.
+-->
+<component type="desktop-application">
+  <id>app.zervo.Zervo</id>
+  <name>Zervo</name>
+  <summary>A sidebar-first browser built on the Servo engine</summary>
+  <developer id="io.github.goddv">
+    <name>Goddv</name>
+  </developer>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0</project_license>
+
+  <description>
+    <p>
+      Zervo is a browser chrome — sidebar, workspaces, tabs, settings — wrapped
+      around Servo, the independent web engine written in Rust. There is no
+      Chromium and no Gecko underneath.
+    </p>
+    <p>
+      Tabs live in a column down the side rather than a row across the top, and
+      are grouped into workspaces. The chrome is drawn with egui, so it themes
+      itself rather than the platform's widget set.
+    </p>
+    <p>
+      Servo is not yet a complete web engine, so some sites will not work. This
+      is an experiment rather than a browser to depend on.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">app.zervo.Zervo.desktop</launchable>
+  <url type="homepage">https://github.com/Goddv/Zervo</url>
+  <url type="bugtracker">https://github.com/Goddv/Zervo/issues</url>
+  <url type="vcs-browser">https://github.com/Goddv/Zervo</url>
+
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+
+  <keywords>
+    <keyword>browser</keyword>
+    <keyword>web</keyword>
+    <keyword>servo</keyword>
+  </keywords>
+
+  <provides>
+    <binary>zervo</binary>
+  </provides>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <!--
+    recommends, not requires. A <requires> display_length marks the application
+    as incompatible on anything smaller, and a software centre will refuse to
+    offer it — which is a strong claim to make about a browser that merely
+    looks cramped on a small screen.
+  -->
+  <recommends>
+    <display_length compare="ge">768</display_length>
+  </recommends>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The sidebar open, with workspaces and tabs in a column on the left</caption>
+      <image type="source">https://raw.githubusercontent.com/Goddv/Zervo/main/assets/screenshots/zervo-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The same window with the sidebar collapsed to a slim bar</caption>
+      <image type="source">https://raw.githubusercontent.com/Goddv/Zervo/main/assets/screenshots/zervo-light-bar.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The dark theme</caption>
+      <image type="source">https://raw.githubusercontent.com/Goddv/Zervo/main/assets/screenshots/zervo-dark.png</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1">
+    <!-- A browser shows whatever the user navigates to. -->
+    <content_attribute id="social-info">moderate</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="0.4.1" date="2026-08-21">
+      <url type="details">https://github.com/Goddv/Zervo/blob/main/CHANGELOG.md</url>
+      <description>
+        <p>Windows starts, the about page reports the real driver, and idle CPU
+        drops from nineteen per cent to nought point two.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -7,13 +7,23 @@ name: Check
 # workflow at all, and neither did `cargo test`.
 #
 # The engine-independent half of the browser now lives in `zervo-core`, which
-# builds against nothing heavier than egui and rustls. Linting and testing it
-# takes about ten seconds from cold. The half that does need the engine is
-# checked in the release builds, where it is compiled anyway.
+# builds against nothing heavier than egui and rustls. The half that does need
+# the engine is checked in the release builds, where it is compiled anyway.
+#
+# The packaging half of the repository is checked here too. Every script and
+# workflow below either cannot be run on this machine at all — the Linux ones —
+# or takes hours when it can, so the only thing standing between a typo and a
+# failed release three hours in is a linter.
 on:
   push:
     branches: [main]
   pull_request:
+
+permissions: {}
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,30 +33,41 @@ jobs:
     name: Formatting
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - run: rustup component add rustfmt
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # `rustup component add rustfmt` adds it to whichever toolchain is
+      # active, and rust-toolchain.toml pins one the image may not have —
+      # rustup 1.28 stopped installing it as a side effect. Installing the
+      # pinned toolchain is both the fix and unnecessary work avoided: the
+      # toolchain file already lists rustfmt among its components.
+      - run: rustup toolchain install --profile minimal
       - run: cargo fmt --all --check
 
   core:
     name: Lint and test zervo-core
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - name: Install Rust toolchain
-        # Pinned by rust-toolchain.toml, which also brings clippy.
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: core-cargo-${{ hashFiles('Cargo.lock') }}
+          persist-credentials: false
+
+      # No sccache: this compiles a few dozen small crates, and the wrapper
+      # would cost more than it saves. The cargo cache is worth having, though
+      # — the engine is a pinned revision of a git repository, and cargo has to
+      # fetch it to resolve the workspace even though nothing here builds it.
+      - uses: ./.github/actions/setup-build
+        with:
+          key: core
+          sccache: "false"
+
       - name: Clippy
         # `-D warnings` is the point: the lint policy lives in the workspace's
         # `[lints]` table, and this is what makes it mean something.
-        run: cargo clippy -p zervo-core --all-targets -- -D warnings
+        run: cargo clippy -p zervo-core --all-targets --locked -- -D warnings
+
       - name: Tests
-        run: cargo test -p zervo-core
+        run: cargo test -p zervo-core --locked
 
   deny:
     name: Advisories and licences
@@ -54,7 +75,9 @@ jobs:
     # Reads Cargo.lock; compiles nothing. A vulnerable dependency should not
     # need an hour of engine build to be noticed.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           # The action runs in a musl container, which does not have the
@@ -64,10 +87,83 @@ jobs:
           rust-version: stable
           command: check advisories bans licenses sources
 
-  shell:
-    name: Shell scripts
+  scripts:
+    name: Packaging scripts
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck
-      - run: shellcheck scripts/*.sh
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            shellcheck desktop-file-utils appstream
+
+      - name: shellcheck
+        # -x so the shared library in scripts/lib is followed rather than
+        # reported as unreadable. Every script that sources it carries a
+        # `# shellcheck source=` directive for the same reason.
+        run: shellcheck -x scripts/*.sh scripts/lib/*.sh
+
+      - name: PowerShell
+        shell: pwsh
+        # The Windows packaging script cannot be run here, but it can be parsed
+        # and linted — which is the difference between finding a mistake now
+        # and finding it at the end of a three-hour Windows build. PSScript-
+        # Analyzer is what catches the specifically-PowerShell ones, such as
+        # assigning to $args or $Profile, both of which are automatic variables
+        # and both of which this script wanted to use.
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/package-windows.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
+          Write-Host "scripts/package-windows.ps1 parses"
+
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
+          Invoke-ScriptAnalyzer -Path scripts/package-windows.ps1 -Severity Error -EnableExit
+          Invoke-ScriptAnalyzer -Path scripts/package-windows.ps1 -Severity Warning |
+            Format-Table -AutoSize
+
+      - name: Desktop entry and AppStream metadata
+        # appimagetool refuses to build without a valid desktop entry, and both
+        # GNOME Software and KDE Discover read the metainfo. Validating here
+        # costs a second; validating during the AppImage build would let an
+        # appstreamcli version difference fail a release that has already spent
+        # three hours compiling the engine.
+        run: |
+          desktop-file-validate assets/linux/app.zervo.Zervo.desktop
+          appstreamcli validate --no-net --explain assets/linux/app.zervo.Zervo.metainfo.xml
+
+      - name: Man page
+        run: |
+          sudo apt-get install -y --no-install-recommends mandoc
+          mandoc -Tlint assets/linux/zervo.1
+
+      - name: PKGBUILDs render and parse
+        # `makepkg --printsrcinfo` needs Arch and runs in linux.yml's own job;
+        # this catches the mistakes that do not.
+        run: |
+          ./scripts/make-aur.sh --output "$RUNNER_TEMP/aur"
+          for pkg in zervo zervo-bin; do
+            bash -n "$RUNNER_TEMP/aur/$pkg/PKGBUILD"
+            echo "ok  $pkg"
+          done
+
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: actionlint
+        # Checks the YAML, the expression syntax, the runner labels and — via
+        # shellcheck — every `run:` block. Runner labels newer than actionlint's
+        # own snapshot are declared in .github/actionlint.yaml.
+        run: |
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color

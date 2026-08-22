@@ -1,0 +1,12 @@
+# Runner labels actionlint does not know yet.
+#
+# actionlint ships a snapshot of GitHub's label list and 1.7.12 predates these
+# three. They are real: ubuntu-26.04 and ubuntu-26.04-arm went to public
+# preview on 11 June 2026, and windows-11-vs2026-arm went generally available
+# on 20 August 2026. Without this file actionlint fails the workflows it is
+# meant to be checking.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
+    - windows-11-vs2026-arm

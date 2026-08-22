@@ -80,6 +80,30 @@ Listed so nobody starts them expecting to finish. Details in
 
 ## Housekeeping
 
+- **The style-thread stack size never reaches a shipped binary.**
+  `.cargo/config.toml` sets `SERVO_STYLE_THREAD_STACK_SIZE_KB = "2048"` because
+  unoptimised Stylo frames overflow the engine's 512 KB default on complex
+  pages. Cargo's `[env]` only reaches processes cargo itself starts, so it
+  applies to `cargo run` and to nothing that was installed: a `.app` opened from
+  the Dock, a `zervo` from a `.deb`, the Windows exe. It matters most for the
+  `dev-fast` profile, which is unoptimised and which both the macOS and Linux
+  workflows will happily package. The fix is to set the floor inside the program
+  before the engine is built, so it travels with the binary; keep the `[env]`
+  line for `cargo run`, but stop treating it as the mechanism.
+- **The Windows exe has no icon or manifest of its own.** The installer's
+  shortcuts point at `assets/icon/zervo.ico`, so the Start menu is right and
+  Explorer is not. Embedding it needs a `build.rs` and a resource compiler —
+  and the same build script is where `longPathAware` would go, which is the
+  other half of making long paths work on Windows rather than relying on a
+  short workspace root.
+- **Nothing is signed, on any platform.** [PACKAGING.md](PACKAGING.md) has the
+  numbers: $99/year for an Apple Developer ID, about $10/month for Azure
+  Artifact Signing on Windows. The macOS workflow is already wired for it and
+  inert without the secrets; Windows has no signing step at all yet.
+- **The AUR packages are generated but never published.** Every release attaches
+  a ready `PKGBUILD` and `.SRCINFO` for `zervo` and `zervo-bin`. Pushing them is
+  a git push over SSH to an account CI does not have, so it stays manual — but
+  nobody has done it once.
 - **No automated *UI* tests.** There are sixty-seven unit tests now, and
   `zervo-core` runs its fifty-three on every pull request — but they cover
   arithmetic, colour, bytes and files, not anything drawn. [TESTING.md](TESTING.md)

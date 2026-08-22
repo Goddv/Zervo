@@ -1,0 +1,297 @@
+name: Release
+
+# The one workflow that owns a release.
+#
+# It used to be three: linux.yml, macos.yml and windows.yml each attached their
+# own artefacts to the tag as they finished. That is a create-or-update race
+# between jobs, it cannot produce a SHA256SUMS covering artefacts from more
+# than one platform, and it breaks outright the day immutable releases are
+# switched on for the repository, because a published immutable release will
+# not accept new assets.
+#
+# So: draft first, attach everything to the draft, publish last. If any
+# platform fails, the draft stays a draft and nothing half-finished is ever
+# visible.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing tag to build and release
+        type: string
+        required: true
+      publish:
+        description: Publish the draft at the end, rather than leaving it for review
+        type: boolean
+        default: false
+
+# Read-only by default. contents:write is granted to the two small jobs that
+# touch the release, and never to the hour-long build jobs, which run with a
+# token that cannot write anything and a checkout that does not keep it.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  # A superseded run of a release is not a thing: two pushes of the same tag is
+  # already a mistake, and cancelling a three-hour build halfway is worse than
+  # letting it finish.
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    name: Draft the release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # All of history, so the tag exists to verify against.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Work out the tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null \
+            || { echo "no such tag: $TAG"; exit 1; }
+
+          # The tag and the version have to agree. The AUR PKGBUILDs build
+          # their download URLs out of the version — `releases/download/v$pkgver/`
+          # — so a release tagged v0.4.2 from a tree that still says 0.4.1
+          # produces packages pointing at files that do not exist, and nothing
+          # anywhere would have said so.
+          cargo_version() {
+            sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' | head -1
+          }
+          TAGGED="$(git show "$TAG:Cargo.toml" | cargo_version)"
+          [ "$TAG" = "v$TAGGED" ] \
+            || { echo "tag $TAG does not match the Cargo.toml version at that tag ($TAGGED)"; exit 1; }
+
+          # And the workflow itself has to be running from the tagged commit,
+          # because a reusable workflow always runs at the caller's ref: on a
+          # manual run from a branch, the build jobs would compile the branch
+          # head and attach it to the tag's release.
+          TREE="$(cargo_version < Cargo.toml)"
+          [ "$TREE" = "$TAGGED" ] \
+            || { echo "this run is building $TREE but releasing $TAG; run it from the tagged commit"; exit 1; }
+
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; reusing it"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --draft \
+            --verify-tag \
+            --title "Zervo ${TAG#v}" \
+            --generate-notes
+
+  # The tarball the AUR source package builds from. A GitHub-generated tag
+  # tarball would do, except that its bytes have changed under people before
+  # now and a PKGBUILD pins a checksum. This one is produced once, here, and
+  # attached to the release.
+  source:
+    name: Source tarball
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The tag, not the branch head. On a tag push these are the same
+          # thing; on a manual run they are not, and `git archive "$TAG"` in a
+          # depth-1 checkout of a branch cannot resolve a tag it never fetched.
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Archive
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="$(sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' Cargo.toml | head -1)"
+          TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          mkdir -p dist
+          git archive --format=tar.gz \
+            --prefix="zervo-$VERSION/" \
+            -o "dist/zervo-$VERSION-src.tar.gz" \
+            "$TAG"
+          sha256sum dist/*.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-source
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  linux:
+    needs: draft
+    uses: ./.github/workflows/linux.yml
+
+  macos:
+    needs: draft
+    uses: ./.github/workflows/macos.yml
+    # Named rather than `secrets: inherit`, which would hand the build every
+    # secret the repository has. All six are optional; absent ones arrive as
+    # empty strings and the bundler falls back to an ad-hoc signature.
+    secrets:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+
+  windows:
+    needs: draft
+    uses: ./.github/workflows/windows.yml
+
+  # The AUR packages, with the checksums of the artefacts that were actually
+  # built rather than placeholders. Run inside Arch because .SRCINFO is what
+  # the AUR serves, and `makepkg --printsrcinfo` is the only thing that
+  # generates it correctly.
+  aur:
+    name: AUR packages
+    needs: [source, linux]
+    runs-on: ubuntu-24.04
+    container: quay.io/archlinux/archlinux:base-devel
+    steps:
+      - name: Prepare the container
+        run: |
+          pacman-key --init
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -Syu --noconfirm --needed git namcap
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # Two explicit downloads rather than one wildcard: this job runs as
+      # soon as `source` and `linux` are done, so a pattern broad enough to
+      # match macOS or Windows would pick up whatever happened to have
+      # finished, which is not a thing to build a checksum on.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: zervo-deb-*
+          path: incoming
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: zervo-source
+          path: incoming
+
+      - name: Render with real checksums
+        run: |
+          mkdir -p target/linux
+          find incoming -name '*.tar.gz' -exec cp {} target/linux/ \;
+          ls -la target/linux/
+          useradd --create-home --shell /bin/bash builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          sudo -u builder ./scripts/make-aur.sh --output target/linux/aur
+          for pkg in zervo zervo-bin; do
+            echo "=== $pkg ==="
+            cat "target/linux/aur/$pkg/PKGBUILD"
+            grep -q SKIP "target/linux/aur/$pkg/PKGBUILD" \
+              && echo "::warning::$pkg still has a SKIP checksum" || true
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-aur
+          path: target/linux/aur/**
+          if-no-files-found: error
+
+  publish:
+    name: Checksums, provenance and publish
+    needs: [draft, source, linux, macos, windows, aur]
+    # A partial failure leaves the draft alone rather than publishing half a
+    # release. `!cancelled()` rather than `success()` so that a cancelled run
+    # is also not treated as a reason to publish.
+    if: ${{ !contains(needs.*.result, 'failure') && !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # actions/attest needs all three: the first two to sign, the third to
+      # record where the artefact lives.
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: zervo-*
+          path: incoming
+
+      - name: Gather
+        run: |
+          mkdir -p release
+          # Flattened: the artefacts arrive one directory per upload, and a
+          # release is a flat list of files. The AUR directory is kept whole
+          # and tarred, because it is two packages of two files each.
+          find incoming -type f \
+               \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+                  -o -name '*.zsync' -o -name '*.dmg' -o -name '*.zip' \
+                  -o -name '*setup.exe' -o -name '*.tar.gz' \) \
+               -exec cp -n {} release/ \;
+          if [ -d incoming/zervo-aur ]; then
+            tar -czf release/zervo-aur-packages.tar.gz -C incoming/zervo-aur .
+          fi
+          ls -la release/
+
+      - name: Checksums
+        # One file covering every platform, which is the thing three
+        # independent release-uploading jobs could never produce.
+        run: |
+          cd release
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Provenance
+        # Needs a public repository, or GitHub Enterprise Cloud. Nice to have
+        # rather than load-bearing, so it is not allowed to fail a release.
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release/*
+
+      - name: Attach to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # gh works the repository out from --repo, GH_REPO, or the git
+          # remotes of the working directory — never from GITHUB_REPOSITORY.
+          # This job downloads artefacts and never checks out, so without this
+          # every release would fail at the last step with "failed to determine
+          # base repo", three hours in.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: gh release upload "$TAG" release/* --clobber
+
+      - name: Publish
+        # On a tag push this publishes. On a manual run it waits for the
+        # `publish` input, so a release can be built and inspected first.
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false --latest
+
+      - name: Leave it as a draft
+        if: ${{ github.event_name != 'push' && !inputs.publish }}
+        env:
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: echo "::notice::$TAG is ready as a draft. Publish it when you have looked at it."

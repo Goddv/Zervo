@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for a hardened-runtime signature.
+
+  Only used when scripts/bundle-macos.sh is given a real signing identity: the
+  hardened runtime is what Gatekeeper and notarization require, and it is also
+  what makes a browser stop working, because it forbids writing to memory and
+  then executing it. SpiderMonkey's JIT does exactly that, so a Developer ID
+  build without these two crashes on the first page that runs JavaScript —
+  which is every page.
+
+  Deliberately not here:
+
+    com.apple.security.cs.disable-library-validation — the bundled GStreamer
+    libraries are signed with the same identity as the bundle, so validation is
+    satisfied without weakening it. Add it only if a signing setup ever puts a
+    differently-signed dylib in Contents/MacOS/lib.
+
+    Anything from com.apple.security.* proper. Those are App Sandbox
+    entitlements, and this bundle is not sandboxed. Camera and microphone
+    access is governed by the NS*UsageDescription strings in Info.plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

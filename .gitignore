@@ -7,3 +7,6 @@
 
 # Scratch output from throwaway probes.
 *.raw
+
+# Left behind by anything that imports or byte-compiles the packaging scripts.
+__pycache__/

@@ -145,17 +145,22 @@ render simply are not offered for saving.
 ### Packaging
 
 ```bash
-./scripts/bundle-macos.sh          # -> target/Zervo.app
-./scripts/bundle-macos.sh --dmg    # -> target/Zervo.dmg
+./scripts/bundle-macos.sh --universal --dmg      # macOS, Intel and Apple Silicon
+./scripts/package-linux.sh --all                 # .deb, .rpm, AppImage, tarball, PKGBUILD
+pwsh scripts/package-windows.ps1 -Installer      # Windows, .zip and a setup .exe
 ```
 
-Linux `.deb`/`.rpm` and a Windows `.exe` are built by CI on every release tag —
-see [Platforms](#platforms) for how far they have been taken.
+A release tag produces all of it: a universal `.dmg`, `.deb`s for Ubuntu 24.04
+and 26.04 on both architectures, `.rpm`s for Fedora 44, x86_64 and aarch64
+AppImages, a portable tarball, `PKGBUILD`s for the AUR, a Windows zip and
+installer, and a `SHA256SUMS` covering the lot.
 
-macOS builds are unsigned, and macOS will refuse to open one on first launch.
-[docs/PACKAGING.md](docs/PACKAGING.md) covers what your users have to do about
-that, what signing would cost, and one link-time trap worth knowing about if you
-have GStreamer installed.
+Nothing is signed. On macOS that means macOS will refuse to open the app until
+the quarantine flag is cleared, and on Windows it means SmartScreen shows a
+warning on first run. [docs/PACKAGING.md](docs/PACKAGING.md) covers exactly what
+a user sees on each platform, what signing would cost, and the traps — a
+link-time one on macOS if you have GStreamer installed, and the reason there is
+no Windows ARM64 build.
 
 ## Layout
 
@@ -183,16 +188,30 @@ another platform would be written against.
 
 ## Platforms
 
-Every release tag builds all three. Only one of them has been run.
+Every release tag builds all of these. Only the first has been run.
 
 | Platform | Package | State |
 | --- | --- | --- |
-| **macOS** (Apple Silicon) | `.dmg`, GStreamer bundled | ✅ Used daily by its author |
-| **Debian / Ubuntu** | `.deb` | ⚠️ Builds and installs — never started |
-| **Fedora** | `.rpm` | ⚠️ Builds and installs — never started |
-| **Windows** x64 | self-contained `.exe` | ⚠️ Builds — startup crash fixed in 0.4.1, unconfirmed |
+| **macOS** 11+, Intel and Apple Silicon | universal `.dmg`, GStreamer bundled | ✅ Used daily by its author, on Apple Silicon |
+| **Ubuntu / Debian** | `.deb`, amd64 and arm64 | ⚠️ Builds and installs — never started |
+| **Fedora 44** | `.rpm`, x86_64 and aarch64 | ⚠️ Builds and installs — never started |
+| **Any glibc 2.35+** | `.AppImage`, x86_64 and aarch64 | ⚠️ Never run |
+| **Arch** | `PKGBUILD` for the AUR, not yet published | ⚠️ Validated, never built |
+| **Windows** x64 | `.zip` and an installer | ⚠️ Builds — startup crash fixed in 0.4.1, unconfirmed |
+| **Windows** ARM64 | — | ⛔ Blocked upstream; the x64 build runs under Prism |
 
-**Still a macOS release first.** All three packages come from the same tag, and
+The macOS bundle carries both architectures now. Building the Intel half costs
+minutes rather than hours — `mozjs` downloads a prebuilt SpiderMonkey for it,
+and the GStreamer framework Servo pins is already universal — so there is one
+download rather than two, and it runs on macOS 11 and later rather than 13.
+
+Windows on ARM has no build because Servo does not have one: a `float16_t`
+collision between MSVC's `<arm_fp16.h>` and the vendored `glsl-optimizer`, whose
+fix is still unmerged both upstream and in Servo. The x64 build runs on those
+machines through Prism, which emulates x64 user-mode code and does not emulate
+the GPU path. See [docs/PACKAGING.md](docs/PACKAGING.md).
+
+**Still a macOS release first.** Every package comes from the same tag, and
 the material system itself is portable — it is drawn by egui and nothing else.
 But the window's frosted backdrop is an AppKit feature, and the corner
 compositing built on top of it has been tried nowhere else.

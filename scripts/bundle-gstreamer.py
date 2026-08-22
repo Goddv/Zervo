@@ -49,9 +49,20 @@ def is_system_library(path):
 
 def non_system_dependencies(binary):
     """Every non-system dylib `binary` links against, as otool reports them."""
-    output = subprocess.run(
-        ["/usr/bin/otool", "-L", binary], capture_output=True, text=True, check=True
-    ).stdout
+    result = subprocess.run(
+        ["/usr/bin/otool", "-L", binary], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        # A plugin that has been renamed or dropped between GStreamer versions
+        # used to surface here as a bare CalledProcessError traceback naming
+        # otool, which says nothing about which plugin or why.
+        raise SystemExit(
+            f"otool could not read {binary}\n"
+            f"  {result.stderr.strip()}\n"
+            "If this is a plugin, check PLUGINS in this file against "
+            "gstreamer_plugin_lists/ in the servo crate."
+        )
+    output = result.stdout
     found = set()
     for line in output.splitlines():
         if not line.startswith("\t"):
@@ -70,7 +81,9 @@ def resolve_rpath(dependency, rpath):
     """
     if not dependency.startswith("@rpath/"):
         return dependency
-    relative = dependency.replace("@rpath/", "")
+    # removeprefix, not replace: `replace` strips every occurrence, so a path
+    # that legitimately contained the string twice came out mangled.
+    relative = dependency[len("@rpath/"):]
     for directory in ["", "..", "gstreamer-1.0"]:
         candidate = os.path.join(rpath, directory, relative)
         if os.path.exists(candidate):
@@ -78,7 +91,7 @@ def resolve_rpath(dependency, rpath):
     raise SystemExit(f"cannot resolve rpath dependency: {dependency}")
 
 
-def rewrite_to_relative(binary, dependencies, relative_path):
+def rewrite_to_relative(binary, dependencies):
     """Point `binary` at its dependencies inside the bundle instead of at
     wherever GStreamer happens to be installed on this machine.
 
@@ -128,7 +141,7 @@ def main(app):
     # Give the binary an rpath into the bundle. Servo's carries one already;
     # ours does not, and without it any reference we fail to rewrite dangles
     # with "no LC_RPATH's found" before the app even starts.
-    subprocess.run(
+    added = subprocess.run(
         [
             "install_name_tool",
             "-add_rpath",
@@ -138,17 +151,34 @@ def main(app):
         capture_output=True,
         text=True,
     )
+    # Unchecked, this produced a bundle that built cleanly and died at launch
+    # with "Library not loaded: @rpath/..., no LC_RPATH's found" — the exact
+    # failure the rpath is here to prevent. An rpath that is already present is
+    # not an error, only a repeat.
+    if added.returncode != 0 and "would duplicate path" not in added.stderr:
+        raise SystemExit(f"could not add an rpath to {binary}:\n  {added.stderr.strip()}")
 
     # The plugins are dlopened by name, so otool never mentions them. They have
     # to be listed explicitly or playback fails at runtime with no missing
     # symbol to point at why.
     pending = non_system_dependencies(binary)
-    pending.update(
-        os.path.join(gstreamer_libs, "gstreamer-1.0", f"lib{plugin}.dylib") for plugin in PLUGINS
-    )
-    rewrite_to_relative(binary, pending, relative_path)
+    missing = []
+    for plugin in PLUGINS:
+        path = os.path.join(gstreamer_libs, "gstreamer-1.0", f"lib{plugin}.dylib")
+        if os.path.exists(path):
+            pending.add(path)
+        else:
+            missing.append(plugin)
+    if missing:
+        # Named rather than fatal. Plugins come and go between GStreamer
+        # releases, and one absent codec is a format that will not play — not a
+        # reason to throw away a bundle that took hours to build. Failing here
+        # is what a stale list used to do, with a traceback naming otool.
+        print(f"  ! not in this GStreamer, skipped: {', '.join(missing)}")
+    rewrite_to_relative(binary, pending)
 
     copied = set()
+    by_basename = {}
     count = 0
     while pending:
         batch, pending = set(pending), set()
@@ -157,12 +187,24 @@ def main(app):
             source = resolve_rpath(dependency, gstreamer_libs)
             transitive = non_system_dependencies(source)
 
-            destination = os.path.join(libraries, os.path.basename(source))
+            name = os.path.basename(source)
+            destination = os.path.join(libraries, name)
             if not os.path.exists(destination):
                 shutil.copyfile(source, destination)
                 os.chmod(destination, 0o755)
+                by_basename[name] = source
                 count += 1
-                rewrite_to_relative(destination, transitive, relative_path)
+                rewrite_to_relative(destination, transitive)
+            elif by_basename.get(name) not in (None, source):
+                # Everything is flattened into one directory, so two libraries
+                # with the same file name and different contents cannot both be
+                # there. First writer used to win in silence, and whatever
+                # linked against the loser got the wrong library.
+                print(
+                    f"  ! two different libraries are both called {name}:\n"
+                    f"      kept    {by_basename[name]}\n"
+                    f"      dropped {source}"
+                )
 
             pending.update(transitive - copied)
 
