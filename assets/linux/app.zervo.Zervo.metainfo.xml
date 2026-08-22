@@ -95,6 +95,15 @@
   </content_rating>
 
   <releases>
+    <release version="0.4.2" date="2026-08-22">
+      <url type="details">https://github.com/Goddv/Zervo/blob/main/CHANGELOG.md</url>
+      <description>
+        <p>Notifications reach the window, five embedder delegates that were
+        empty are implemented, and nine web platform features Servo ships off
+        are switched on — among them IntersectionObserver, without which
+        lazy-loaded images never loaded at all.</p>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-08-21">
       <url type="details">https://github.com/Goddv/Zervo/blob/main/CHANGELOG.md</url>
       <description>

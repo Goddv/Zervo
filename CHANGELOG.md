@@ -1,6 +1,47 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 — 22 August 2026
+
+**Notifications arrive.** They did not: permission was granted and nothing ever
+appeared. Four defects, one of them in the engine — `Notification`'s show steps
+wait for the image, icon and badge a notification may carry, and Servo calls
+`show` once the last of those fetches lands, so a plain title-and-body
+notification queued no requests, waited forever and was never handed to the
+embedder. That is the second patch on the fork. A notification is shown in the
+window now, over the page that raised it, made of the same glass as every other
+floating panel, and kept behind a bell in the address bar so one missed by six
+seconds is still there. Toasts grow out of the bell rather than appearing beside
+it: a notification with no visible cause reads as the window doing something
+rather than the page. No system-notification integration — that wants a signed
+bundle — and the icons, badges and images the spec allows are dropped.
+
+**Five delegates that were sitting there empty.** The link target on hover,
+bottom-left and clipped to the content card. `beforeunload`, through the
+existing controls queue. A permission prompt, named for the host that asked.
+`evaluate_javascript`, and one honest use of it: ⌘⇧L fills the saved login for
+the page, https only, exact host match, values crossing as JSON literals rather
+than spliced into source. And `show_notification`, above.
+
+**Nine web-platform preferences Servo ships off.** IntersectionObserver was the
+one actually breaking pages: without it `loading="lazy"` images never load at
+all, so any site that lazy-loads showed blank rectangles forever. With it the
+async clipboard, adopted stylesheets, container queries, multi-column layout,
+variable fonts, the visual viewport, the Permissions API and WebGL 2. The flash
+between navigations is the theme's own background rather than white.
+
+**Command reports as Meta.** winit calls it `Super`; the UI Events spec calls
+it `Meta`, and that is what every browser puts in `KeyboardEvent.key`. Zervo
+passed `Super` straight through, so a page testing `e.key === "Meta"` never saw
+Command at all.
+
+**The engine moves to 22 August, and its patch stops being optional.**
+`.cargo/config.toml` used to keep the fork commented out so a fresh clone built
+against the published crate, with each workflow appending the same block. That
+stopped being true when the engine renamed `MouseButton`'s variants: a plain
+`cargo build` had been failing with three E0599s while every workflow stayed
+green, because the workflows all appended the patch and the one job that runs on
+a pull request never builds the binary. The revision lives in one file now
+instead of four.
 
 **A macOS build that runs on Intel.** Releases were Apple Silicon only, and the
 disk image said so. Building the other half turns out to cost minutes rather

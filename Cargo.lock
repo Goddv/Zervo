@@ -11485,7 +11485,7 @@ dependencies = [
 
 [[package]]
 name = "zervo"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -11515,7 +11515,7 @@ dependencies = [
 
 [[package]]
 name = "zervo-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "egui",
  "log",
