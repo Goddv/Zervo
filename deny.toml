@@ -62,4 +62,13 @@ confidence-threshold = 0.9
 
 [sources]
 unknown-registry = "deny"
-unknown-git = "allow"   # The engine is a git dependency in release builds.
+# The engine is a git dependency, so git sources cannot simply be denied — but
+# "allow" opened the category rather than naming the exception, which meant any
+# git source substituted for these two would have passed unremarked. These are
+# the only two in the lockfile: the Servo fork carrying Zervo's patches (see
+# docs/SERVO.md) and the style system, which Servo itself pulls from git.
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/Goddv/servo",
+    "https://github.com/servo/stylo",
+]

@@ -1,13 +1,44 @@
 name: Linux
 
-# Zervo compiles the Servo engine, so a cold build is the better part of an
-# hour. Linux runners are free on public repos, but there is no reason to spend
-# an hour on every push either — release tags and manual dispatch only.
+# Zervo compiles the Servo engine, so a build from cold is the better part of
+# an hour even with sccache warm. Linux runners are free on public repos, but
+# there is no reason to spend that on every push: this runs when release.yml
+# calls it, or by hand.
+#
+# Four package formats come out of here, all from one staging tree:
+#
+#   .deb       built on Ubuntu 24.04, which installs on 24.04 and 26.04 alike,
+#              plus a native 26.04 build for anyone who wants one
+#   .rpm       built inside Fedora 44, because rpmbuild derives the package's
+#              requirements from the binary and those have to be Fedora's
+#              sonames
+#   AppImage   built inside Ubuntu 22.04, because glibc is backwards compatible
+#              and not forwards, so the oldest supported base reaches furthest
+#   PKGBUILD   for the AUR, validated in an Arch container but published by
+#              hand — the AUR is a git remote tied to one person's SSH key
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      profile:
+        type: string
+        default: release
+      engine-downloads:
+        type: boolean
+        default: true
+      media:
+        type: boolean
+        default: true
+      appimage-base:
+        description: Container the AppImage is built in. The oldest glibc reaches furthest.
+        type: string
+        default: "ubuntu:22.04"
   workflow_dispatch:
     inputs:
+      profile:
+        description: Cargo profile
+        type: choice
+        options: [release, dev-fast]
+        default: release
       engine-downloads:
         description: Build with engine-backed downloads (uses the patched engine)
         type: boolean
@@ -16,36 +47,78 @@ on:
         description: Build with audio and video (system GStreamer)
         type: boolean
         default: true
+      appimage-base:
+        description: Container the AppImage is built in
+        type: string
+        default: "ubuntu:22.04"
 
-permissions:
-  contents: write   # to attach packages to a release
+# Nothing here writes to the repository. release.yml owns the release, and
+# holds the only contents:write token in the pipeline.
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: sccache
-  # Servo has no download support of its own (servo/servo#40210), so released
-  # builds compile against a fork carrying the embedder-download patch. Pinned
-  # to a revision, never a branch.
+  # sccache cannot cache incremental compilation, so leaving it on would defeat
+  # the cache for the dev-fast profile.
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
 
 jobs:
+  # ── .deb ───────────────────────────────────────────────────────────────
   deb:
-    name: Ubuntu (.deb)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    name: ${{ matrix.image }} ${{ matrix.arch }} (.deb)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    # The 26.04 runners are public preview: excluded from GitHub's SLA, and
+    # the announcement warns about capacity. A release must not hinge on them.
+    continue-on-error: ${{ matrix.preview }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The packages a release ships. Built on the older LTS on purpose:
+          # glibc runs old binaries on new systems and never the reverse, so a
+          # 24.04 build installs on 24.04 and on 26.04, while a 26.04 build
+          # picks up a `libc6 (>= 2.43)` floor that 24.04 cannot satisfy.
+          - { runner: ubuntu-24.04,     image: "ubuntu-24.04", arch: amd64, suffix: "",           preview: false, tarball: true }
+          - { runner: ubuntu-24.04-arm, image: "ubuntu-24.04", arch: arm64, suffix: "",           preview: false, tarball: true }
+          # And a native 26.04 build beside them, version-suffixed so the two
+          # can sit in one release without colliding.
+          - { runner: ubuntu-26.04,     image: "ubuntu-26.04", arch: amd64, suffix: "ubuntu26.04", preview: true,  tarball: false }
+          - { runner: ubuntu-26.04-arm, image: "ubuntu-26.04", arch: arm64, suffix: "ubuntu26.04", preview: true,  tarball: false }
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Free some disk
+        # A Servo target directory is tens of gigabytes. None of this is used
+        # by anything here, and removing it buys about 30 GB.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-}" || true
+          df -h /
 
       - name: Install build dependencies
-        # Servo's own list, from python/servo/platform/linux_packages/apt.
+        # Servo's own list, from python/servo/platform/linux_packages/apt,
+        # with four names modernised so that one list serves 22.04, 24.04 and
+        # 26.04: libfreetype6-dev is only a Provides alias for libfreetype-dev,
+        # and libgles2-mesa-dev / libegl1-mesa-dev are transitional stubs over
+        # libglvnd's libgles-dev / libegl-dev.
         #
-        # Three guards, because this step hung for three hours twice. The
-        # runner boots with unattended-upgrades holding the dpkg lock, and
-        # apt-get waits on it indefinitely by default; noninteractive alone
-        # does not help, since nothing is being asked. So: stop the upgrader,
-        # give the lock a bounded wait, and cap the step, which turns a
-        # silent multi-hour hang into a failure that says what happened.
+        # libgstreamer-plugins-good1.0-dev was Ubuntu-only and is gone in 26.04
+        # — Ubuntu resynced onto Debian's packaging and the replacement,
+        # libgstreamer-plugins-extra1.0-dev, is pulled in by
+        # libgstreamer-plugins-bad1.0-dev. Asking for it by name fails the
+        # whole apt line on 26.04, so it is probed for rather than listed.
+        #
+        # Three guards on the apt step, because it once hung for three hours
+        # twice. The runner boots with unattended-upgrades holding the dpkg
+        # lock, and apt-get waits on it indefinitely by default; noninteractive
+        # alone does not help, since nothing is being asked. So: stop the
+        # upgrader, give the lock a bounded wait, and cap the step, which turns
+        # a silent multi-hour hang into a failure that says what happened.
         timeout-minutes: 20
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -57,124 +130,184 @@ jobs:
             sleep 3
           done
           sudo apt-get -o DPkg::Lock::Timeout=300 update
+
+          OPTIONAL=""
+          if apt-cache show libgstreamer-plugins-good1.0-dev >/dev/null 2>&1; then
+            OPTIONAL="libgstreamer-plugins-good1.0-dev"
+          fi
+
+          # shellcheck disable=SC2086
           sudo apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
             build-essential ca-certificates ccache clang cmake curl g++ git gperf \
-            libdbus-1-dev libfreetype6-dev libgl1-mesa-dri libgles2-mesa-dev \
-            libglib2.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            libdbus-1-dev libfreetype-dev libgl1-mesa-dri libgl-dev libgles-dev \
+            libegl-dev libglvnd-dev libglib2.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-ugly \
             gstreamer1.0-plugins-base libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-libav libgstrtspserver-1.0-dev gstreamer1.0-tools \
             libges-1.0-dev libharfbuzz-dev liblzma-dev libudev-dev libunwind-dev \
             libvulkan1 libx11-dev libxcb-render0-dev libxcb-shape0-dev \
-            libxcb-xfixes0-dev libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 \
+            libxcb-xfixes0-dev libxmu-dev libxmu6 llvm-dev m4 \
             xorg-dev libxkbcommon0 libxkbcommon-x11-0 \
-            libgstreamer-plugins-good1.0-dev mesa-vulkan-drivers dpkg-dev
+            mesa-vulkan-drivers dpkg-dev fakeroot lintian $OPTIONAL
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Install Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-build
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: cargo-linux-deb-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-linux-deb-
+          key: deb-${{ matrix.image }}
+
+      - name: Do not let the preview legs evict the cache
+        # Every job in this repository shares one 10 GB Actions cache with
+        # seven-day eviction, and sccache writes one entry per compilation
+        # unit. The 26.04 legs are a canary, not a release; letting them fill
+        # the cache would push out the entries the packages that ship depend
+        # on.
+        if: matrix.preview
+        run: echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"
 
       - name: Build and package
+        env:
+          FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
+          FEATURES_MEDIA: ${{ inputs.media }}
+          # Through the environment rather than interpolated into the script.
+          # `profile` is a free-form string on the workflow_call side — the
+          # dispatch side constrains it to a choice, the call side cannot — so
+          # a caller could otherwise put shell in it and have it run in a job
+          # holding the cargo and sccache credentials.
+          PROFILE: ${{ inputs.profile }}
+          WANT_TARBALL: ${{ matrix.tarball }}
+          VERSION_SUFFIX: ${{ matrix.suffix }}
+          # Ubuntu 26.04 ships CMake 4, which removed every policy older than
+          # 3.5 and so refuses to configure a good many of the vendored C++
+          # projects in this dependency graph. This is the documented escape
+          # hatch, and it is set only where the newer CMake is.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
+          set -o pipefail
           FEATURES=""
-          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
-            FEATURES="engine-downloads"
+          if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
+          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
+
+          ARGS=(--profile "$PROFILE" --deb)
+          if [ "$WANT_TARBALL" = "true" ]; then ARGS+=(--tarball); fi
+          if [ -n "$VERSION_SUFFIX" ]; then ARGS+=(--version-suffix "$VERSION_SUFFIX"); fi
+          if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
+
+          ./scripts/package-linux.sh "${ARGS[@]}" 2>&1 | tee build.log
+
+          # mozjs downloads a prebuilt SpiderMonkey and falls back to building
+          # it from source on any failure, saying so in a cargo warning and
+          # nothing louder. That turns a half-hour job into a three-hour one,
+          # and the only sign is one line in the middle of the log.
+          if grep -q "Failed to link pre-built archive" build.log; then
+            echo "::warning::mozjs could not fetch its prebuilt SpiderMonkey and built it from source"
           fi
-          if [ "${{ inputs.media }}" != "false" ]; then
-            FEATURES="${FEATURES:+$FEATURES,}media"
-          fi
-          ARGS=(--profile release --deb)
-          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
-          ./scripts/package-linux.sh "${ARGS[@]}"
 
       - name: Inspect the package
         run: |
           dpkg-deb --info target/linux/*.deb
           dpkg-deb --contents target/linux/*.deb
+          echo "--- lintian ---"
+          lintian --no-tag-display-limit target/linux/*.deb || true
 
-      - uses: actions/upload-artifact@v4
+      - name: Check it installs
+        run: |
+          sudo apt-get install -y ./target/linux/*.deb
+          command -v zervo
+          dpkg -s zervo | sed -n '1,20p'
+          sudo apt-get remove -y zervo
+
+      - uses: actions/upload-artifact@v7
         with:
-          name: zervo-deb
-          path: target/linux/*.deb
+          name: zervo-deb-${{ matrix.image }}-${{ matrix.arch }}
+          path: |
+            target/linux/*.deb
+            target/linux/*.tar.gz
           if-no-files-found: error
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/linux/*.deb
-
+  # ── .rpm ───────────────────────────────────────────────────────────────
   rpm:
-    name: Fedora (.rpm)
-    runs-on: ubuntu-24.04
+    name: Fedora ${{ matrix.fedora }} ${{ matrix.arch }} (.rpm)
+    runs-on: ${{ matrix.runner }}
     # Built inside Fedora rather than on Ubuntu: rpmbuild works the library
     # requirements out from the binary, and those have to be Fedora's sonames.
-    container: fedora:41
-    timeout-minutes: 240
+    #
+    # quay.io rather than Docker Hub: the two carry the same tags, but quay's
+    # are rebuilt daily and Docker Hub's were three months stale, on top of
+    # anonymous pull rate limits that CI runs straight into.
+    container: quay.io/fedora/fedora:${{ matrix.fedora }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04,     fedora: "44", arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, fedora: "44", arch: aarch64 }
 
     steps:
       - name: Install build dependencies
-        # Servo's own list, from python/servo/platform/linux_packages/dnf,
-        # plus what the runner itself needs inside a bare container.
+        # Servo's own list, from python/servo/platform/linux_packages/dnf, plus
+        # what the runner itself needs inside a bare container, plus
+        # clang-devel: clang-libs ships only the versioned libclang.so.NN, and
+        # the unversioned symlink that rust-bindgen looks for lives in the devel
+        # package.
         run: |
-          dnf install -y --setopt=install_weak_deps=False \
+          dnf install -y --setopt=install_weak_deps=False --no-docs \
             libtool gcc-c++ libXi-devel freetype-devel libunwind-devel \
             mesa-libGL-devel mesa-libEGL-devel glib2-devel libX11-devel \
             libXrandr-devel gperf fontconfig-devel cabextract ttmkfdir \
             expat-devel rpm-build cmake libXcursor-devel libXmu-devel dbus-devel \
-            ncurses-devel harfbuzz-devel ccache clang clang-libs llvm \
+            ncurses-devel harfbuzz-devel ccache clang clang-devel clang-libs llvm \
             python3-devel gstreamer1-devel gstreamer1-plugins-base-devel \
             gstreamer1-plugins-good gstreamer1-plugins-bad-free-devel \
             gstreamer1-plugins-ugly-free libjpeg-turbo-devel zlib-ng \
-            libjpeg-turbo vulkan-loader libxkbcommon libxkbcommon-x11 \
+            zlib-ng-compat-devel libjpeg-turbo vulkan-loader libxkbcommon \
+            libxkbcommon-x11 desktop-file-utils libappstream-glib rpmlint \
             git curl tar findutils which xz
 
-      - uses: actions/checkout@v5
-
-      - name: Install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Select the pinned toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - uses: actions/checkout@v7
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: cargo-linux-rpm-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-linux-rpm-
+          persist-credentials: false
+
+      - name: Let git own the checkout
+        # Inside a container the workspace belongs to a different uid than the
+        # one running, and git refuses to touch it. Without this every `git`
+        # call in the build fails with "dubious ownership", including the one
+        # that derives SOURCE_DATE_EPOCH.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain none --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: ./.github/actions/setup-build
+        with:
+          key: rpm-fedora${{ matrix.fedora }}
 
       - name: Build and package
-        # No sccache here: it is not in the Fedora image and a cold build is the
-        # expected cost for a release.
         env:
-          RUSTC_WRAPPER: ""
-          SCCACHE_GHA_ENABLED: ""
+          FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
+          FEATURES_MEDIA: ${{ inputs.media }}
+          # Fedora 44 ships CMake 4, same story as Ubuntu 26.04 above.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+          # clang-libs installs only the versioned library; point bindgen at the
+          # directory rather than hoping its search order finds it.
+          LIBCLANG_PATH: /usr/lib64
+          PROFILE: ${{ inputs.profile }}
         run: |
+          set -o pipefail
           FEATURES=""
-          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
-            FEATURES="engine-downloads"
+          if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
+          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
+
+          ARGS=(--profile "$PROFILE" --rpm)
+          if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
+
+          ./scripts/package-linux.sh "${ARGS[@]}" 2>&1 | tee build.log
+          if grep -q "Failed to link pre-built archive" build.log; then
+            echo "::warning::mozjs could not fetch its prebuilt SpiderMonkey and built it from source"
           fi
-          if [ "${{ inputs.media }}" != "false" ]; then
-            FEATURES="${FEATURES:+$FEATURES,}media"
-          fi
-          ARGS=(--profile release --rpm)
-          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
-          ./scripts/package-linux.sh "${ARGS[@]}"
 
       - name: Inspect the package
         run: |
@@ -182,15 +315,178 @@ jobs:
           rpm -qlp target/linux/*.rpm
           echo "--- requires ---"
           rpm -qRp target/linux/*.rpm
+          echo "--- rpmlint ---"
+          rpmlint target/linux/*.rpm || true
 
-      - uses: actions/upload-artifact@v4
+      - name: Check it installs
+        run: |
+          dnf install -y ./target/linux/*.rpm
+          command -v zervo
+          rpm -q zervo
+
+      - uses: actions/upload-artifact@v7
         with:
-          name: zervo-rpm
+          name: zervo-rpm-fedora${{ matrix.fedora }}-${{ matrix.arch }}
           path: target/linux/*.rpm
           if-no-files-found: error
 
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+  # ── AppImage ───────────────────────────────────────────────────────────
+  appimage:
+    name: AppImage ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # Built against the oldest glibc still worth supporting, because glibc runs
+    # old binaries on new systems and never the reverse. A container rather
+    # than the ubuntu-22.04 runner label, which starts deprecation in September
+    # 2026 and disappears in April 2027 — the container outlives it.
+    container: ${{ inputs.appimage-base }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04,     arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64 }
+
+    env:
+      # appimagetool and linuxdeploy are themselves AppImages, and mounting an
+      # AppImage needs FUSE, which containers do not have. This makes them
+      # unpack and exec instead. Set at job level so it reaches every tool.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          OPTIONAL=""
+          if apt-cache show libgstreamer-plugins-good1.0-dev >/dev/null 2>&1; then
+            OPTIONAL="libgstreamer-plugins-good1.0-dev"
+          fi
+          # shellcheck disable=SC2086
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates ccache clang cmake curl g++ git gperf \
+            libdbus-1-dev libfreetype-dev libgl1-mesa-dri libgl-dev libgles-dev \
+            libegl-dev libglvnd-dev libglib2.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-ugly \
+            gstreamer1.0-plugins-base libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-libav libgstrtspserver-1.0-dev gstreamer1.0-tools \
+            libges-1.0-dev libharfbuzz-dev liblzma-dev libudev-dev libunwind-dev \
+            libvulkan1 libx11-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxmu-dev libxmu6 llvm-dev m4 \
+            xorg-dev libxkbcommon0 libxkbcommon-x11-0 \
+            mesa-vulkan-drivers file desktop-file-utils patchelf zsync $OPTIONAL
+
+      - uses: actions/checkout@v7
         with:
-          files: target/linux/*.rpm
+          persist-credentials: false
+
+      - name: Let git own the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain none --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: ./.github/actions/setup-build
+        with:
+          key: appimage
+
+      - name: Build
+        env:
+          FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
+          FEATURES_MEDIA: ${{ inputs.media }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -o pipefail
+          FEATURES=""
+          if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
+          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
+          ARGS=(--profile "$PROFILE")
+          if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
+          ./scripts/build-appimage.sh "${ARGS[@]}" 2>&1 | tee build.log
+          if grep -q "Failed to link pre-built archive" build.log; then
+            echo "::warning::mozjs could not fetch its prebuilt SpiderMonkey and built it from source"
+          fi
+
+      - name: What it links against
+        # The AppImage build script already refuses to ship the host-coupled
+        # libraries; this prints what actually remains, so a reviewer can see
+        # it rather than take the script's word for it.
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          # Cargo's own mapping: dev and test land in debug/, release and bench
+          # in release/, anything else in a directory of its own name.
+          case "$PROFILE" in
+            dev|test) DIR=debug ;;
+            release|bench) DIR=release ;;
+            *) DIR="$PROFILE" ;;
+          esac
+          ldd "target/$DIR/zervo"
+          ls -la target/linux/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-appimage-${{ matrix.arch }}
+          path: |
+            target/linux/*.AppImage
+            target/linux/*.zsync
+          if-no-files-found: error
+
+  # ── PKGBUILD ───────────────────────────────────────────────────────────
+  # Validation only. Building Zervo from source inside makepkg would be another
+  # multi-hour job for a package nobody can publish from CI anyway — the AUR is
+  # a git remote over SSH tied to one person's account. What this does check is
+  # everything the AUR's own server-side hook would reject a push for, which is
+  # the part that is easy to get wrong and cheap to verify.
+  pkgbuild:
+    name: PKGBUILD (Arch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container: quay.io/archlinux/archlinux:base-devel
+
+    steps:
+      - name: Prepare the container
+        # The official Arch images ship without a populated pacman keyring, and
+        # makepkg refuses outright to run as root — which is what a container
+        # job is. Hence a builder user with a home directory of its own, since
+        # makepkg writes a cache into it.
+        run: |
+          pacman-key --init
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -Syu --noconfirm --needed git namcap pacman-contrib
+          useradd --create-home --shell /bin/bash builder
+          echo 'builder ALL=(root) NOPASSWD:ALL' > /etc/sudoers.d/builder
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Let git own the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Render and validate
+        # As `builder`, not as root: make-aur.sh runs `makepkg --printsrcinfo`
+        # when makepkg is on PATH, and makepkg refuses outright to run as root
+        # — which is what every step of a container job is.
+        run: |
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          sudo -u builder ./scripts/make-aur.sh --output target/linux/aur
+          for pkg in zervo zervo-bin; do
+            echo "=== $pkg ==="
+            sudo -u builder bash -c "cd target/linux/aur/$pkg && bash -n PKGBUILD"
+            # The check that matters most: the AUR serves .SRCINFO, not
+            # PKGBUILD, and a stale one silently advertises the wrong version.
+            sudo -u builder bash -c "cd target/linux/aur/$pkg && makepkg --printsrcinfo > .SRCINFO"
+            sudo -u builder bash -c "cd target/linux/aur/$pkg && cat .SRCINFO"
+            sudo -u builder bash -c "cd target/linux/aur/$pkg && namcap -i PKGBUILD" || true
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-pkgbuild
+          path: target/linux/aur/**
+          if-no-files-found: error

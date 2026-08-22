@@ -2,4 +2,8 @@
 # When bumping Servo in Cargo.toml, check servo/rust-toolchain.toml too.
 [toolchain]
 channel = "1.97.1"
+# Minimal plus exactly what is used. The default profile also pulls rust-docs
+# and the full standard library documentation — several hundred megabytes that
+# every CI job downloaded and nothing ever read.
+profile = "minimal"
 components = ["clippy", "rustfmt"]

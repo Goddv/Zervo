@@ -1,42 +1,134 @@
 name: Windows
 
-# Zervo compiles the Servo engine, and on Windows that includes building
-# SpiderMonkey, so a cold build is long. Release tags and manual dispatch only.
+# x86_64 only, and that is a decision rather than an omission.
+#
+# aarch64-pc-windows-msvc is Rust tier 1, mozjs already publishes a prebuilt
+# SpiderMonkey for it, and mozangle guards its SSE2 flags by architecture — but
+# Servo does not build there. The blocker is a header collision: MSVC's
+# <arm_fp16.h> typedefs float16_t, and glslopt's vendored glsl-optimizer
+# declares a struct of the same name. Both the fix (jamienicol/glslopt-rs#11)
+# and the Servo PR that carries it (servo/servo#42312) are open and unmerged,
+# there is no official GStreamer build for Windows on ARM at all, and the
+# arm64 runner has 14 GB of disk to compile the engine in.
+#
+# Meanwhile Windows 11 on ARM emulates x64 user-mode code through Prism, and
+# does not emulate the GPU path — Direct3D and ANGLE call into native arm64
+# system libraries. So the x64 build runs on those machines; it is slower at
+# CPU-bound work and correct at everything else.
+#
+# The arm64 job below is wired and switched off. Turn it on by hand when
+# glslopt lands, and it will either work or say exactly why not.
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      profile:
+        type: string
+        default: release
+      engine-downloads:
+        type: boolean
+        default: true
+      media:
+        type: boolean
+        default: true
+      try-arm64:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
+      profile:
+        description: Cargo profile
+        type: choice
+        options: [release, dev-fast]
+        default: release
       engine-downloads:
         description: Build with engine-backed downloads (uses the patched engine)
         type: boolean
         default: true
+      media:
+        description: Build with audio and video (bundles GStreamer beside the exe)
+        type: boolean
+        default: true
+      try-arm64:
+        description: "Also attempt aarch64. Expected to fail: see the note at the top of this file."
+        type: boolean
+        default: false
 
-permissions:
-  contents: write
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
   # mozjs looks for this exact version, in this exact place, and panics with
   # "MozTools or MozillaBuild not found!" if it is missing. It does not fetch
-  # it itself.
+  # it itself. Normally unused — mozjs downloads a prebuilt SpiderMonkey — but
+  # it is what stands between a failed archive download and a failed build.
   MOZTOOLS_VERSION: "4.0"
-  # Cargo's own git implementation ignores core.longpaths; the command line
-  # git honours it.
+  # Servo pins this, and it is the only GStreamer build for Windows that Servo
+  # supports. There is no arm64 equivalent published anywhere.
+  GSTREAMER_VERSION: "1.22.8"
+  # Cargo's own git implementation ignores core.longpaths; the command line git
+  # honours it.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # windows-2025 moved to Visual Studio 2026 in June 2026 and with it CMake
+  # 4.4, which removed every policy older than 3.5 and so refuses to configure
+  # a good many of the vendored C++ projects in this dependency graph. The
+  # Fedora 44 and Ubuntu 26.04 jobs set the same escape hatch for the same
+  # reason.
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+  # A very short target directory. Windows caps relative paths at 260
+  # characters no matter what the registry says, and the engine's build tree is
+  # deep. This is what Servo relies on too. The packaged artefacts are written
+  # into the workspace regardless, so the upload step still finds them.
+  CARGO_TARGET_DIR: 'C:\zt'
 
 jobs:
   build:
-    name: Build .exe
-    runs-on: windows-2025
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            slug: x64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            gst-arch: X86_64
+            experimental: false
+            enabled: true
+          - name: arm64 (experimental)
+            slug: arm64
+            # Pinned to the VS2026 label rather than plain `windows-11-arm`,
+            # which migrates to that image in September 2026 and loses a
+            # Windows SDK on the way.
+            runner: windows-11-vs2026-arm
+            target: aarch64-pc-windows-msvc
+            gst-arch: ARM64
+            experimental: true
+            enabled: false
 
     steps:
-      - uses: actions/checkout@v5
+      - name: Should this leg run?
+        id: gate
+        shell: bash
+        run: |
+          if [ "${{ matrix.enabled }}" = "true" ] || [ "${{ inputs.try-arm64 }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.name }} is off; see the note at the top of windows.yml"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.run == 'true'
+        with:
+          persist-credentials: false
 
       - name: Allow long paths
+        if: steps.gate.outputs.run == 'true'
         # The Servo checkout contains web-platform-tests, whose test262 paths
         # run well past the 260-character limit Windows applies by default.
         # Cargo cannot check the repository out at all without this, and fails
@@ -49,18 +141,20 @@ jobs:
           git config --global core.longpaths true
 
       - name: Show environment
+        if: steps.gate.outputs.run == 'true'
         run: |
           cmake --version
           ninja --version
           clang --version
 
       - name: Fetch moztools
+        if: steps.gate.outputs.run == 'true'
         # SpiderMonkey's build needs it, and expects it under the target
         # directory rather than anywhere on PATH.
         shell: pwsh
         run: |
           $url = "https://github.com/servo/servo-build-deps/releases/download/msvc-deps/moztools-$env:MOZTOOLS_VERSION.zip"
-          $dir = "target/dependencies/moztools"
+          $dir = "$env:CARGO_TARGET_DIR/dependencies/moztools"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Invoke-WebRequest -Uri $url -OutFile "$dir/moztools.zip"
           Expand-Archive -Path "$dir/moztools.zip" -DestinationPath $dir -Force
@@ -70,70 +164,91 @@ jobs:
           }
           Get-ChildItem $dir
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Install Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-windows-
-
-      - name: Build
-        shell: bash
-        run: |
-          FEATURES=""
-          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
-            FEATURES="engine-downloads"
-          fi
-          # No media: GStreamer on Windows means an MSI and a bundling step,
-          # which is its own piece of work.
-          if [ -n "$FEATURES" ]; then
-            cargo build --profile release --features "$FEATURES"
-          else
-            cargo build --profile release
-          fi
-
-      - name: Package
+      - name: Install GStreamer
+        if: steps.gate.outputs.run == 'true' && inputs.media && matrix.gst-arch == 'X86_64'
+        # Servo's own pinned MSIs, unpacked administratively rather than
+        # installed, which is what `mach bootstrap` does. There is no arm64
+        # build published, which is one of the reasons the arm64 leg is off.
         shell: pwsh
         run: |
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          $out = "target/windows"
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Copy-Item target/release/zervo.exe "$out/Zervo.exe"
-          # Anything the binary needs beside it. Most of Servo links statically,
-          # but whatever does not has to travel with the exe.
-          Get-ChildItem target/release -Filter *.dll | ForEach-Object {
-            Copy-Item $_.FullName $out
+          $base = "https://github.com/servo/servo-build-deps/releases/download/msvc-deps"
+          $dest = "$env:CARGO_TARGET_DIR\dependencies"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          foreach ($pkg in @("gstreamer-1.0-msvc-x86_64", "gstreamer-1.0-devel-msvc-x86_64")) {
+            $msi = "$env:RUNNER_TEMP\$pkg.msi"
+            Invoke-WebRequest -Uri "$base/$pkg-$env:GSTREAMER_VERSION.msi" -OutFile $msi
+            Start-Process msiexec.exe -Wait -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$dest`""
           }
-          # ANGLE. Windows composites through EGL on Direct3D 11 rather than
-          # WGL (the `no-wgl` engine feature), and mozangle builds libEGL and
-          # libGLESv2 into its own OUT_DIR, not into target/release. The exe
-          # is linked against libEGL, so without these two it does not start.
-          $angle = Get-ChildItem target/release/build -Recurse -Filter libEGL.dll -ErrorAction SilentlyContinue
-          if (-not $angle) { throw "ANGLE DLLs not found under target/release/build" }
-          Get-ChildItem $angle[0].DirectoryName -Filter *.dll | ForEach-Object {
-            Copy-Item $_.FullName $out
+          # Servo looks here first, then at the env var, then at C:\gstreamer.
+          $root = "$dest\gstreamer\1.0\msvc_x86_64"
+          if (-not (Test-Path "$root\bin\ffi-7.dll")) { throw "GStreamer did not unpack to $root" }
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$root\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - uses: ./.github/actions/setup-build
+        if: steps.gate.outputs.run == 'true'
+        with:
+          key: windows-${{ matrix.name }}
+
+      - name: Add the target
+        if: steps.gate.outputs.run == 'true'
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build and package
+        if: steps.gate.outputs.run == 'true'
+        shell: pwsh
+        env:
+          FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
+          FEATURES_MEDIA: ${{ inputs.media }}
+          # Through the environment rather than interpolated into the script
+          # body. `profile` is a free-form string on the workflow_call side.
+          PROFILE: ${{ inputs.profile }}
+          TARGET_TRIPLE: ${{ matrix.target }}
+          GST_ARCH: ${{ matrix.gst-arch }}
+        run: |
+          $features = @()
+          if ($env:FEATURES_ENGINE_DOWNLOADS -eq 'true') { $features += 'engine-downloads' }
+          if ($env:FEATURES_MEDIA -eq 'true' -and $env:GST_ARCH -eq 'X86_64') { $features += 'media' }
+
+          # Not $args: that is a PowerShell automatic variable.
+          $packageArgs = @(
+            '-CargoProfile', $env:PROFILE
+            '-Target', $env:TARGET_TRIPLE
+            '-Output', "$env:GITHUB_WORKSPACE\dist"
+            '-Installer'
+          )
+          if ($features) { $packageArgs += @('-Features', ($features -join ',')) }
+          if ($env:GSTREAMER_1_0_ROOT_MSVC_X86_64) {
+            $packageArgs += @('-GStreamerRoot', $env:GSTREAMER_1_0_ROOT_MSVC_X86_64)
           }
-          Get-ChildItem $out
-          Compress-Archive -Path "$out/*" -DestinationPath "target/Zervo-$version-windows-x64.zip" -Force
+          & pwsh -NoProfile -File scripts/package-windows.ps1 @packageArgs
+
+      - name: Check the package
+        if: steps.gate.outputs.run == 'true'
+        shell: pwsh
+        # ANGLE is the one that has already gone wrong once: the exe links
+        # against libEGL, so a package without it does not start, and the
+        # failure is a dialog rather than anything in a build log.
+        run: |
+          $stage = Get-ChildItem "$env:GITHUB_WORKSPACE\dist" -Directory | Select-Object -First 1
+          foreach ($needed in @('Zervo.exe', 'libEGL.dll', 'libGLESv2.dll')) {
+            if (-not (Test-Path (Join-Path $stage.FullName $needed))) {
+              throw "$needed missing from the package"
+            }
+            Write-Host "ok  $needed"
+          }
+          Get-ChildItem "$env:GITHUB_WORKSPACE\dist"
 
       - name: sccache stats
-        run: sccache --show-stats
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: ${SCCACHE_PATH:-sccache} --show-stats
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
+        if: steps.gate.outputs.run == 'true'
         with:
-          name: zervo-windows
-          path: target/*.zip
+          name: zervo-windows-${{ matrix.slug }}
+          path: |
+            dist/*.zip
+            dist/*setup.exe
           if-no-files-found: error
-
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/*.zip

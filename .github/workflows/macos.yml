@@ -1,13 +1,48 @@
 name: macOS
 
-# Zervo compiles the Servo engine, so a cold build is roughly an hour of macOS
-# runner time. macOS minutes bill at 10x on private repos, so the build runs on
-# release tags and manual dispatch only. (On a public repo GitHub-hosted
-# runners are free and unlimited — if this repo is public, feel free to add
-# `pull_request` here; with sccache warm the job is ~15-25 minutes.)
+# One job, one universal .app.
+#
+# It used to be one arm64 build on one runner, and "Apple Silicon only" in the
+# release notes. Building the Intel half turns out to be nearly free: mozjs
+# downloads a prebuilt SpiderMonkey for x86_64-apple-darwin rather than
+# compiling it, so the second `cargo build --target` is minutes rather than
+# hours, and every dylib in the GStreamer framework Servo pins is already
+# universal. That leaves exactly one file to `lipo`.
+#
+# So there is no Intel runner here, and no second disk image. `macos-15-intel`
+# exists and is free, but a second full job to produce a second download that
+# half the users would pick wrongly is worse than one file that runs anywhere.
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      profile:
+        type: string
+        default: release
+      runner:
+        type: string
+        default: macos-15
+      engine-downloads:
+        type: boolean
+        default: true
+      media:
+        type: boolean
+        default: true
+      checks:
+        type: boolean
+        default: true
+    secrets:
+      MACOS_CERTIFICATE:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
+      MACOS_SIGN_IDENTITY:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APPLE_APP_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       profile:
@@ -15,44 +50,44 @@ on:
         type: choice
         options: [release, dev-fast]
         default: release
+      runner:
+        description: Runner label. Both are Apple Silicon and both are GA.
+        type: choice
+        options: [macos-15, macos-26]
+        default: macos-15
       engine-downloads:
         description: Build with engine-backed downloads (uses the patched engine)
         type: boolean
         default: true
       media:
-        description: Build with audio and video (installs GStreamer)
+        description: Build with audio and video (bundles GStreamer)
+        type: boolean
+        default: true
+      checks:
+        description: Also run clippy and the tests against the engine build
         type: boolean
         default: true
 
-permissions:
-  contents: write   # to attach the .dmg to a release
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  # Servo has no download support of its own (servo/servo#40210), so released
-  # builds compile against a fork carrying the embedder-download patch. Pinned
-  # to a revision, never a branch: Servo lands dozens of commits a day and the
-  # embedding API is not stable.
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
   # Servo only supports the official GStreamer distribution on macOS, and pins
   # this version. Both packages are needed: the runtime and the headers.
   GSTREAMER_VERSION: 1.22.3
-  # sccache is the single biggest lever here: Servo's own CI measures ~15 min
-  # warm against ~54 min cold for the same profile.
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: sccache
 
 jobs:
   build:
-    name: Build .app
-    # macos-15 is Apple Silicon, which is what Zervo targets. Do not pin
-    # macos-14: it is deprecated and scheduled for removal.
-    # If a fat-LTO link runs out of memory (arm64 runners have 7 GB), switch to
-    # macos-15-intel, which has 14 GB.
-    runs-on: macos-15
-    timeout-minutes: 180
+    name: Universal .app
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 300
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Stop XProtect
         # XProtect scans the packaged .dmg and can fail the job; Servo's own
@@ -63,54 +98,144 @@ jobs:
         # cmake and pkg-config — Servo's only macOS system dependencies — are
         # already on the runner image, so there is no brew step.
         run: |
-          sw_vers && cmake --version | head -1 && pkg-config --version
+          sw_vers
+          cmake --version | head -1
+          pkg-config --version
           df -h / | tail -1
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Install Rust toolchain
-        # Pinned by rust-toolchain.toml, matching Servo's own channel.
-        run: rustup show active-toolchain || rustup toolchain install
-
-      - name: Cache cargo registry
-        # Only the inputs are cached. The build output is far larger than the
-        # 10 GB per-repo cache limit (a Servo target dir runs to tens of GB),
-        # so caching target/ would silently never restore.
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-build
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: macos
+
+      - name: Add the Intel target
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
 
       - name: Install GStreamer
+        if: inputs.media
         run: |
-          if [ "${{ inputs.media }}" = "false" ]; then
-            echo "media off; skipping GStreamer"
-            exit 0
-          fi
           BASE=https://github.com/servo/servo-build-deps/releases/download/macOS
           for PKG in gstreamer-1.0 gstreamer-1.0-devel; do
-            curl -L -sS -o "/tmp/$PKG.pkg" "$BASE/$PKG-$GSTREAMER_VERSION-universal.pkg"
+            curl -L -sS --retry 5 --retry-delay 2 --retry-all-errors \
+                 -o "/tmp/$PKG.pkg" "$BASE/$PKG-$GSTREAMER_VERSION-universal.pkg"
             sudo installer -pkg "/tmp/$PKG.pkg" -target /
           done
-          ls /Library/Frameworks/GStreamer.framework/Versions/1.0/bin/pkg-config
+          # Both slices, or the Intel half of the build has nothing to link.
+          lipo -archs /Library/Frameworks/GStreamer.framework/Versions/1.0/lib/libgstreamer-1.0.dylib
+
+      - name: Is there a signing certificate?
+        # The `secrets` context is not available in a step-level `if:`, so its
+        # presence is turned into an ordinary environment variable first. Only
+        # the answer crosses over, never the secret.
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+        run: |
+          if [ -n "$MACOS_CERTIFICATE" ]; then
+            echo "HAS_SIGNING_CERT=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_SIGNING_CERT=false" >> "$GITHUB_ENV"
+            echo "::notice::No signing certificate; the bundle will carry an ad-hoc signature only."
+          fi
+
+      - name: Import the signing certificate
+        # Inert until the secrets exist. Without them the bundler falls back to
+        # an ad-hoc signature, which is what every release so far has shipped.
+        if: env.HAS_SIGNING_CERT == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
 
       - name: Build and bundle
+        env:
+          FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
+          FEATURES_MEDIA: ${{ inputs.media }}
+          # Through the environment, not interpolated into the script body:
+          # `profile` is a free-form string on the workflow_call side.
+          PROFILE: ${{ inputs.profile }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          ARGS=(--profile "${{ inputs.profile || 'release' }}" --dmg)
+          set -o pipefail
           FEATURES=""
-          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
-            FEATURES="engine-downloads"
-          fi
-          if [ "${{ inputs.media }}" != "false" ]; then
-            FEATURES="${FEATURES:+$FEATURES,}media"
-          fi
-          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
-          ./scripts/bundle-macos.sh "${ARGS[@]}"
+          if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
+          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
 
-      - name: Lint and test the binary
+          ARGS=(--profile "$PROFILE" --universal --dmg)
+          if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
+          if [ -n "$SIGN_IDENTITY" ]; then
+            ARGS+=(--sign "$SIGN_IDENTITY")
+            if [ -n "$APPLE_ID" ]; then ARGS+=(--notarize); fi
+          fi
+
+          ./scripts/bundle-macos.sh "${ARGS[@]}" 2>&1 | tee build.log
+          if grep -q "Failed to link pre-built archive" build.log; then
+            echo "::warning::mozjs could not fetch its prebuilt SpiderMonkey and built it from source"
+          fi
+
+      - name: Check the bundle
+        # The three things that are easy to get silently wrong and impossible
+        # to notice from a green build: whether both architectures actually
+        # made it in, whether the two halves agree on how old a macOS they will
+        # run on, and whether the signature the loader insists on is present.
+        run: |
+          BIN=target/Zervo.app/Contents/MacOS/Zervo
+          echo "--- architectures ---"
+          lipo -archs "$BIN"
+          lipo -archs "$BIN" | grep -q x86_64 || { echo "no Intel slice"; exit 1; }
+          lipo -archs "$BIN" | grep -q arm64  || { echo "no Apple Silicon slice"; exit 1; }
+
+          echo "--- deployment target, per slice ---"
+          # Both halves must claim the same floor. lipo fuses two binaries that
+          # disagree without a word, and the result advertises two different
+          # minimums for one file. .cargo/config.toml forces the value; this is
+          # what notices when something has got past it.
+          otool -l "$BIN" | grep -E 'minos|sdk ' || true
+          MINOS="$(otool -l "$BIN" | awk '/minos/ { print $2 }' | sort -u | tr '\n' ' ')"
+          case "$(echo "$MINOS" | wc -w | tr -d ' ')" in
+            1) echo "both slices target macOS $MINOS" ;;
+            0) echo "::warning::no LC_BUILD_VERSION found; cannot check the deployment target" ;;
+            *) echo "the architectures disagree about the minimum macOS: $MINOS"; exit 1 ;;
+          esac
+
+          PLIST_MIN="$(plutil -extract LSMinimumSystemVersion raw target/Zervo.app/Contents/Info.plist)"
+          echo "Info.plist says $PLIST_MIN"
+          if [ -n "$MINOS" ] && [ "$PLIST_MIN" != "$(echo "$MINOS" | tr -d ' ')" ]; then
+            echo "::warning::Info.plist claims macOS $PLIST_MIN but the binary was built for $MINOS"
+          fi
+
+          echo "--- signature ---"
+          codesign -dv --verbose=4 target/Zervo.app 2>&1 | head -20
+          codesign --verify --strict --verbose=2 target/Zervo.app
+
+          echo "--- Info.plist ---"
+          plutil -p target/Zervo.app/Contents/Info.plist | head -30
+
+      # Banked before anything optional runs. `timeout-minutes` on the job is a
+      # cancellation rather than a failure, so a lint that overruns takes the
+      # whole job down with it — including an upload step sitting after it, and
+      # with it a disk image that took hours to produce.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-macos-universal
+          path: target/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Lint and test the engine build
         # The half of the tree that needs the engine, checked where the engine
         # is already compiled. `zervo-core` is linted and tested on every pull
         # request (see check.yml); this covers everything that is not in it,
@@ -118,48 +243,28 @@ jobs:
         # at all against the published Servo crate.
         #
         # Clippy re-checks the dependency graph rather than reusing the build's
-        # artifacts — sccache keys on the rustc invocation, and `--emit=metadata`
+        # artefacts — sccache keys on the rustc invocation, and `--emit=metadata`
         # is not `--emit=link` — so this is not free. On a job already budgeted
-        # at three hours, for something that runs on release tags, it is worth
-        # knowing before the release rather than after it.
+        # in hours, for something that runs on release tags, it is worth knowing
+        # before the release rather than after it.
+        if: inputs.checks
         continue-on-error: true
+        timeout-minutes: 90
+        env:
+          FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
+          FEATURES_MEDIA: ${{ inputs.media }}
         run: |
           FEATURES=""
-          if [ "${{ inputs.engine-downloads }}" != "false" ]; then
-            FEATURES="engine-downloads"
-          fi
-          if [ "${{ inputs.media }}" != "false" ]; then
-            FEATURES="${FEATURES:+$FEATURES,}media"
-          fi
-          ARGS=()
-          [ -n "$FEATURES" ] && ARGS+=(--features "$FEATURES")
+          if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
+          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
+          ARGS=(--locked)
+          if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
           cargo clippy --all-targets "${ARGS[@]}" -- -D warnings
           cargo test "${ARGS[@]}"
 
       - name: sccache stats
-        run: sccache --show-stats
+        run: ${SCCACHE_PATH:-sccache} --show-stats
 
       - name: Report sizes
         run: du -sh target/Zervo.app target/*.dmg
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Zervo-macos-arm64
-          path: target/*.dmg
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/*.dmg
-          body: |
-            Unsigned build, with downloads and media playback. macOS will refuse to open it until you clear the
-            quarantine flag:
-
-            ```
-            xattr -dr com.apple.quarantine /Applications/Zervo.app
-            ```
-
-            See docs/PACKAGING.md for why.
