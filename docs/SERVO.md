@@ -60,6 +60,20 @@ The design follows what Servo's maintainers settled on in their Zulip
 discussion, and builds on a prototype branch by jdm
 (`jdm/servo:download-integration`).
 
+## The second patch: notifications with nothing to fetch
+
+`Notification`'s show steps wait for the image, icon and badge a notification
+may carry, and Servo calls `show` from the fetch completion handler once the
+last request lands. A notification carrying none of those queues no requests,
+so nothing ever completes and `show` is never reached — the notification is
+constructed, fires no `error`, and is simply never handed to the embedder.
+
+Since most pages raise a plain title-and-body notification, this made
+`show_notification` unreachable for the common case. Waiting for an empty set
+of fetches is over immediately, which is what the patch says.
+
+`patches/servo/0002-script-show-notification-without-resources.patch`.
+
 ### Applying it
 
 Cargo cannot patch a dependency in place, so build against a patched checkout:
@@ -71,6 +85,7 @@ cd servo
 git checkout -b goddv-patches bd220a152bc…
 git apply /path/to/zervo/patches/servo/0001-embedder-file-downloads.patch
 git commit -am "embedder: offer unrenderable responses to the embedder"
+git am  /path/to/zervo/patches/servo/0002-script-show-notification-without-resources.patch
 git push -u origin goddv-patches
 ```
 

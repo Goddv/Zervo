@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 /// How long a notification stays up when it has not asked to stay.
 const LINGER: Duration = Duration::from_secs(6);
 
+/// How long a toast takes to grow out of the bell.
+pub const MORPH: Duration = Duration::from_millis(260);
+
 /// How many are kept at all before the oldest is pushed off.
 ///
 /// The spec's own answer to a flood is the `tag` field, which replaces rather
@@ -48,6 +51,14 @@ pub struct ToastView {
     pub id: u64,
     pub title: String,
     pub body: String,
+    /// How long this has been up.
+    ///
+    /// The chrome grows a toast out of the bell over its first fraction of a
+    /// second, and needs to know how far through that it is. It cannot read a
+    /// clock itself, and egui's animation manager is no help: asked to animate
+    /// a brand-new id towards `true`, it seeds the entry with the target and
+    /// returns it, so the ramp never runs at all.
+    pub age: Duration,
 }
 
 /// What the chrome is given each frame: the notifications to draw, how many
@@ -126,6 +137,14 @@ impl Toasts {
     /// Only the ones still counting down have a deadline; once a notification
     /// has lingered out it sits in the tray with no clock left to run, and a
     /// scheduler woken by those would never idle.
+    /// Whether anything is still growing out of the bell, and so wants frames
+    /// rather than a single wake at a deadline.
+    pub fn morphing(&self, now: Instant) -> bool {
+        self.items
+            .iter()
+            .any(|toast| now.saturating_duration_since(toast.raised) < MORPH)
+    }
+
     pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
         self.items
             .iter()
@@ -156,6 +175,7 @@ impl Toasts {
                 id: toast.id,
                 title: toast.title.clone(),
                 body: toast.body.clone(),
+                age: now.saturating_duration_since(toast.raised),
             })
             .collect()
     }
@@ -290,6 +310,37 @@ mod tests {
         toasts.dismiss(ids[1]);
         let left: Vec<u64> = toasts.view(now).iter().map(|toast| toast.id).collect();
         assert_eq!(left, vec![ids[0], ids[2]]);
+    }
+
+    /// An id handed out once is never handed out again, however many
+    /// notifications come and go.
+    ///
+    /// The test above cannot see this: it reads ids out of the model and
+    /// compares them against the same model, so a positional id — `id:
+    /// self.items.len()` — passes it. Under that mistake, dismissing one toast
+    /// and raising another mints the newcomer with a live toast's id, and
+    /// `dismiss` then takes both; the chrome keys the entry animation and the
+    /// click target on the same id, so they would be shared too. This
+    /// codebase has been bitten by positional ids before.
+    #[test]
+    fn an_id_is_never_reused_after_a_dismissal() {
+        let now = origin();
+        let mut toasts = Toasts::default();
+        let mut ever: Vec<u64> = Vec::new();
+
+        for round in 0..4 {
+            raise(&mut toasts, &format!("{round}"), "", true, now);
+            let live: Vec<u64> = toasts.view(now).iter().map(|toast| toast.id).collect();
+            let newest = *live.first().expect("just raised one");
+            assert!(
+                !ever.contains(&newest),
+                "id {newest} was handed out twice (seen: {ever:?})",
+            );
+            ever.push(newest);
+            // Dismissing frees a slot, which is precisely when a positional id
+            // would collide with one still on screen.
+            toasts.dismiss(newest);
+        }
     }
 
     /// A page that ignores tags cannot make the history grow without bound.

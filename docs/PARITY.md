@@ -35,6 +35,11 @@ stylesheets, container queries, multi-column layout, variable fonts, the visual
 viewport, the Permissions API, and WebGL 2 (WebGL 1 still answers for anything
 that asks for it).
 
+Notifications needed an engine patch of their own, though not the one it looks
+like: the delegate hook has always been dispatched, but Servo only reached it
+after fetching a notification's icon, so one carrying no icon was never shown
+at all. See [SERVO.md](SERVO.md).
+
 Notifications are shown inside the window rather than handed to the system —
 that wants a signed bundle and `UNUserNotificationCenter` on macOS, and an
 equivalent everywhere else — and their icons, badges and images are dropped.

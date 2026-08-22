@@ -2490,6 +2490,10 @@ fn paint_edge_shadow(painter: &egui::Painter, rect: Rect, colour: Color32) {
 /// stack to grow out of. The two are drawn at opposite ends of the frame.
 const BELL_ANCHOR: &str = "zervo_bell_anchor";
 
+/// What the bell costs the address pill: `icon_button`'s own width for a 15pt
+/// icon, plus the spacing before it.
+const BELL_SLOT: f32 = 35.0;
+
 fn draw_address_pill(
     ui: &mut Ui,
     chrome: &mut ChromeContext,
@@ -2577,7 +2581,18 @@ fn draw_address_pill(
         .text_color(palette.text)
         .vertical_align(egui::Align::Center)
         .hint_text(RichText::new(hint).color(palette.text_muted))
-        .desired_width(inner.available_width() - 24.0);
+        // 24pt is the spinner's reserved slot. The bell needs its own, or the
+        // two share one and the bell hangs 21pt outside the pill — and since
+        // the bell outlives any one page load, that shows up as the bell
+        // jumping out of the pill and back on every navigation.
+        .desired_width(
+            inner.available_width()
+                - if chrome.notifications.count > 0 {
+                    24.0 + BELL_SLOT
+                } else {
+                    24.0
+                },
+        );
     let response = inner.add(editor);
     if chrome.browser.focus_address {
         response.request_focus();
@@ -3579,15 +3594,26 @@ fn draw_toasts(
                 // notification with no visible cause reads as the window doing
                 // something, not the page.
                 //
-                // `animate_bool_with_time` starts from the opposite of what it
-                // is asked for, so a toast drawn for the first time begins at
-                // the bell and is at rest by the time it stops moving.
-                let grow = glass::ease_out(ui.ctx().animate_bool_with_time(
-                    Id::new("zervo_toast_in").with(toast.id),
-                    true,
-                    0.26,
-                ));
+                // Driven by the toast's own age, not `animate_bool_with_time`.
+                // Asked to animate a brand-new id towards `true`, egui seeds
+                // the entry with the target and hands it straight back, so the
+                // ramp never runs and every toast snaps to its resting place
+                // fully drawn. The id here is new every time by construction,
+                // so that is the only thing that would ever have happened.
+                let grow = glass::ease_out(
+                    (toast.age.as_secs_f32() / crate::notifications::MORPH.as_secs_f32())
+                        .clamp(0.0, 1.0),
+                );
                 let rect = anchor.map_or(rect, |from| lerp_rect(from, rect, grow));
+
+                // Claim the space. An `Area` whose contents are only painted
+                // never grows its own `min_rect`, so egui stores it as
+                // zero-sized, `layer_id_at` never resolves the pointer to it,
+                // and `is_pointer_over_egui` stays false — which is exactly
+                // what the event loop uses to decide a click belongs to the
+                // page. The toast would show a pointing-hand cursor, refuse to
+                // be dismissed, and pass the click through to the page under it.
+                ui.advance_cursor_after_rect(rect);
 
                 // Keyed on the toast's own id rather than its position, so
                 // dismissing the one above does not hand its hover state to
@@ -3647,6 +3673,7 @@ fn draw_toasts(
                     vec2(width, 26.0),
                 );
                 if rect.bottom() <= content_rect.bottom() {
+                    ui.advance_cursor_after_rect(rect);
                     let response = ui.interact(rect, Id::new("zervo_toasts_clear"), Sense::click());
                     if response.clicked() {
                         clear_all = true;

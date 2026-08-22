@@ -1026,6 +1026,11 @@ impl RunningApp {
         let state = self.state.clone();
         let _ = state.rendering_context.make_current();
 
+        // One reading of the clock for the whole frame. What gets drawn and
+        // what gets scheduled have to agree about what time it is, or a toast
+        // that falls due between the two is painted and then never woken for.
+        let frame_now = std::time::Instant::now();
+
         // Adopt popups, drop script-closed tabs, refresh tab titles/urls.
         state.sync();
         #[cfg(feature = "engine-downloads")]
@@ -1183,11 +1188,12 @@ impl RunningApp {
             // off `next_deadline` below.
             let (toasts, toast_count, toasts_open) = {
                 let held = state.toasts.borrow();
-                (
-                    held.view(std::time::Instant::now()),
-                    held.count(),
-                    held.is_open(),
-                )
+                // `frame_now` rather than a fresh reading: the wake scheduled
+                // further down must agree with what was drawn here. Two
+                // readings straddle the whole draw pass and the engine's paint,
+                // so a toast that expires in between is painted and then never
+                // woken for — and sits over the page until unrelated input.
+                (held.view(frame_now), held.count(), held.is_open())
             };
             let mut chrome = ui::ChromeContext {
                 browser: &mut browser,
@@ -1369,16 +1375,21 @@ impl RunningApp {
                     .map_or(deadline, |d| d.min(deadline)),
             );
         }
-        // Nothing else will wake the loop when a notification's time is up.
-        if let Some(deadline) = state
-            .toasts
-            .borrow()
-            .next_deadline(std::time::Instant::now())
+        // Nothing else will wake the loop when a notification's time is up, or
+        // while one is still growing out of the bell.
         {
-            self.pending_repaint_at = Some(
-                self.pending_repaint_at
-                    .map_or(deadline, |at| at.min(deadline)),
-            );
+            let toasts = state.toasts.borrow();
+            let mut due = toasts.next_deadline(frame_now);
+            if toasts.morphing(frame_now) {
+                let frame = frame_now + std::time::Duration::from_millis(16);
+                due = Some(due.map_or(frame, |at| at.min(frame)));
+            }
+            if let Some(deadline) = due {
+                self.pending_repaint_at = Some(
+                    self.pending_repaint_at
+                        .map_or(deadline, |at| at.min(deadline)),
+                );
+            }
         }
         if state.library.borrow().needs_save()
             && self.library_saved_at.elapsed() > std::time::Duration::from_secs(10)
