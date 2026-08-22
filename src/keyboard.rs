@@ -16,6 +16,11 @@ pub const CMD_OR_CONTROL: Modifiers = Modifiers::META;
 #[cfg(not(target_os = "macos"))]
 pub const CMD_OR_CONTROL: Modifiers = Modifiers::CONTROL;
 
+// Cmd-Shift on Mac, Control-Shift elsewhere. Shift is the usual way to ask for
+// the less common sibling of a shortcut, and the one place that wants it is
+// Cmd-Shift-L against Cmd-L.
+pub const CMD_OR_CONTROL_SHIFT: Modifiers = CMD_OR_CONTROL.union(Modifiers::SHIFT);
+
 // Some shortcuts use Cmd on Mac and Alt on other systems.
 #[cfg(target_os = "macos")]
 pub const CMD_OR_ALT: Modifiers = Modifiers::META;

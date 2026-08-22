@@ -68,14 +68,19 @@ Cargo cannot patch a dependency in place, so build against a patched checkout:
 # once
 gh repo fork servo/servo --clone   # or fork in the web UI and clone
 cd servo
-git checkout -b zervo-downloads bd220a152bc…
+git checkout -b goddv-patches bd220a152bc…
 git apply /path/to/zervo/patches/servo/0001-embedder-file-downloads.patch
 git commit -am "embedder: offer unrenderable responses to the embedder"
-git push -u origin zervo-downloads
+git push -u origin goddv-patches
 ```
 
+The branch is called `goddv-patches` rather than something named after the one
+patch on it: it is the place engine patches live, and downloads is only the
+first. Anything else Zervo ever has to change in the engine goes on the same
+branch, so there is one thing to rebase when the engine moves.
+
 Zervo already points at the fork: `.cargo/config.toml` carries a
-`[patch.crates-io]` entry pinned to a revision of `zervo-downloads`. Bumping the
+`[patch.crates-io]` entry pinned to a revision of `goddv-patches`. Bumping the
 engine means editing that one line — it used to live in three workflow files as
 well, which is exactly the sort of thing that drifts.
 

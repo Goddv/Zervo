@@ -13,7 +13,10 @@
 # one place instead of four. Patching `servo` pulls the whole forked workspace
 # in with it, since its components depend on each other by path.
 #
-# The fork exists for one patch — embedder-driven downloads, see docs/SERVO.md.
+# The patches live on the fork's `goddv-patches` branch — one of them so far,
+# embedder-driven downloads; see docs/SERVO.md. The branch is named for the
+# place rather than the patch so the next one has somewhere to go.
+#
 # When Servo publishes a release carrying the `MouseButton` rename, everything
 # except `--features engine-downloads` could go back to the registry.
 [patch.crates-io]

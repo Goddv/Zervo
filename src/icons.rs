@@ -83,11 +83,15 @@ pub enum Icon {
     Link,
     SkipBack,
     SkipForward,
+    Bell,
+    BellRinging,
 }
 
 impl Icon {
     pub fn glyph(self) -> &'static str {
         match self {
+            Icon::Bell => glyph::BELL,
+            Icon::BellRinging => glyph::BELLRINGING,
             Icon::Star => glyph::STAR,
             Icon::Lock => glyph::LOCK,
             Icon::History => glyph::CLOCK,

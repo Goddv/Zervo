@@ -948,8 +948,9 @@ pub(crate) fn settings_passwords(
         ui.label(
             RichText::new(
                 "Passwords are kept in your system keychain, never in Zervo's own files. \
-                 Zervo cannot fill them into web forms — the engine provides no way to \
-                 do that — but it does use them when a site asks for HTTP authentication.",
+                 Press ⌘⇧L on a sign-in page to fill the saved login for that site, and \
+                 Zervo also uses it when a site asks for HTTP authentication. Both only \
+                 ever happen over https, and only for an exact match on the site name.",
             )
             .size(12.0)
             .color(palette.text_muted),

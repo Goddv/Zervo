@@ -93,6 +93,11 @@ pub struct AppState {
     /// Download events from the engine, drained by the UI each redraw.
     #[cfg(feature = "engine-downloads")]
     pub download_events: RefCell<Vec<DownloadEvent>>,
+    /// What the page says the pointer is over — a link's target, mostly.
+    /// `None` when it is over nothing in particular.
+    pub status_text: RefCell<Option<String>>,
+    /// Notifications raised by pages, waiting to be drawn over the content.
+    pub toasts: RefCell<crate::notifications::Toasts>,
     /// Last title pushed to the OS window, to avoid redundant sets.
     pub last_window_title: RefCell<String>,
     /// Declared last so the rendering contexts are torn down while the OS
@@ -105,6 +110,95 @@ impl AppState {
         &self,
     ) -> Scale<f32, servo::DeviceIndependentPixel, servo::DevicePixel> {
         Scale::new(self.window.scale_factor() as f32)
+    }
+
+    /// Run a script in the active tab and hand the result to `then`.
+    ///
+    /// The engine resolves this against the top-level document only, so
+    /// same-origin frames are reachable through `frames[]` and cross-origin
+    /// ones are not at all.
+    ///
+    /// Everything that calls this is answering a deliberate action by the
+    /// person at the keyboard. Nothing here runs script on a page's own
+    /// initiative, and nothing builds a script out of page-supplied text.
+    pub fn evaluate_javascript<T: ToString>(
+        &self,
+        script: T,
+        then: impl FnOnce(Result<servo::JSValue, servo::JavaScriptEvaluationError>) + 'static,
+    ) {
+        let Some(webview) = self.active_webview() else {
+            return;
+        };
+        webview.evaluate_javascript(script, then);
+    }
+
+    /// Fill the saved login for this page into whatever form it has.
+    ///
+    /// Servo has no hook for a submitted form, so Zervo cannot offer to *save*
+    /// a login — but it has always been able to fill one, and PARITY.md said
+    /// otherwise for as long as it has existed. This is that correction made
+    /// good: the vault already holds the credential, and `evaluate_javascript`
+    /// is how it reaches the page.
+    ///
+    /// Deliberately narrow. It runs only when asked, only for a host with an
+    /// exact saved login, and the values reach the page as JSON literals
+    /// rather than spliced into source — a password containing a quote or a
+    /// newline is data, not syntax.
+    pub fn fill_saved_login(&self) -> Result<String, String> {
+        let host = self
+            .browser
+            .borrow()
+            .active_tab()
+            .and_then(|tab| url::Url::parse(&tab.url).ok())
+            .and_then(|url| {
+                // Same rule as the authentication prompt: a password is for
+                // the secure version of a site or for nothing.
+                (url.scheme() == "https")
+                    .then(|| url.host_str().map(str::to_owned))
+                    .flatten()
+            })
+            .ok_or_else(|| "Saved logins are only filled on https pages.".to_owned())?;
+
+        let vault = self.vault.borrow();
+        let login = vault
+            .for_host(&host)
+            .ok_or_else(|| format!("No saved login for {host}."))?;
+        let password = vault
+            .secret(&login)
+            .ok_or_else(|| "Your keychain would not give up that password.".to_owned())?;
+        drop(vault);
+
+        let username = serde_json::to_string(&login.username).map_err(|e| e.to_string())?;
+        let password = serde_json::to_string(&password).map_err(|e| e.to_string())?;
+        // Fill the password field first and take the username from the same
+        // form, so a page with several forms fills the one that actually asks
+        // for a password rather than the newsletter box at the bottom.
+        let script = format!(
+            r#"(function () {{
+  var p = document.querySelector('input[type=password]:not([disabled])');
+  if (!p) return 'no password field';
+  var form = p.form || document;
+  var u = form.querySelector(
+    'input[autocomplete=username], input[type=email], input[name*=user i], input[id*=user i], input[name*=email i], input[id*=email i], input[type=text]');
+  function set(el, value) {{
+    if (!el) return;
+    var proto = Object.getPrototypeOf(el);
+    var d = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (d && d.set) {{ d.set.call(el, value); }} else {{ el.value = value; }}
+    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  }}
+  set(u, {username});
+  set(p, {password});
+  return u ? 'filled' : 'password only';
+}})()"#
+        );
+        let host_for_log = host.clone();
+        self.evaluate_javascript(script, move |result| match result {
+            Ok(value) => log::info!("filled the saved login for {host_for_log}: {value:?}"),
+            Err(error) => log::warn!("could not fill the login for {host_for_log}: {error:?}"),
+        });
+        Ok(format!("Filled the saved login for {host}."))
     }
 
     pub fn active_webview(&self) -> Option<WebView> {
@@ -489,6 +583,64 @@ impl servo::WebViewDelegate for AppState {
             let url = webview.url().map(|url| url.to_string()).unwrap_or_default();
             self.library.borrow_mut().record(&url, &title, now());
         }
+        self.window.request_redraw();
+    }
+
+    /// The page reports what the pointer is over. This is the link-target
+    /// overlay every browser has in the bottom-left, and it is a security
+    /// feature as much as a convenience: it is how somebody checks where a
+    /// link actually goes before clicking it.
+    fn notify_status_text_changed(&self, _webview: WebView, status: Option<String>) {
+        if *self.status_text.borrow() == status {
+            return;
+        }
+        *self.status_text.borrow_mut() = status;
+        self.window.request_redraw();
+    }
+
+    /// A page ran `beforeunload` and wants to ask before navigating away.
+    ///
+    /// Dropping the request allows it, which is the wrong default for the one
+    /// dialog whose entire purpose is to stop you losing a half-filled form —
+    /// so it is queued and asked like any other page-initiated dialog.
+    /// A page raised a notification.
+    ///
+    /// There is no system-notification integration — that wants a signed bundle
+    /// and `UNUserNotificationCenter` on macOS — so it is shown in the window,
+    /// over the page that raised it. The icon, badge and image the spec allows
+    /// are dropped: they arrive as decoded rasters that would each need
+    /// uploading as a texture, and the title and body carry the message.
+    fn show_notification(&self, _webview: WebView, notification: servo::Notification) {
+        self.toasts.borrow_mut().raise(
+            notification.title,
+            notification.body,
+            notification.tag,
+            notification.require_interaction,
+            std::time::Instant::now(),
+        );
+        self.window.request_redraw();
+    }
+
+    fn request_unload(&self, _webview: WebView, unload_request: servo::AllowOrDenyRequest) {
+        self.controls.borrow_mut().push_unload(unload_request);
+        self.window.request_redraw();
+    }
+
+    /// A page asked for a capability that needs the user's say-so.
+    ///
+    /// Only `navigator.permissions.query()` and the wake lock reach here, and
+    /// only with `dom_permissions_enabled` set — see the preferences block in
+    /// `main.rs`. Camera, microphone and geolocation never send a request at
+    /// all, whatever the docs used to say.
+    fn request_permission(&self, _webview: WebView, request: servo::PermissionRequest) {
+        let host = self
+            .browser
+            .borrow()
+            .active_tab()
+            .and_then(|tab| url::Url::parse(&tab.url).ok())
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "This page".to_owned());
+        self.controls.borrow_mut().push_permission(request, host);
         self.window.request_redraw();
     }
 

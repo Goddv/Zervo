@@ -64,6 +64,17 @@ pub enum UiAction {
     NewWorkspace,
     SelectWorkspace(usize),
     OpenSettings,
+    /// Dismiss the notification with this id.
+    DismissNotification(u64),
+    /// Open or shut the notification tray behind the bell.
+    ToggleNotifications,
+    /// Throw away every notification being kept.
+    ClearNotifications,
+    /// Fill the saved login for the page in the active tab.
+    ///
+    /// Only ever raised by a deliberate keypress — see
+    /// `AppState::fill_saved_login`.
+    FillSavedLogin,
     OpenDownloads,
     OpenHistory,
     /// Add or remove the active page from favourites.
@@ -151,6 +162,10 @@ pub struct ChromeContext<'a> {
     /// page knows the moment it has finished its background and not yet drawn
     /// anything that sits on it.
     pub capture: Option<crate::backdrop::Capture>,
+    /// What the page says the pointer is over — a link's target, mostly.
+    pub status: Option<&'a str>,
+    /// Notifications raised by pages.
+    pub notifications: crate::notifications::View<'a>,
 }
 
 /// Draw the chrome into the root `Ui` handed to us by `EguiGlow::run`. The
@@ -233,6 +248,16 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         scale,
         &origin,
         chrome.vault,
+    );
+    if let Some(status) = chrome.status {
+        draw_status_text(root, &chrome.palette, content_rect, status);
+    }
+    draw_toasts(
+        root,
+        &chrome.palette,
+        content_rect,
+        &chrome.notifications,
+        &mut actions,
     );
     let controls_open = !chrome.controls.is_empty();
 
@@ -2461,6 +2486,10 @@ fn paint_edge_shadow(painter: &egui::Painter, rect: Rect, colour: Color32) {
 /// sits in a row of 25pt buttons, and a 36pt pill beside those reads as
 /// misaligned however well its centre lines up — it has 2pt of air where they
 /// have seven, so it looks like it is falling out of the top of the window.
+/// Where the notification bell sits, stashed by the address bar for the toast
+/// stack to grow out of. The two are drawn at opposite ends of the frame.
+const BELL_ANCHOR: &str = "zervo_bell_anchor";
+
 fn draw_address_pill(
     ui: &mut Ui,
     chrome: &mut ChromeContext,
@@ -2468,6 +2497,7 @@ fn draw_address_pill(
     height: f32,
 ) {
     let palette = chrome.palette;
+    let ctx = ui.ctx().clone();
     let loading = chrome
         .browser
         .active_tab()
@@ -2562,6 +2592,69 @@ fn draw_address_pill(
     }
     if loading {
         inner.add(egui::Spinner::new().size(14.0).color(palette.accent));
+    }
+
+    // ── The bell, at the far end of the pill, and only once a page has
+    // actually raised something. A permanently dead bell is furniture.
+    if chrome.notifications.count > 0 {
+        let count = chrome.notifications.count;
+        let response = icons::icon_button(
+            &mut inner,
+            if chrome.notifications.open {
+                Icon::BellRinging
+            } else {
+                Icon::Bell
+            },
+            15.0,
+            &palette,
+            true,
+        );
+        // Where the toasts grow from. Stashed rather than returned because the
+        // stack is drawn much later, over the content, by which point this Ui
+        // is long gone.
+        ctx.data_mut(|data| data.insert_temp(Id::new(BELL_ANCHOR), response.rect));
+
+        if count > 1 {
+            // A count, sat on the bell's shoulder.
+            let badge = Rect::from_center_size(
+                pos2(
+                    response.rect.center().x + 6.0,
+                    response.rect.center().y - 5.0,
+                ),
+                vec2(13.0, 13.0),
+            );
+            inner
+                .painter()
+                .circle_filled(badge.center(), badge.width() / 2.0, palette.accent);
+            inner.painter().text(
+                badge.center(),
+                Align2::CENTER_CENTER,
+                if count > 9 {
+                    "9+".to_owned()
+                } else {
+                    count.to_string()
+                },
+                FontId::proportional(8.5),
+                palette.bg,
+            );
+        }
+
+        if response
+            .on_hover_text(if chrome.notifications.open {
+                "Hide notifications"
+            } else if count == 1 {
+                "1 notification"
+            } else {
+                "Notifications"
+            })
+            .clicked()
+        {
+            actions.push(UiAction::ToggleNotifications);
+        }
+    } else {
+        // Nothing to anchor to any more, so the next toast starts from wherever
+        // the bell will actually be rather than where it last was.
+        ctx.data_mut(|data| data.remove::<Rect>(Id::new(BELL_ANCHOR)));
     }
 }
 
@@ -3384,4 +3477,247 @@ fn draw_downloads_page(
                 });
             });
         });
+}
+
+/// The link target, in the corner of the page.
+///
+/// Every browser has this and it is not decoration: it is how somebody checks
+/// where a link actually goes before clicking it, which is the whole defence
+/// against a link that says one thing and points at another.
+///
+/// Bottom-left, hugging the content card's corner, and clipped to the card so
+/// it cannot spill into the chrome. It is drawn over the page rather than
+/// reserving space, so nothing reflows when it appears.
+/// Interpolate a rectangle, corner for corner.
+fn lerp_rect(from: Rect, to: Rect, t: f32) -> Rect {
+    Rect::from_min_max(
+        pos2(
+            from.min.x + (to.min.x - from.min.x) * t,
+            from.min.y + (to.min.y - from.min.y) * t,
+        ),
+        pos2(
+            from.max.x + (to.max.x - from.max.x) * t,
+            from.max.y + (to.max.y - from.max.y) * t,
+        ),
+    )
+}
+
+/// Notifications raised by pages, stacked down the top-right of the content.
+///
+/// Returns the id of one the reader dismissed, if any. Clicking anywhere on a
+/// toast dismisses it: there is nothing else to do with one, so a separate
+/// close target would be a smaller version of the same thing.
+fn draw_toasts(
+    root: &Ui,
+    palette: &Palette,
+    content_rect: Rect,
+    notifications: &crate::notifications::View,
+    actions: &mut Vec<UiAction>,
+) {
+    let toasts = notifications.visible;
+    if toasts.is_empty() {
+        return;
+    }
+
+    const MARGIN: f32 = 12.0;
+    const GAP: f32 = 8.0;
+    const PAD: f32 = 10.0;
+
+    let width = 320.0_f32.min(content_rect.width() - MARGIN * 2.0);
+    if width < 120.0 {
+        // A window too narrow to read one in is a window too narrow to cover
+        // with one.
+        return;
+    }
+
+    // Where the bell is, if the address bar drew one this frame.
+    let anchor: Option<Rect> = root
+        .ctx()
+        .data(|data| data.get_temp::<Rect>(Id::new(BELL_ANCHOR)));
+
+    let mut dismissed = None;
+    let mut clear_all = false;
+    let mut top = content_rect.top() + MARGIN;
+
+    egui::Area::new(Id::new("zervo_toasts"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(content_rect.min)
+        .show(root.ctx(), |ui| {
+            let painter = ui.painter().with_clip_rect(content_rect);
+            for toast in toasts {
+                let wrap = width - PAD * 2.0;
+                let title = painter.layout(
+                    ellipsize(&toast.title, 120),
+                    FontId::proportional(12.5),
+                    palette.text,
+                    wrap,
+                );
+                let body = (!toast.body.trim().is_empty()).then(|| {
+                    painter.layout(
+                        ellipsize(&toast.body, 300),
+                        FontId::proportional(11.5),
+                        palette.text_muted,
+                        wrap,
+                    )
+                });
+
+                let title_height = title.size().y;
+                let mut height = PAD * 2.0 + title_height;
+                if let Some(body) = &body {
+                    height += 3.0 + body.size().y;
+                }
+
+                let rect = Rect::from_min_size(
+                    pos2(content_rect.right() - MARGIN - width, top),
+                    vec2(width, height),
+                );
+                if rect.bottom() > content_rect.bottom() {
+                    break;
+                }
+
+                // Grow out of the bell rather than simply appear: a
+                // notification with no visible cause reads as the window doing
+                // something, not the page.
+                //
+                // `animate_bool_with_time` starts from the opposite of what it
+                // is asked for, so a toast drawn for the first time begins at
+                // the bell and is at rest by the time it stops moving.
+                let grow = glass::ease_out(ui.ctx().animate_bool_with_time(
+                    Id::new("zervo_toast_in").with(toast.id),
+                    true,
+                    0.26,
+                ));
+                let rect = anchor.map_or(rect, |from| lerp_rect(from, rect, grow));
+
+                // Keyed on the toast's own id rather than its position, so
+                // dismissing the one above does not hand its hover state to
+                // the next.
+                let response =
+                    ui.interact(rect, Id::new("zervo_toast").with(toast.id), Sense::click());
+                if response.clicked() {
+                    dismissed = Some(toast.id);
+                }
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+
+                // The same glass every other floating panel is made of, so a
+                // theme that changes what a menu looks like changes this too.
+                for shape in glass::shapes(
+                    rect,
+                    palette,
+                    Glass::of(Surface::Menu)
+                        .radius(Tier::Panel)
+                        .opaque(palette.bg)
+                        .border(palette.border),
+                ) {
+                    painter.add(shape);
+                }
+
+                // Text only once there is somewhere to put it — at the start of
+                // the morph the surface is bell-sized, and anything drawn into
+                // it would spill out and then snap into place.
+                let ink = ((grow - 0.45) / 0.55).clamp(0.0, 1.0);
+                if ink > 0.0 {
+                    let text_left = rect.left() + PAD;
+                    let text_top = rect.top() + PAD;
+                    painter.galley(
+                        pos2(text_left, text_top),
+                        title,
+                        palette.text.gamma_multiply(ink),
+                    );
+                    if let Some(body) = body {
+                        painter.galley(
+                            pos2(text_left, text_top + title_height + 3.0),
+                            body,
+                            palette.text_muted.gamma_multiply(ink),
+                        );
+                    }
+                }
+
+                top = rect.bottom() + GAP;
+            }
+
+            // ── Clearing the lot. Only worth offering once the tray is open
+            // and there is more than one thing in it — with a single
+            // notification, clicking it is already the shorter way.
+            if notifications.open && toasts.len() > 1 {
+                let rect = Rect::from_min_size(
+                    pos2(content_rect.right() - MARGIN - width, top),
+                    vec2(width, 26.0),
+                );
+                if rect.bottom() <= content_rect.bottom() {
+                    let response = ui.interact(rect, Id::new("zervo_toasts_clear"), Sense::click());
+                    if response.clicked() {
+                        clear_all = true;
+                    }
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    let lit = glass::ease_out(ui.ctx().animate_bool_with_time(
+                        Id::new("zervo_toasts_clear_hover"),
+                        response.hovered(),
+                        0.12,
+                    ));
+                    for shape in glass::shapes(
+                        rect,
+                        palette,
+                        Glass::of(Surface::Menu)
+                            .radius(Tier::Panel)
+                            .opaque(palette.bg)
+                            .border(palette.border),
+                    ) {
+                        painter.add(shape);
+                    }
+                    painter.text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        "Clear all",
+                        FontId::proportional(11.5),
+                        theme::mix(palette.text_muted, palette.text, lit),
+                    );
+                }
+            }
+        });
+
+    if let Some(id) = dismissed {
+        actions.push(UiAction::DismissNotification(id));
+    }
+    if clear_all {
+        actions.push(UiAction::ClearNotifications);
+    }
+}
+
+fn draw_status_text(root: &Ui, palette: &Palette, content_rect: Rect, status: &str) {
+    if status.trim().is_empty() {
+        return;
+    }
+    let painter = root.ctx().layer_painter(egui::LayerId::background());
+    let font = FontId::proportional(11.5);
+    // Long URLs are the common case, so give it most of the card and trim the
+    // middle rather than the end — the host is the part worth reading, and so
+    // is the end of the path.
+    let text = ellipsize(status, 128);
+    let galley = painter.layout_no_wrap(text, font, palette.text_muted);
+    let pad = vec2(8.0, 4.0);
+    let size = galley.size() + pad * 2.0;
+    let rect = Rect::from_min_size(
+        pos2(content_rect.left(), content_rect.bottom() - size.y),
+        size,
+    )
+    .intersect(content_rect);
+    let painter = painter.with_clip_rect(content_rect);
+    for shape in glass::shapes(
+        rect,
+        palette,
+        Glass::of(Surface::Menu)
+            .opaque(palette.bg)
+            // Square where it meets the card's own edges, rounded only on the
+            // corner that faces into the page.
+            .radius_exact(0)
+            .border(palette.border),
+    ) {
+        painter.add(shape);
+    }
+    painter.galley(rect.min + pad, galley, palette.text_muted);
 }

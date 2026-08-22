@@ -25,6 +25,20 @@ metadata and playback actions (`notify_media_session_event`, which is what the
 player widgets drive), a searchable history, favourites, and a login vault kept
 in the system keychain.
 
+As of 0.4.2: permission prompts (`request_permission`), the link target on hover
+(`notify_status_text_changed`), `beforeunload` (`request_unload`), filling a
+saved login into a page's form (`evaluate_javascript`, on ⌘⇧L), web
+notifications (`show_notification`, shown in the window and collected behind a
+bell in the address bar), and a preferences block that turns on IntersectionObserver — without which
+`loading="lazy"` images never load at all — the async clipboard, adopted
+stylesheets, container queries, multi-column layout, variable fonts, the visual
+viewport, the Permissions API, and WebGL 2 (WebGL 1 still answers for anything
+that asks for it).
+
+Notifications are shown inside the window rather than handed to the system —
+that wants a signed bundle and `UNUserNotificationCenter` on macOS, and an
+equivalent everywhere else — and their icons, badges and images are dropped.
+
 Tier 0 is done. What is left is the list below.
 
 ## Streaming video does not work
@@ -53,10 +67,12 @@ Each of these is a delegate method or a `WebView` call away.
 - **Fullscreen.** `notify_fullscreen_state_changed` is not implemented, so the
   fullscreen button on a video player does nothing useful.
   `WebView::exit_fullscreen` is there for the way back out.
-- **Permissions.** `request_permission` is not implemented. Geolocation,
-  notifications, camera and microphone requests never reach the user.
-- **The link target on hover.** `notify_status_text_changed` and
-  `WebView::status_text` exist; the usual bottom-left overlay does not.
+- **What a permission prompt can actually grant.** The prompt itself is wired,
+  but there is nothing behind some of the doors: the engine ships no
+  `Geolocation` and no `getUserMedia` IDL, so a page cannot ask for location,
+  camera or microphone in the first place and the prompt will never appear for
+  them. `navigator.permissions.query` and notifications do reach it. Removing
+  this entry needs engine work, not embedder work.
 - **Clearing browsing data.** `Servo::site_data_manager` offers `clear_cookies`,
   `clear_session_cookies` and `clear_site_data`, and nothing in Settings calls
   them. Now that cookies persist, there is no way to get rid of them.
@@ -65,10 +81,18 @@ Each of these is a delegate method or a `WebView` call away.
   engine has no extension support at all.
 - **`screen.availWidth`/`availHeight`** report the whole display rather than
   subtracting the menu bar and Dock.
-- **Filling passwords into web forms.** There is no embedder hook for a
-  submitted form and no way to write into a page's fields, so saved logins can
-  only be used for HTTP authentication. If Servo grows a credential API, that is
-  where filling would attach.
+- **Offering to save a login from a form.** There is no embedder hook for a
+  submitted form, so Zervo cannot notice you signing in and offer to remember
+  it; logins have to be added by hand in Settings. *Filling* one is done — ⌘⇧L
+  writes the saved credential into the page through `evaluate_javascript` — and
+  this entry claimed for a long time that it could not be, which was never true.
+  Note the engine resolves that script against the top-level document only, so a
+  login form inside a cross-origin iframe is out of reach.
+- **Protocol handlers** (`request_protocol_handler`) — a delegate method with a
+  default empty body, so embedder work rather than engine work.
+- **The page's accessibility tree.** `notify_accessibility_tree_update` is a
+  delegate method and is not implemented, so VoiceOver sees the chrome — which
+  has its own AccessKit tree as of 0.4.0 — and nothing inside the page.
 - **Session restore.** Pure chrome work, no engine involvement: workspaces and
   tabs written out and read back at launch.
 - **Favicons for history and favourites.** They are fetched per live webview and
@@ -83,12 +107,11 @@ Each of these is a delegate method or a `WebView` call away.
   streamed to disk with no way to suspend it and no range-request restart, so
   the downloads card offers stop and start-again and nothing between. Real
   pause/resume means teaching the fetch layer about it.
-- **Web notifications** (`show_notification`) and **protocol handlers**
-  (`request_protocol_handler`).
-- **Accessibility.** `notify_accessibility_tree_update` is not implemented, so
-  VoiceOver sees nothing.
 - **Devtools.** Console output goes to Zervo's log and nowhere the user can see;
   there is no inspector, network panel or JavaScript console in the browser.
+  Servo has a devtools server and `Preferences::devtools_server_enabled` starts
+  it, so this is a large piece of embedder work rather than an engine gap — but
+  it is a whole application, which is why it sits down here.
 - **Extensions, sync, profiles.** Not planned.
 
 ## Known rough edges
@@ -111,9 +134,9 @@ is in the engine, contribute it to [Servo][servo] directly — but note that Ser
 does not accept AI-generated contributions, and check whether the work is already
 assigned before starting.
 
-Released builds compile against [a fork][fork] carrying the download patch,
-pinned to a revision in `.github/workflows/macos.yml`. See [SERVO.md](SERVO.md)
-for building against it yourself.
+Every build — local and released alike — compiles against [a fork][fork]
+carrying the download patch, pinned to a revision by the `[patch.crates-io]`
+block in `.cargo/config.toml`. See [SERVO.md](SERVO.md) for the details.
 
-[fork]: https://github.com/Goddv/servo/tree/zervo-downloads
+[fork]: https://github.com/Goddv/servo/tree/goddv-patches
 [servo]: https://servo.org

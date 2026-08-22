@@ -40,10 +40,17 @@ people do not write it twice.
 
 - **Fullscreen** (`notify_fullscreen_state_changed`) — the button on a video
   player currently does nothing useful.
-- **Permission prompts** (`request_permission`) — geolocation, notifications,
-  camera and microphone never reach the user.
-- **The link target on hover** — `notify_status_text_changed` and
-  `WebView::status_text` are both there; the bottom-left overlay is not.
+- **Protocol handlers** (`request_protocol_handler`) — a delegate method with an
+  empty default body, so a page offering to handle `mailto:` is ignored.
+- **Notifications to the system tray.** They are shown inside the window now,
+  which is the honest version of the feature rather than the expected one: a
+  notification you cannot see because Zervo is behind another window is a
+  notification that did not arrive. macOS wants a signed bundle and
+  `UNUserNotificationCenter`. The icons, badges and images the spec allows are
+  dropped too — each would need uploading as a texture.
+- **The page's accessibility tree** (`notify_accessibility_tree_update`) — the
+  chrome has an AccessKit tree; everything inside the page is still invisible to
+  VoiceOver, which is the half that matters more.
 - **Dropped files** — dragging a file onto the window should open it.
 - **More widgets, and a way to write them.** The shelf takes any grid-placed
   widget; there are three. Notes, a downloads strip and a page-actions row are
@@ -63,7 +70,12 @@ Listed so nobody starts them expecting to finish. Details in
 - Find in page — no find API on `WebView`.
 - Pausing a download — no way to suspend a transfer, and no range-request
   restart.
-- Filling saved logins into web forms — no embedder hook for a submitted form.
+- Offering to save a login you have just typed into a form — no embedder hook
+  for a submitted form. *Filling* a saved one works (⌘⇧L); it was listed here as
+  impossible for a long time and never was.
+- Location, camera and microphone — the permission prompt is wired, but the
+  engine ships no `Geolocation` and no `getUserMedia` IDL, so a page cannot ask
+  for them and the prompt will never appear for those features.
 - Extensions — no engine support at all.
 
 ## Housekeeping

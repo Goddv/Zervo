@@ -49,6 +49,7 @@ mod icons;
 mod keyboard;
 mod library;
 mod newtab;
+mod notifications;
 mod passwords;
 mod phosphor;
 // macOS has its own paths inline, using the AppKit bindings it already has.
@@ -136,7 +137,9 @@ enum PointerOwner {
 }
 
 use crate::app::AppState;
-use crate::keyboard::{CMD_OR_ALT, CMD_OR_CONTROL, keyboard_event_from_winit};
+use crate::keyboard::{
+    CMD_OR_ALT, CMD_OR_CONTROL, CMD_OR_CONTROL_SHIFT, keyboard_event_from_winit,
+};
 use crate::settings::{NewTabPage, Settings};
 use crate::state::{BrowserState, TabId, TabKind};
 use crate::theme::Palette;
@@ -382,12 +385,70 @@ impl ApplicationHandler<WakerEvent> for App {
             let _ = std::fs::create_dir_all(&dir);
             opts.config_dir = Some(dir);
         }
+        // The colour the engine clears to, and the root default background, so
+        // a page that has not painted yet shows the chrome rather than white.
+        // Every navigation used to flash white first, which in a dark theme is
+        // the most visible thing the browser does. A page with a background of
+        // its own still wins: this is only the default underneath.
+        let start = theme::resolve(settings.theme, system_dark, settings.accent);
+        let shell_background = {
+            let bg = start.bg;
+            let channel = |v: u8| f64::from(v) / 255.0;
+            [
+                channel(bg.r()),
+                channel(bg.g()),
+                channel(bg.b()),
+                channel(bg.a()),
+            ]
+        };
         let mut preferences = servo::Preferences {
             // WebGPU is compiled in (the `webgpu` engine feature), so let
             // pages reach it, and name the backend rather than taking wgpu's
             // first choice from its PRIMARY set. See `gpu::webgpu_backend`.
             dom_webgpu_enabled: true,
             dom_webgpu_wgpu_backend: gpu::webgpu_backend().to_owned(),
+            // WebGL 2. The `webgl` engine feature brings the implementation;
+            // this is what puts `WebGL2RenderingContext` on the page. WebGL 1
+            // is unaffected — a canvas asking for `webgl` still gets it, so
+            // this adds a context rather than replacing one.
+            dom_webgl2_enabled: true,
+            shell_background_color_rgba: shell_background,
+
+            // ── The web platform block ──────────────────────────────────
+            // All of these ship in the engine and are simply switched off by
+            // default. Every one of them is on Servo's own vetted list in
+            // `ports/servoshell/prefs.rs`.
+            //
+            // Without IntersectionObserver, lazy-loaded images and infinite
+            // feeds never load: the observer never fires, so the placeholder
+            // is permanent. It is the single most visible one.
+            dom_intersection_observer_enabled: true,
+            // Every "Copy" button on GitHub, StackOverflow and most docs sites
+            // goes through `navigator.clipboard`. Servo's own default clipboard
+            // delegate services it through arboard, which Zervo already links
+            // for the `clipboard` feature, so this needs no code.
+            dom_async_clipboard_enabled: true,
+            // Constructed stylesheets — how web components ship their styling.
+            // Without it Lit and friends render unstyled.
+            dom_adoptedstylesheet_enabled: true,
+            // `@container`, and multi-column layout. Both fall back to
+            // something wrong-looking rather than something absent.
+            layout_container_queries_enabled: true,
+            layout_columns_enabled: true,
+            // Variable fonts, which most modern type on the web now is.
+            layout_variable_fonts_enabled: true,
+            dom_visual_viewport_enabled: true,
+
+            // ── Permissions ─────────────────────────────────────────────
+            // `navigator.permissions.query()` is the only general path that
+            // reaches the embedder, and it is gated behind this. Notifications
+            // are the one feature that then actually asks. See the delegate in
+            // `app.rs` and the note in docs/PARITY.md about what is *not*
+            // reachable: camera, microphone and geolocation never send a
+            // request at all, which is an engine gap rather than an embedder
+            // one.
+            dom_permissions_enabled: true,
+            dom_notification_enabled: true,
             ..Default::default()
         };
         if settings.user_agent_compat {
@@ -418,7 +479,7 @@ impl ApplicationHandler<WakerEvent> for App {
             .or_else(|| Url::parse(&settings.homepage).ok())
             .unwrap_or_else(|| Url::parse("https://servo.org").expect("valid default URL"));
 
-        let resolved_dark = theme::resolve(settings.theme, system_dark, settings.accent).dark;
+        let resolved_dark = start.dark;
         let state = Rc::new(AppState {
             servo,
             window_rendering_context,
@@ -438,6 +499,8 @@ impl ApplicationHandler<WakerEvent> for App {
             content_origin: Cell::new((0.0, 0.0)),
             #[cfg(feature = "engine-downloads")]
             download_events: RefCell::new(Vec::new()),
+            status_text: RefCell::new(None),
+            toasts: RefCell::new(crate::notifications::Toasts::default()),
             last_window_title: RefCell::new(String::new()),
             window,
         });
@@ -922,6 +985,9 @@ impl RunningApp {
                 state.browser.borrow_mut().focus_address = true;
                 state.window.request_redraw();
             })
+            .shortcut(CMD_OR_CONTROL_SHIFT, 'L', || {
+                self.apply_action(UiAction::FillSavedLogin);
+            })
             .shortcut(CMD_OR_CONTROL, 'X', || {
                 if let Some(webview) = &active_webview {
                     webview.notify_input_event(InputEvent::EditingAction(EditingActionEvent::Cut));
@@ -1107,6 +1173,22 @@ impl RunningApp {
             let mut library = state.library.borrow_mut();
             let mut vault = state.vault.borrow_mut();
             let media = state.media.borrow().clone();
+            // Cloned rather than borrowed across the pass: `ui.rs` holds four
+            // `RefMut`s already, and a fifth live borrow is one more way to
+            // meet the panic in `AppState::sync`.
+            let status = state.status_text.borrow().clone();
+            // Same reason: a snapshot rather than a `Ref` held across the pass.
+            // Time is read here, once, rather than by the chrome — `ui.rs`
+            // reads no clock, and the wake that brings us here was scheduled
+            // off `next_deadline` below.
+            let (toasts, toast_count, toasts_open) = {
+                let held = state.toasts.borrow();
+                (
+                    held.view(std::time::Instant::now()),
+                    held.count(),
+                    held.is_open(),
+                )
+            };
             let mut chrome = ui::ChromeContext {
                 browser: &mut browser,
                 controls: &mut controls,
@@ -1119,6 +1201,12 @@ impl RunningApp {
                 downloads: &self.downloads,
                 wallpaper,
                 capture: capture.clone(),
+                status: status.as_deref(),
+                notifications: crate::notifications::View {
+                    visible: &toasts,
+                    count: toast_count,
+                    open: toasts_open,
+                },
             };
             let output = ui::draw(root, &mut chrome);
             drop(browser);
@@ -1279,6 +1367,17 @@ impl RunningApp {
             self.pending_repaint_at = Some(
                 self.pending_repaint_at
                     .map_or(deadline, |d| d.min(deadline)),
+            );
+        }
+        // Nothing else will wake the loop when a notification's time is up.
+        if let Some(deadline) = state
+            .toasts
+            .borrow()
+            .next_deadline(std::time::Instant::now())
+        {
+            self.pending_repaint_at = Some(
+                self.pending_repaint_at
+                    .map_or(deadline, |at| at.min(deadline)),
             );
         }
         if state.library.borrow().needs_save()
@@ -1672,6 +1771,28 @@ impl RunningApp {
             UiAction::OpenSettings => {
                 let tab_id = state.browser.borrow_mut().find_or_create_settings_tab();
                 state.activate_tab(tab_id);
+            },
+            UiAction::DismissNotification(id) => {
+                state.toasts.borrow_mut().dismiss(id);
+                state.window.request_redraw();
+            },
+            UiAction::ToggleNotifications => {
+                state.toasts.borrow_mut().toggle();
+                state.window.request_redraw();
+            },
+            UiAction::ClearNotifications => {
+                state.toasts.borrow_mut().clear();
+                state.window.request_redraw();
+            },
+            UiAction::FillSavedLogin => {
+                // The status line is where the eye already is, and it is
+                // already ephemeral — the right place to say what happened
+                // without stealing focus from the form being filled.
+                let notice = match state.fill_saved_login() {
+                    Ok(message) | Err(message) => message,
+                };
+                *state.status_text.borrow_mut() = Some(notice);
+                state.window.request_redraw();
             },
             UiAction::CloseTab(tab_id) => state.close_tab(tab_id),
             UiAction::TogglePin(tab_id) => {

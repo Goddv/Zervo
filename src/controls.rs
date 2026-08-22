@@ -18,8 +18,8 @@ use egui::{
     TextEdit, Ui, pos2, vec2,
 };
 use servo::{
-    AuthenticationRequest, ContextMenuAction, ContextMenuItem, EmbedderControl, EmbedderControlId,
-    RgbColor, SelectElementOptionOrOptgroup, SimpleDialog,
+    AllowOrDenyRequest, AuthenticationRequest, ContextMenuAction, ContextMenuItem, EmbedderControl,
+    EmbedderControlId, RgbColor, SelectElementOptionOrOptgroup, SimpleDialog,
 };
 
 use crate::glass::{self, Glass};
@@ -62,12 +62,25 @@ pub struct Accepted {
     pub filename: String,
 }
 
+/// A `beforeunload` the page wants confirmed before it is navigated away from.
+struct Unload(AllowOrDenyRequest);
+
+/// A capability a page asked for, and the host that asked.
+struct Permission {
+    request: servo::PermissionRequest,
+    host: String,
+}
+
 /// Controls waiting for the user, oldest first.
 #[derive(Default)]
 pub struct Controls {
     pending: Vec<EmbedderControl>,
     /// An authentication challenge on screen. One at a time.
     auth: Option<Auth>,
+    /// A `beforeunload` confirmation.
+    unload: Option<Unload>,
+    /// A permission the page asked for.
+    permission: Option<Permission>,
     /// A download waiting to be allowed.
     #[cfg(feature = "engine-downloads")]
     offer: Option<Offer>,
@@ -145,12 +158,161 @@ impl Controls {
         std::mem::take(&mut self.accepted)
     }
 
+    /// Queue a `beforeunload` confirmation.
+    pub fn push_unload(&mut self, request: AllowOrDenyRequest) {
+        // A second one while the first is up is dropped, and dropping allows —
+        // which is right here: the page has already been told once.
+        if self.unload.is_none() {
+            self.unload = Some(Unload(request));
+        }
+    }
+
+    /// Queue a permission request.
+    pub fn push_permission(&mut self, request: servo::PermissionRequest, host: String) {
+        // Dropping denies, which is the safe answer for one nobody saw.
+        if self.permission.is_none() {
+            self.permission = Some(Permission { request, host });
+        }
+    }
+
+    /// The `beforeunload` confirmation: leave, or stay.
+    fn draw_unload(&mut self, root: &mut Ui, palette: &Palette, content_rect: Rect) {
+        if self.unload.is_none() {
+            return;
+        }
+        let ctx = root.ctx().clone();
+        let mut stay = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        let mut leave = false;
+        let rect = Rect::from_center_size(
+            content_rect.center(),
+            vec2(420.0_f32.min(content_rect.width() - 48.0), 140.0),
+        );
+        panel(
+            &ctx,
+            "zervo_unload",
+            palette,
+            Some(content_rect),
+            rect,
+            14,
+            |ui| {
+                let top = ui.max_rect().min;
+                ui.painter().text(
+                    top,
+                    Align2::LEFT_TOP,
+                    "Leave this page?",
+                    FontId::proportional(14.0),
+                    palette.text,
+                );
+                ui.painter().text(
+                    top + vec2(0.0, 26.0),
+                    Align2::LEFT_TOP,
+                    "Anything you have typed and not sent will be lost.",
+                    FontId::proportional(12.5),
+                    palette.text_muted,
+                );
+                let row = Rect::from_min_max(
+                    pos2(ui.max_rect().min.x, ui.max_rect().max.y - 28.0),
+                    ui.max_rect().max,
+                );
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                );
+                // Staying is the primary action: it is the one that cannot lose
+                // anything, and the page only asked because there is something to
+                // lose.
+                stay |= button(&mut child, "Stay", palette, true);
+                child.add_space(8.0);
+                leave = button(&mut child, "Leave", palette, false);
+            },
+        );
+        if !(stay || leave) {
+            return;
+        }
+        let Some(Unload(request)) = self.unload.take() else {
+            return;
+        };
+        if leave {
+            request.allow();
+        } else {
+            request.deny();
+        }
+    }
+
+    /// A capability the page asked for.
+    fn draw_permission(&mut self, root: &mut Ui, palette: &Palette, content_rect: Rect) {
+        let Some(pending) = &self.permission else {
+            return;
+        };
+        let ctx = root.ctx().clone();
+        let mut deny = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        let mut allow = false;
+        let host = pending.host.clone();
+        let what = feature_name(pending.request.feature());
+        let rect = Rect::from_center_size(
+            content_rect.center(),
+            vec2(420.0_f32.min(content_rect.width() - 48.0), 148.0),
+        );
+        panel(
+            &ctx,
+            "zervo_permission",
+            palette,
+            Some(content_rect),
+            rect,
+            14,
+            |ui| {
+                let top = ui.max_rect().min;
+                ui.painter().text(
+                    top,
+                    Align2::LEFT_TOP,
+                    format!("{host} wants {what}"),
+                    FontId::proportional(14.0),
+                    palette.text,
+                );
+                ui.painter().text(
+                    top + vec2(0.0, 26.0),
+                    Align2::LEFT_TOP,
+                    "You can change your mind later in Settings.",
+                    FontId::proportional(12.5),
+                    palette.text_muted,
+                );
+                let row = Rect::from_min_max(
+                    pos2(ui.max_rect().min.x, ui.max_rect().max.y - 28.0),
+                    ui.max_rect().max,
+                );
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                );
+                allow = button(&mut child, "Allow", palette, true);
+                child.add_space(8.0);
+                deny |= button(&mut child, "Block", palette, false);
+            },
+        );
+        if !(allow || deny) {
+            return;
+        }
+        let Some(pending) = self.permission.take() else {
+            return;
+        };
+        if allow {
+            pending.request.allow();
+        } else {
+            pending.request.deny();
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         #[cfg(feature = "engine-downloads")]
         if self.offer.is_some() {
             return false;
         }
-        self.pending.is_empty() && self.auth.is_none()
+        self.pending.is_empty()
+            && self.auth.is_none()
+            && self.unload.is_none()
+            && self.permission.is_none()
     }
 
     /// The download prompt: who is offering, what it is called, two buttons.
@@ -358,6 +520,14 @@ impl Controls {
         #[cfg(feature = "engine-downloads")]
         if self.offer.is_some() {
             self.draw_offer(root, palette, content_rect);
+            return;
+        }
+        if self.permission.is_some() {
+            self.draw_permission(root, palette, content_rect);
+            return;
+        }
+        if self.unload.is_some() {
+            self.draw_unload(root, palette, content_rect);
             return;
         }
         let Some(index) = self.pending.len().checked_sub(1) else {
@@ -1068,4 +1238,28 @@ fn clicked_outside(ctx: &egui::Context, rect: Rect) -> bool {
                 .interact_pos()
                 .is_some_and(|pos| !rect.contains(pos))
     })
+}
+
+/// What to call a capability on screen. Phrased to finish "example.com
+/// wants …", so a person reads a sentence rather than a spec term.
+fn feature_name(feature: servo::PermissionFeature) -> &'static str {
+    use servo::PermissionFeature as F;
+    match feature {
+        F::Geolocation => "your location",
+        F::Notifications => "to send you notifications",
+        F::Push => "to send you push messages",
+        F::Midi => "to use your MIDI devices",
+        F::Camera => "to use your camera",
+        F::Microphone => "to use your microphone",
+        F::Speaker => "to use your speakers",
+        F::DeviceInfo => "to see your devices",
+        F::BackgroundSync => "to sync in the background",
+        F::Bluetooth => "to use Bluetooth",
+        F::PersistentStorage => "to store data on this device",
+        F::ScreenWakeLock(_) => "to keep the screen awake",
+        F::Gamepad => "to use your gamepad",
+        // Deliberately exhaustive, with no catch-all: when Servo adds a
+        // feature this stops compiling, which is the moment to decide what to
+        // call it rather than shipping "a permission".
+    }
 }

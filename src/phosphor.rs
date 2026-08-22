@@ -8,6 +8,12 @@
 #![allow(dead_code)]
 
 pub mod glyph {
+    /// Phosphor `bell`
+    pub const BELL: &str = "\u{e0ce}";
+
+    /// Phosphor `bell-ringing`
+    pub const BELLRINGING: &str = "\u{e5e8}";
+
     /// Phosphor `arrow-left`
     pub const ARROWLEFT: &str = "\u{e058}";
 
