@@ -299,7 +299,13 @@ impl FromWinitKeyEvent for Key {
             WinitNamedKey::SplitScreenToggle => Key::Named(NamedKey::SplitScreenToggle),
             WinitNamedKey::Standby => Key::Named(NamedKey::Standby),
             WinitNamedKey::Subtitle => Key::Named(NamedKey::Subtitle),
-            WinitNamedKey::Super => Key::Named(NamedKey::Super),
+            // Meta, not Super. winit reports the Command key on macOS (and the
+            // Windows key elsewhere) as `Super`, but the UI Events spec calls
+            // that key `Meta`, and every other browser sends `Meta` — so a page
+            // testing `e.key === "Meta"` did not see Command at all. servoshell
+            // fixed the same line in servo#47330; this table is a copy of that
+            // file and predates it.
+            WinitNamedKey::Super => Key::Named(NamedKey::Meta),
             WinitNamedKey::Symbol => Key::Named(NamedKey::Symbol),
             WinitNamedKey::SymbolLock => Key::Named(NamedKey::SymbolLock),
             WinitNamedKey::TV => Key::Named(NamedKey::TV),
