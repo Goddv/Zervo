@@ -68,19 +68,19 @@ Cargo cannot patch a dependency in place, so build against a patched checkout:
 # once
 gh repo fork servo/servo --clone   # or fork in the web UI and clone
 cd servo
-git checkout -b zervo-downloads f7cd7d88047…
+git checkout -b zervo-downloads bd220a152bc…
 git apply /path/to/zervo/patches/servo/0001-embedder-file-downloads.patch
 git commit -am "embedder: offer unrenderable responses to the embedder"
 git push -u origin zervo-downloads
 ```
 
-Then point Zervo at the fork, either permanently in `Cargo.toml`:
+Zervo already points at the fork: `.cargo/config.toml` carries a
+`[patch.crates-io]` entry pinned to a revision of `zervo-downloads`. Bumping the
+engine means editing that one line — it used to live in three workflow files as
+well, which is exactly the sort of thing that drifts.
 
-```toml
-servo = { git = "https://github.com/YOU/servo", branch = "zervo-downloads", … }
-```
-
-…or locally, without touching the manifest, in `.cargo/config.toml`:
+To work against a local checkout instead, replace the `git`/`rev` entry with a
+path:
 
 ```toml
 [patch.crates-io]
@@ -92,6 +92,12 @@ touches `servo-net` and `servo-script` too, you may need to redirect those
 sibling crates to the same checkout.
 
 and build with `--features engine-downloads`.
+
+The patch is *not* optional at the moment, even without that feature. Servo
+renamed `MouseButton`'s variants to `Primary`/`Secondary`/`Auxiliary` on
+21 August 2026 and `src/main.rs` follows the new names, while the newest `servo`
+on crates.io is still 0.5.0 with the old ones. Until a release carries the
+rename, the registry crate does not compile Zervo at all.
 
 ### Upstreaming
 

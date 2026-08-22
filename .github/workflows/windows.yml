@@ -19,8 +19,6 @@ env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: sccache
-  SERVO_FORK: https://github.com/Goddv/servo
-  SERVO_REV: 36176b7d2c065dbed8f37edf39da495d41a4eaca
   # mozjs looks for this exact version, in this exact place, and panics with
   # "MozTools or MozillaBuild not found!" if it is missing. It does not fetch
   # it itself.
@@ -85,19 +83,6 @@ jobs:
             ~/.cargo/registry/cache
           key: cargo-windows-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-windows-
-
-      - name: Point Cargo at the patched engine
-        shell: bash
-        run: |
-          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
-            echo "engine-downloads off; building against the published crate"
-            exit 0
-          fi
-          cat >> .cargo/config.toml <<EOF
-
-          [patch.crates-io]
-          servo = { git = "$SERVO_FORK", rev = "$SERVO_REV" }
-          EOF
 
       - name: Build
         shell: bash

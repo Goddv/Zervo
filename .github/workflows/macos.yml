@@ -36,8 +36,6 @@ env:
   # Servo only supports the official GStreamer distribution on macOS, and pins
   # this version. Both packages are needed: the runtime and the headers.
   GSTREAMER_VERSION: 1.22.3
-  SERVO_FORK: https://github.com/Goddv/servo
-  SERVO_REV: 36176b7d2c065dbed8f37edf39da495d41a4eaca
   # sccache is the single biggest lever here: Servo's own CI measures ~15 min
   # warm against ~54 min cold for the same profile.
   SCCACHE_GHA_ENABLED: "true"
@@ -98,23 +96,6 @@ jobs:
             sudo installer -pkg "/tmp/$PKG.pkg" -target /
           done
           ls /Library/Frameworks/GStreamer.framework/Versions/1.0/bin/pkg-config
-
-      - name: Point Cargo at the patched engine
-        # Appended rather than committed, so a plain clone still builds against
-        # the published crate with no setup. Patching `servo` pulls the whole
-        # forked workspace in with it, since its components depend on each
-        # other by path.
-        run: |
-          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
-            echo "engine-downloads off; building against the published crate"
-            exit 0
-          fi
-          cat >> .cargo/config.toml <<EOF
-
-          [patch.crates-io]
-          servo = { git = "$SERVO_FORK", rev = "$SERVO_REV" }
-          EOF
-          tail -5 .cargo/config.toml
 
       - name: Build and bundle
         run: |

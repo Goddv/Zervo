@@ -1,12 +1,24 @@
-# Local development against a patched Servo checkout.
+# The engine Zervo builds against.
 #
-# Uncomment to build with `--features engine-downloads` (see docs/SERVO.md).
-# Left commented so a fresh clone builds against the published crate with no
-# setup; CI appends the same block for release builds.
+# This used to be commented out, "so a fresh clone builds against the published
+# crate with no setup", and CI appended the same block for release builds. That
+# stopped being true: the engine bump of 21 August renamed `MouseButton`'s
+# variants to `Primary`/`Secondary`/`Auxiliary`, `src/main.rs` follows the new
+# names, and the newest `servo` on crates.io is still 0.5.0 with the old ones.
+# So a plain `cargo build` failed with three E0599s while every workflow stayed
+# green, because the workflows all appended this block and the one job that runs
+# on a pull request never builds the binary.
 #
-# [patch.crates-io]
-# servo = { git = "https://github.com/Goddv/servo", rev = "36176b7d2c065dbed8f37edf39da495d41a4eaca" }
+# It is committed now, which makes a fresh clone build and puts the revision in
+# one place instead of four. Patching `servo` pulls the whole forked workspace
+# in with it, since its components depend on each other by path.
 #
+# The fork exists for one patch — embedder-driven downloads, see docs/SERVO.md.
+# When Servo publishes a release carrying the `MouseButton` rename, everything
+# except `--features engine-downloads` could go back to the registry.
+[patch.crates-io]
+servo = { git = "https://github.com/Goddv/servo", rev = "929546bf7b1ab07c25ed5025c8311fa3c1456339" }
+
 # Or point at a local checkout while working on the patch itself:
 #
 # [patch.crates-io]

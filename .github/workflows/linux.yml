@@ -27,8 +27,6 @@ env:
   # Servo has no download support of its own (servo/servo#40210), so released
   # builds compile against a fork carrying the embedder-download patch. Pinned
   # to a revision, never a branch.
-  SERVO_FORK: https://github.com/Goddv/servo
-  SERVO_REV: 36176b7d2c065dbed8f37edf39da495d41a4eaca
 
 jobs:
   deb:
@@ -85,18 +83,6 @@ jobs:
             ~/.cargo/registry/cache
           key: cargo-linux-deb-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-linux-deb-
-
-      - name: Point Cargo at the patched engine
-        run: |
-          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
-            echo "engine-downloads off; building against the published crate"
-            exit 0
-          fi
-          cat >> .cargo/config.toml <<EOF
-
-          [patch.crates-io]
-          servo = { git = "$SERVO_FORK", rev = "$SERVO_REV" }
-          EOF
 
       - name: Build and package
         run: |
@@ -171,18 +157,6 @@ jobs:
             ~/.cargo/registry/cache
           key: cargo-linux-rpm-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-linux-rpm-
-
-      - name: Point Cargo at the patched engine
-        run: |
-          if [ "${{ inputs.engine-downloads }}" = "false" ]; then
-            echo "engine-downloads off; building against the published crate"
-            exit 0
-          fi
-          cat >> .cargo/config.toml <<EOF
-
-          [patch.crates-io]
-          servo = { git = "$SERVO_FORK", rev = "$SERVO_REV" }
-          EOF
 
       - name: Build and package
         # No sccache here: it is not in the Fedora image and a cold build is the
