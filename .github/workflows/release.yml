@@ -31,6 +31,13 @@ on:
 # token that cannot write anything and a checkout that does not keep it.
 permissions: {}
 
+# The AUR job runs in a container, and GitHub falls back to `sh -e {0}` when it
+# cannot find bash there — which is how both AppImage jobs died on the first
+# run of this pipeline. Named here so no container can decide it.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref }}
   # A superseded run of a release is not a thing: two pushes of the same tag is

@@ -56,6 +56,16 @@ on:
 # holds the only contents:write token in the pipeline.
 permissions: {}
 
+# Named rather than assumed. GitHub picks `bash -e {0}` for a `run:` step when
+# it can find bash and falls back to `sh -e {0}` when it cannot, and inside the
+# ubuntu:22.04 container it fell back — so `set -o pipefail` was a dash error
+# and both AppImage jobs died in sixty seconds with "Illegal option -o
+# pipefail". The Fedora and Arch containers happened to get bash. Every `run:`
+# below uses arrays or pipefail or both, so none of them may be left to chance.
+defaults:
+  run:
+    shell: bash
+
 env:
   CARGO_TERM_COLOR: always
   # sccache cannot cache incremental compilation, so leaving it on would defeat
@@ -131,8 +141,15 @@ jobs:
           done
           sudo apt-get -o DPkg::Lock::Timeout=300 update
 
+          # `apt-cache show` returns a record for a package that exists only
+          # as some other package's dependency reference, which is exactly what
+          # libgstreamer-plugins-good1.0-dev is on 26.04 — so the probe said
+          # yes and apt then said "has no installation candidate" and failed
+          # the job. `apt-cache policy` answers the question that was meant:
+          # whether there is a version anywhere that could be installed.
           OPTIONAL=""
-          if apt-cache show libgstreamer-plugins-good1.0-dev >/dev/null 2>&1; then
+          if apt-cache policy libgstreamer-plugins-good1.0-dev 2>/dev/null \
+              | grep -q 'Candidate: [^(]'; then
             OPTIONAL="libgstreamer-plugins-good1.0-dev"
           fi
 
@@ -358,8 +375,15 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
+          # `apt-cache show` returns a record for a package that exists only
+          # as some other package's dependency reference, which is exactly what
+          # libgstreamer-plugins-good1.0-dev is on 26.04 — so the probe said
+          # yes and apt then said "has no installation candidate" and failed
+          # the job. `apt-cache policy` answers the question that was meant:
+          # whether there is a version anywhere that could be installed.
           OPTIONAL=""
-          if apt-cache show libgstreamer-plugins-good1.0-dev >/dev/null 2>&1; then
+          if apt-cache policy libgstreamer-plugins-good1.0-dev 2>/dev/null \
+              | grep -q 'Candidate: [^(]'; then
             OPTIONAL="libgstreamer-plugins-good1.0-dev"
           fi
           # shellcheck disable=SC2086
