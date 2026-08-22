@@ -2490,10 +2490,6 @@ fn paint_edge_shadow(painter: &egui::Painter, rect: Rect, colour: Color32) {
 /// stack to grow out of. The two are drawn at opposite ends of the frame.
 const BELL_ANCHOR: &str = "zervo_bell_anchor";
 
-/// What the bell costs the address pill: `icon_button`'s own width for a 15pt
-/// icon, plus the spacing before it.
-const BELL_SLOT: f32 = 35.0;
-
 fn draw_address_pill(
     ui: &mut Ui,
     chrome: &mut ChromeContext,
@@ -2572,45 +2568,13 @@ fn draw_address_pill(
     }
     inner.add_space(22.0);
 
-    let hint = format!("Search with {}…", chrome.settings.search_engine.label());
-    // The spinner slot is always reserved so text never jumps when a load
-    // starts or finishes.
-    let editor = TextEdit::singleline(&mut chrome.browser.address_bar)
-        .frame(Frame::NONE)
-        .font(FontId::proportional(14.0))
-        .text_color(palette.text)
-        .vertical_align(egui::Align::Center)
-        .hint_text(RichText::new(hint).color(palette.text_muted))
-        // 24pt is the spinner's reserved slot. The bell needs its own, or the
-        // two share one and the bell hangs 21pt outside the pill — and since
-        // the bell outlives any one page load, that shows up as the bell
-        // jumping out of the pill and back on every navigation.
-        .desired_width(
-            inner.available_width()
-                - if chrome.notifications.count > 0 {
-                    24.0 + BELL_SLOT
-                } else {
-                    24.0
-                },
-        );
-    let response = inner.add(editor);
-    if chrome.browser.focus_address {
-        response.request_focus();
-        chrome.browser.focus_address = false;
-    }
-    chrome.browser.editing_address = response.has_focus();
-    if response.lost_focus() && inner.input(|input| input.key_pressed(Key::Enter)) {
-        actions.push(UiAction::Navigate(normalize_url(
-            &chrome.browser.address_bar,
-            chrome.settings.search_engine,
-        )));
-    }
-    if loading {
-        inner.add(egui::Spinner::new().size(14.0).color(palette.accent));
-    }
-
-    // ── The bell, at the far end of the pill, and only once a page has
+    // ── The bell, beside the security badge, and only once a page has
     // actually raised something. A permanently dead bell is furniture.
+    //
+    // A laid-out widget rather than a painted one, so the address field's
+    // available width already accounts for it. That is what keeps it inside
+    // the glass: at the other end it had to share the spinner's reserved slot
+    // and hung 21pt outside the pill whenever a page was loading.
     if chrome.notifications.count > 0 {
         let count = chrome.notifications.count;
         let response = icons::icon_button(
@@ -2670,6 +2634,34 @@ fn draw_address_pill(
         // Nothing to anchor to any more, so the next toast starts from wherever
         // the bell will actually be rather than where it last was.
         ctx.data_mut(|data| data.remove::<Rect>(Id::new(BELL_ANCHOR)));
+    }
+
+    let hint = format!("Search with {}…", chrome.settings.search_engine.label());
+    // The spinner slot is always reserved so text never jumps when a load
+    // starts or finishes.
+    let editor = TextEdit::singleline(&mut chrome.browser.address_bar)
+        .frame(Frame::NONE)
+        .font(FontId::proportional(14.0))
+        .text_color(palette.text)
+        .vertical_align(egui::Align::Center)
+        .hint_text(RichText::new(hint).color(palette.text_muted))
+        // 24pt reserves the spinner's slot, so the text never jumps when a
+        // load starts or finishes.
+        .desired_width(inner.available_width() - 24.0);
+    let response = inner.add(editor);
+    if chrome.browser.focus_address {
+        response.request_focus();
+        chrome.browser.focus_address = false;
+    }
+    chrome.browser.editing_address = response.has_focus();
+    if response.lost_focus() && inner.input(|input| input.key_pressed(Key::Enter)) {
+        actions.push(UiAction::Navigate(normalize_url(
+            &chrome.browser.address_bar,
+            chrome.settings.search_engine,
+        )));
+    }
+    if loading {
+        inner.add(egui::Spinner::new().size(14.0).color(palette.accent));
     }
 }
 
