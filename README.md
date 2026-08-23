@@ -48,30 +48,12 @@
 
 <br>
 
-**Five presets, and every value behind them is a setting.**
-
-<table>
-<tr>
-<td width="25%"><a href="assets/screenshots/preset-zervo.png"><img alt="The Zervo preset: glass laid on the page, a quiet accent, dark" src="assets/screenshots/preset-zervo.png" width="100%"></a></td>
-<td width="25%"><a href="assets/screenshots/preset-candy.png"><img alt="The Candy preset: the accent as a light source, everything lit and rounder" src="assets/screenshots/preset-candy.png" width="100%"></a></td>
-<td width="25%"><a href="assets/screenshots/preset-flat.png"><img alt="The Flat preset: solid surfaces, a small radius, no sheen" src="assets/screenshots/preset-flat.png" width="100%"></a></td>
-<td width="25%"><a href="assets/screenshots/preset-material.png"><img alt="The Material preset: generous corners, edge to edge, no glass" src="assets/screenshots/preset-material.png" width="100%"></a></td>
-</tr>
-<tr>
-<td align="center"><sub><b>Zervo</b><br>the one that is finished</sub></td>
-<td align="center"><sub><b>Candy</b><br>the accent as a light source</sub></td>
-<td align="center"><sub><b>Flat</b><br>no blur, no sheen, square</sub></td>
-<td align="center"><sub><b>Material</b><br>generous corners, no glass</sub></td>
-</tr>
-</table>
-
-<br>
-
 <a href="assets/screenshots/zervo-appearance.png">
 <img alt="The Appearance settings page: a live specimen of the material pinned under the title, the preset row, and controls for the theme, the accent and how far it reaches into the chrome" src="assets/screenshots/zervo-appearance.png" width="82%">
 </a>
 
-<sub><b>Appearance</b> — the specimen at the top is the real material, not a picture of one:<br>
+<sub><b>Appearance</b> — every value the chrome is built from is a control, and the<br>
+specimen at the top is the real material rather than a picture of one:<br>
 it is wrong exactly when the chrome is wrong.</sub>
 
 </div>
@@ -125,11 +107,15 @@ so some sites will not work. See [Limitations](#limitations).
   shadow reach and how far glass frosts are decided in one place and reach the
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
-- **And every number in it is a setting.** Settings → Appearance has five
-  presets and one control per named field: the fill, the sheen, the blur, the
-  edge, the corner scale, the glow, the settle time, and how far the accent
-  reaches into the chrome. Save an arrangement under a name, or copy it out as
-  the Rust `const` you would otherwise have written by hand.
+- **And every number in it is a setting.** Settings → Appearance has one
+  control per named field: the fill, the sheen, the blur, the edge, the corner
+  scale, the glow, the settle time, and how far the accent reaches into the
+  chrome. Save an arrangement under a name, or copy it out as the Rust `const`
+  you would otherwise have written by hand.
+- **Zervo's own material is the finished one.** Four more presets — Candy,
+  Flat, Liquid Glass, Material — came out of the same design study and are
+  offered beside it, but they are experiments rather than settled work and are
+  still being tuned.
 - **The seam between the chrome and the page is one setting with four steps**,
   and each step brings the page transition its own geometry implies: a card
   recedes, a tint dissolves in place, a frame slides, a page under floating
