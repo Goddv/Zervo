@@ -71,9 +71,43 @@ Switching is `show()` + `focus()` on the target and `hide()` + `blur()` +
 list, so only the active tab costs anything to paint. A `WebView` is an
 `Rc` handle — dropping the last one closes the tab.
 
-Internal pages (`zervo://settings`, `zervo://newtab`, `zervo://downloads`) are
-tabs with no `WebView` at all; they are drawn by egui in the content rect, and
-the blit is skipped.
+Internal pages — `zervo://settings`, `zervo://newtab`, `zervo://history`,
+`zervo://downloads`, and the four in `trouble.rs` — are tabs with no `WebView`
+at all; they are drawn by egui in the content rect, and the blit is skipped.
+
+The four trouble pages (`unsupported`, `offline`, `certificate`, `notfound`)
+are the ones a load that did not work lands on. Each carries what is known
+about the failure in its own query string — `zervo://unsupported?host=…&
+detail=…` — rather than in a field beside the tab, for two reasons: the address
+bar shows it, so it has to be something you can type back in; and it means the
+page reads its own address rather than a side channel, which is how the engine
+will hand the detail over on the day it can report one. Today it cannot:
+`WebViewDelegate` in Servo 0.5.0 has no load-failure callback and no
+certificate hook, so nothing in the tree constructs these addresses
+automatically and `trouble::address` is marked as having no caller yet.
+
+## Between two pages
+
+`transition.rs` crosses from one page to the next, and the motion is derived
+from the seam rather than configured: a card recedes, a tint dissolves, a frame
+slides, a floating-chrome page passes under the glass.
+
+The mechanism is one readback. A page is either an engine blit or an egui
+drawing, and neither can be replayed after the fact — so at the one moment in
+the frame where the framebuffer still holds the departing page (after
+`EguiGlow::paint`, before `present`, which is where `shot.rs` also hooks in) a
+scaled copy is read out, uploaded as a texture, and composited over the live
+page for a couple of tenths of a second. `backdrop::PageBackdrop` does the
+copying for both this and the frost; the two differ only in how large a copy
+they take and how far it is blurred.
+
+The copy is drawn in an `Area` at `Order::Background` — above the background
+layer the page is painted into, below the `Order::Middle` the floating sidebar
+uses — which is what puts the departing page *under* the chrome at the last
+seam. It is clipped to the content rect rather than to the page rect: under
+that seam the page runs on beneath the sidebar, and a readback of a composited
+framebuffer cannot tell the page's pixels from the chrome's, so showing the
+covered part would slide the chrome with it.
 
 ## Materials
 

@@ -10,6 +10,45 @@ use egui::Rect;
 use crate::settings::SearchEngine;
 
 /// A saved page's name, falling back to its host when it has no title.
+/// The family display-size type is set in.
+///
+/// The study's largest runs are set at weight 150–200: a 92pt clock, a 54pt
+/// wordmark. Nothing in the application could render them, because macOS ships
+/// SF Pro only as a *variable* font and epaint's rasteriser takes a variable
+/// font's default instance and no other — so every run of text in Zervo, from
+/// a 10pt caption to a 62pt clock, was Regular. At caption sizes that is a
+/// missing distinction; at 62 points it is the wrong typeface.
+///
+/// So display type gets a family of its own, filled per platform in
+/// `install_fonts` from whatever real light face is there — Helvetica Neue
+/// Thin on macOS, egui's own Ubuntu-Light elsewhere — and falling back to the
+/// proportional family if neither is. It is deliberately *only* for display
+/// sizes: a thin face is a different typeface, and mixing two of them through
+/// the body text would be worse than one weight everywhere.
+pub const DISPLAY_FAMILY: &str = "zervo_display";
+
+/// A display-size font at `size` points.
+pub fn display_font(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(DISPLAY_FAMILY.into()))
+}
+
+/// The host part of a URL, without `www.` — the short name a person would use
+/// for a site.
+///
+/// Here rather than beside one of its callers because there are three now: the
+/// new tab page's resume cards, the trouble pages' "did you mean", and the
+/// crash handler working out which site went down.
+pub fn host_of(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .trim_start_matches("www.")
+        .to_owned()
+}
+
 pub fn display_name<'a>(title: &'a str, url: &'a str) -> &'a str {
     if !title.is_empty() {
         return title;

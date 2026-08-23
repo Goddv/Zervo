@@ -132,6 +132,50 @@ const THICKEST_TINT: f32 = 0.88;
 /// theme's own. Pure hysteresis: without it, text flips as the page scrolls.
 const FLIP_MARGIN: f32 = 1.3;
 
+/// The WCAG ratio body text is held to.
+///
+/// 4.5 is the AA bar for text at ordinary sizes, which is what a tab title, a
+/// settings label and a menu row all are.
+const MIN_INK_CONTRAST: f32 = 4.5;
+
+/// Deepen a surface, away from the ink that will sit on it, until that ink
+/// reads.
+///
+/// Turn 5 of the study raises the accent ratio from 0.045 to 0.3 and says
+/// plainly what it costs: "All of this is contrast you are spending." It is
+/// right — half a pale lavender under the dark theme's own ink comes out at
+/// 4.27, under the bar every other run of text in the application is held to.
+///
+/// The fix this had first was to walk the *ratio* back until it cleared, which
+/// keeps the row readable by making it stop being the colour that was asked
+/// for: turn the accent all the way up and Candy quietly hands back less
+/// accent than it promised, which is the one thing this preset must not do.
+///
+/// Contrast is measured on luminance, and luminance is the single axis of a
+/// colour that is not what "candy" means. So the ratio stays where it was put
+/// and the blend moves along that axis instead — darker under pale ink,
+/// lighter under dark ink. The hue survives intact and almost all of the
+/// saturation with it, and the ratio is bought from the only place that costs
+/// the design nothing.
+fn readable_over(surface: Color32, ink: Color32, floor: f32) -> Color32 {
+    let away = if luminance_of(ink) > 127 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    };
+    let mut shifted = surface;
+    let mut amount = 0.0_f32;
+    // Capped: two thirds of the way to black, a tinted row has stopped being a
+    // colour with text on it and become a dark row with a hint of one. Past
+    // that, giving up and leaving it slightly under the bar is more honest
+    // than pretending the accent is still in there.
+    while contrast(ink, f32::from(luminance_of(shifted)) / 255.0) < floor && amount < 0.66 {
+        amount += 0.02;
+        shifted = mix(surface, away, amount);
+    }
+    shifted
+}
+
 /// WCAG contrast ratio between a text colour and a background of the given
 /// brightness, 1..=21.
 fn contrast(ink: Color32, brightness: f32) -> f32 {
@@ -363,18 +407,6 @@ impl Translucency {
         }
     }
 
-    /// The tint on anything the material draws over that chrome — cards,
-    /// menus, the shelf, the new tab page.
-    ///
-    /// Heavier than the chrome, deliberately and for the same reason the
-    /// reference is: these are the surfaces with words on them.
-    pub fn surface(self) -> f32 {
-        match self {
-            Translucency::Solid => 1.0,
-            Translucency::Frosted => 0.34,
-        }
-    }
-
     /// How far a class's own weight is scaled at this step. Solid takes
     /// everything to opaque; Frosted leaves each class as the material wrote
     /// it, so the hierarchy between them survives the setting.
@@ -441,6 +473,14 @@ pub enum Tier {
     Panel,
     /// Search boxes and anything else that reads as a pill.
     Pill,
+    /// The window itself, and the content card once it reaches the window's
+    /// edge.
+    ///
+    /// The rung that was missing. The card borrowed `Panel` and the window was
+    /// whatever the platform happened to draw, so the two never agreed except
+    /// by luck — and at the point where the card's corner *is* the window's
+    /// corner, disagreeing is visible.
+    Window,
 }
 
 /// What each tier comes to, in points.
@@ -452,6 +492,7 @@ pub struct Radii {
     pub card: u8,
     pub panel: u8,
     pub pill: u8,
+    pub window: u8,
 }
 
 impl Radii {
@@ -463,7 +504,226 @@ impl Radii {
             Tier::Card => self.card,
             Tier::Panel => self.panel,
             Tier::Pill => self.pill,
+            Tier::Window => self.window,
         }
+    }
+
+    /// The whole ladder at once, multiplied.
+    ///
+    /// One number rather than seven, because seven is not a choice anybody
+    /// makes — square, a little round, or very round is. The tiers keep their
+    /// relationship, so a ladder tuned against itself does not have to be
+    /// tuned again to be made rounder.
+    pub fn scaled(self, factor: f32) -> Radii {
+        let rung = |value: u8| (f32::from(value) * factor).round().clamp(0.0, 255.0) as u8;
+        Radii {
+            hairline: rung(self.hairline),
+            control: rung(self.control),
+            row: rung(self.row),
+            card: rung(self.card),
+            panel: rung(self.panel),
+            pill: rung(self.pill),
+            window: rung(self.window),
+        }
+    }
+}
+
+/// How a surface's edge is drawn.
+///
+/// One value, spent three ways. The material carries a single edge strength
+/// per theme; this says what shape that strength takes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Edge {
+    /// A flat hairline, the same all the way round.
+    Hairline,
+    /// The same value split in two: light along the top, dark along the
+    /// bottom. A flat line reads as a border drawn on a shape; two read as the
+    /// shape having thickness.
+    Bevel,
+    /// No edge at all. Workable only where the fill and the shadow are already
+    /// carrying the separation on their own.
+    None,
+}
+
+impl Edge {
+    pub const ALL: [Edge; 3] = [Edge::Hairline, Edge::Bevel, Edge::None];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Edge::Hairline => "Hairline",
+            Edge::Bevel => "Bevel",
+            Edge::None => "None",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            Edge::Hairline => "A flat 1pt hairline, the same all the way round.",
+            Edge::Bevel => {
+                "Light along the top, dark along the bottom. Same one value, spent so it \
+                 reads as thickness rather than as a border."
+            },
+            Edge::None => {
+                "No edge at all. Only workable when fill and shadow are carrying the \
+                 separation on their own."
+            },
+        }
+    }
+}
+
+/// How the chrome meets the page.
+///
+/// Four steps rather than a toggle, because the distance between "a card on a
+/// tray" and "one continuous surface" is not one decision: the page has to
+/// stop painting a background of its own before closing the gap means
+/// anything, and the gap has to close before the chrome can be laid *on* the
+/// page rather than beside it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+pub enum Seam {
+    /// The page arrives as an opaque blit, inset by a gap, with a radius of
+    /// its own. Two backgrounds that never agree.
+    Card,
+    /// The page stops painting its own base and lets the window's backdrop
+    /// through. Nothing has moved — the card is simply the same glass as the
+    /// chrome rather than a different colour of grey.
+    Frosted,
+    /// The gap closes. Only the window's own corners stay round, and a single
+    /// hairline holds the join.
+    EdgeToEdge,
+    /// The chrome becomes a tint laid on the page. The sidebar floats, the
+    /// page scrolls under it, and every surface frosts against the same one
+    /// copy.
+    OneSurface,
+}
+
+impl Seam {
+    pub const ALL: [Seam; 4] = [
+        Seam::Card,
+        Seam::Frosted,
+        Seam::EdgeToEdge,
+        Seam::OneSurface,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Seam::Card => "Card",
+            Seam::Frosted => "Frosted",
+            Seam::EdgeToEdge => "Edge to edge",
+            Seam::OneSurface => "One surface",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            Seam::Card => {
+                "An 8pt gap, a 12pt radius and an opaque page base. Two backgrounds that \
+                 never agree."
+            },
+            Seam::Frosted => {
+                "The page stops painting its own base and shows the window's backdrop \
+                 through it. Layout unchanged."
+            },
+            Seam::EdgeToEdge => {
+                "The gap goes to zero; only the window's own corners stay round. One \
+                 hairline holds the join."
+            },
+            Seam::OneSurface => {
+                "The chrome becomes a tint on the page. The sidebar floats, the page \
+                 scrolls under it, one backdrop for everything."
+            },
+        }
+    }
+
+    /// Whether the page still paints a background of its own.
+    pub fn page_paints_base(self) -> bool {
+        self == Seam::Card
+    }
+
+    /// Whether the gap between the chrome and the page is forced shut.
+    pub fn closes_gap(self) -> bool {
+        self >= Seam::EdgeToEdge
+    }
+
+    /// Whether the chrome is laid on the page rather than beside it.
+    pub fn chrome_floats(self) -> bool {
+        self == Seam::OneSurface
+    }
+}
+
+/// What a hidden sidebar leaves at the window's edge.
+///
+/// Leaving nothing is the honest description of today: the edge is hot, and
+/// the only way to learn that is to find out by accident.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Spine {
+    Nothing,
+    /// One tick per tab, coloured by its workspace, the active one twice as
+    /// long. It fits inside the trigger it advertises, so it is a target
+    /// rather than a rumour.
+    TabTicks,
+    /// Favicons stacked down the edge. Wider, but you can aim at a particular
+    /// tab without opening anything.
+    Favicons,
+}
+
+impl Spine {
+    pub const ALL: [Spine; 3] = [Spine::Nothing, Spine::TabTicks, Spine::Favicons];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Spine::Nothing => "Nothing",
+            Spine::TabTicks => "Tab ticks",
+            Spine::Favicons => "Favicons",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            Spine::Nothing => {
+                "Today's behaviour — a hidden sidebar leaves nothing, so the hot edge is \
+                 only findable by accident."
+            },
+            Spine::TabTicks => {
+                "One 3pt tick per tab, coloured by workspace, the active one twice as \
+                 long. Fits inside the 14pt trigger it advertises."
+            },
+            Spine::Favicons => {
+                "Favicons stacked down the edge. Costs more width, but you can aim at a \
+                 specific tab without opening anything."
+            },
+        }
+    }
+}
+
+/// Where the widget shelf is reachable from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum ShelfHome {
+    Bar,
+    Sidebar,
+    /// Wherever the chrome happens to be — the bar, the sidebar, or the panel
+    /// full-page mode reveals.
+    Wherever,
+}
+
+impl ShelfHome {
+    pub const ALL: [ShelfHome; 3] = [ShelfHome::Bar, ShelfHome::Sidebar, ShelfHome::Wherever];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShelfHome::Bar => "Bar only",
+            ShelfHome::Sidebar => "Sidebar only",
+            ShelfHome::Wherever => "Wherever the chrome is",
+        }
+    }
+
+    /// Whether the shelf should be offered in the expanded sidebar.
+    pub fn in_sidebar(self) -> bool {
+        matches!(self, ShelfHome::Sidebar | ShelfHome::Wherever)
+    }
+
+    /// Whether the shelf should be offered in the navigation bar.
+    pub fn in_bar(self) -> bool {
+        matches!(self, ShelfHome::Bar | ShelfHome::Wherever)
     }
 }
 
@@ -517,6 +777,9 @@ pub struct Material {
     /// The hairline along a surface's edge, out of 255, dark and light.
     pub edge_dark: f32,
     pub edge_light: f32,
+    /// What shape that one value takes: a flat line, a two-tone bevel, or
+    /// nothing.
+    pub edge: Edge,
 
     // ── How far off the page it sits
     pub lift_dark: f32,
@@ -550,10 +813,16 @@ pub struct Material {
 }
 
 impl Material {
-    /// Zervo's own: layered translucency, a hairline edge, a soft shadow, and
-    /// a real blur of whatever is behind.
-    pub const GLASS: Material = Material {
-        name: "Glass",
+    /// Zervo's own, and what the browser opens on: layered translucency, a
+    /// hairline edge, a soft shadow, and a real blur of whatever is behind.
+    ///
+    /// It is the base every arrangement is built from as well as the shipped
+    /// one, so the fields the settings page does not offer are read from here
+    /// whichever preset is chosen. `glow` is zero: the accent lights a surface
+    /// only where an arrangement asks it to, and asking is what `Candy` is
+    /// for.
+    pub const ZERVO: Material = Material {
+        name: "Zervo",
         fill: 0.55,
         fill_strength: 0.4,
         translucency: true,
@@ -565,11 +834,12 @@ impl Material {
         sheen_light: 24.0,
         edge_dark: 26.0,
         edge_light: 120.0,
+        edge: Edge::Hairline,
         lift_dark: 0.55,
         lift_light: 0.8,
         shadow_reach: 4.0,
         shadow_reach_per_radius: 0.45,
-        glow: 0.32,
+        glow: 0.0,
         glow_reach: 8.0,
         frosts: true,
         blur: 10.8,
@@ -580,6 +850,7 @@ impl Material {
             card: 10,
             panel: 12,
             pill: 14,
+            window: 16,
         },
         row_height: 30.0,
         control_padding: Vec2::new(9.0, 5.0),
@@ -587,6 +858,487 @@ impl Material {
         // The default 0.1s reads as flicker; glass should settle, not pop.
         animation: 0.14,
     };
+}
+
+/// What Menu keeps to Card, and what Input keeps to it.
+///
+/// Derived from [`Material::ZERVO`] rather than written out, so an arrangement
+/// at the shipped fill reproduces exactly the three numbers the material has
+/// always had. They come to about 0.62 and 1.13, which is what the settings
+/// page tells the reader.
+const MENU_OF_FILL: f32 = Material::ZERVO.menu_fill / Material::ZERVO.fill;
+const INPUT_OF_FILL: f32 = Material::ZERVO.input_fill / Material::ZERVO.fill;
+/// The frosted core against the same fill. A tint on a blur can be thinner
+/// than a tint standing in for one, and this is how much thinner.
+const FROSTED_OF_FILL: f32 = Material::ZERVO.frosted_fill / Material::ZERVO.fill;
+/// Light glass needs more lift than dark. The same wash that reads as a sheen
+/// over near-black is invisible over near-white, so one slider moves both and
+/// the ratio between them is the material's, not the reader's.
+const LIGHT_SHEEN_OF_DARK: f32 = Material::ZERVO.sheen_light / Material::ZERVO.sheen_dark;
+
+/// A whole arrangement, under a name.
+///
+/// The five are THEMING.md's own table — Windows-flat, GTK, Android Material,
+/// Liquid Glass — plus the one that ships and the one the study argues for.
+/// Most people will press one of these and stop; the controls under them are
+/// for the person who does not, and they start from wherever the preset left
+/// them rather than from nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Preset {
+    /// What shipped before the study: a gap, a flat hairline, and an accent
+    /// quiet enough that ten presets produced ten near-identical greys.
+    Zervo,
+    /// The study's own conclusion. The accent is a light source, the seam is
+    /// gone, and the material glows.
+    Candy,
+    Flat,
+    LiquidGlass,
+    Material,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 5] = [
+        Preset::Zervo,
+        Preset::Candy,
+        Preset::Flat,
+        Preset::LiquidGlass,
+        Preset::Material,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Preset::Zervo => "Zervo",
+            Preset::Candy => "Candy",
+            Preset::Flat => "Flat",
+            Preset::LiquidGlass => "Liquid Glass",
+            Preset::Material => "Material",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            Preset::Zervo => {
+                "The one that is finished. Glass laid on the page, a quiet accent taken \
+                 from the space you are in, and every motion on."
+            },
+            Preset::Candy => "The accent is the light source, the seam is gone, everything glows.",
+            Preset::Flat => "Solid, a small radius and no sheen — a flat desktop toolkit.",
+            Preset::LiquidGlass => {
+                "Frosted with a blur of zero — a material may be translucent without \
+                 blurring. Sheen and lift carry it instead."
+            },
+            Preset::Material => {
+                "A generous radius, a longer shadow, no sheen, and glow standing in for \
+                 the ripple's resting state."
+            },
+        }
+    }
+
+    /// The arrangement this preset is.
+    ///
+    /// Deliberately not the theme and not the accent. Both have a section of
+    /// their own on the same page, `Auto` is a choice somebody made about
+    /// their whole machine, and a *material* has no business overruling
+    /// either of them.
+    pub fn appearance(self) -> Appearance {
+        match self {
+            // Zervo's own, and the arrangement the rest of the browser is
+            // drawn against. Not a reconstruction of what shipped before the
+            // study: it is the one that was tuned by hand afterwards, saved,
+            // lived in, and handed back — the chrome laid on the page rather
+            // than beside it, the accent quiet and taken from the space you
+            // are in, favicons down the spine, and every motion switched on.
+            //
+            // The colours are still the shipped ones. `candy` is the only
+            // field `resolve` reads for them and it has not moved, so every
+            // rung of the ladder comes out at the byte it always did.
+            Preset::Zervo => Appearance {
+                preset: Some(self),
+                seam: Seam::OneSurface,
+                // Carried rather than zeroed: the seam ignores it, and a
+                // reader who steps the seam back down should find the gap they
+                // had rather than none.
+                gap: 8.0,
+                translucency: Translucency::Frosted,
+                blur: 10.8,
+                fill: 0.55,
+                sheen: 9.0,
+                edge: Edge::Hairline,
+                corners: 1.0,
+                glow: 0.0,
+                motion: 0.14,
+                candy: 0.045,
+                workspace_accent: true,
+                sweep: true,
+                liquid: true,
+                pill_progress: true,
+                spine: Spine::Favicons,
+                shelf: ShelfHome::Wherever,
+                align_nav: false,
+            },
+            Preset::Candy => Appearance {
+                preset: Some(self),
+                seam: Seam::OneSurface,
+                gap: 0.0,
+                translucency: Translucency::Frosted,
+                blur: 22.0,
+                fill: 0.42,
+                sheen: 30.0,
+                edge: Edge::Bevel,
+                corners: 1.35,
+                glow: 0.55,
+                motion: 0.18,
+                candy: 0.3,
+                // Turn 5's whole argument, on the preset that makes it: "let
+                // the *workspace* pick the colour instead of a global setting.
+                // The window becomes the space you are in." Left off, Candy is
+                // one lavender room rather than five.
+                workspace_accent: true,
+                sweep: true,
+                liquid: true,
+                pill_progress: true,
+                spine: Spine::TabTicks,
+                shelf: ShelfHome::Wherever,
+                align_nav: true,
+            },
+            Preset::Flat => Appearance {
+                preset: Some(self),
+                seam: Seam::Card,
+                gap: 6.0,
+                translucency: Translucency::Solid,
+                blur: 0.0,
+                fill: 1.0,
+                sheen: 0.0,
+                edge: Edge::Hairline,
+                corners: 0.3,
+                glow: 0.0,
+                motion: 0.06,
+                candy: 0.02,
+                workspace_accent: false,
+                sweep: false,
+                liquid: false,
+                pill_progress: false,
+                spine: Spine::Nothing,
+                shelf: ShelfHome::Bar,
+                align_nav: false,
+            },
+            Preset::LiquidGlass => Appearance {
+                preset: Some(self),
+                seam: Seam::OneSurface,
+                gap: 0.0,
+                translucency: Translucency::Frosted,
+                blur: 0.0,
+                fill: 0.34,
+                sheen: 44.0,
+                edge: Edge::Bevel,
+                corners: 1.6,
+                glow: 0.4,
+                motion: 0.22,
+                candy: 0.12,
+                workspace_accent: false,
+                sweep: true,
+                liquid: true,
+                pill_progress: true,
+                spine: Spine::TabTicks,
+                shelf: ShelfHome::Wherever,
+                align_nav: true,
+            },
+            Preset::Material => Appearance {
+                preset: Some(self),
+                seam: Seam::EdgeToEdge,
+                gap: 0.0,
+                translucency: Translucency::Solid,
+                blur: 0.0,
+                fill: 1.0,
+                sheen: 0.0,
+                edge: Edge::None,
+                corners: 1.8,
+                glow: 0.3,
+                motion: 0.2,
+                candy: 0.1,
+                workspace_accent: false,
+                sweep: false,
+                liquid: true,
+                pill_progress: false,
+                spine: Spine::Favicons,
+                shelf: ShelfHome::Sidebar,
+                align_nav: false,
+            },
+        }
+    }
+}
+
+/// Every value the reader can set about how Zervo is built, in one place.
+///
+/// This is the answer to the open question THEMING.md has carried since it was
+/// written: a theme was a Rust constant with no file format and no loader. If
+/// every value is settable at runtime then the loader already exists, and the
+/// file format is whatever this struct serialises to.
+///
+/// It is not a second [`Material`]. It is the arrangement a material is *built
+/// from* — [`Appearance::material`] does the building — plus the handful of
+/// chrome decisions that are not about what a surface is made of: where the
+/// seam falls, what a hidden sidebar leaves behind, where the shelf lives.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    /// Which preset this is, or `None` once anything below has been moved.
+    pub preset: Option<Preset>,
+
+    // ── Where the chrome ends and the page begins
+    pub seam: Seam,
+    /// `CONTENT_MARGIN`: the gap around the content, in points. Ignored once
+    /// the seam closes it.
+    pub gap: f32,
+
+    // ── What a surface is made of
+    pub translucency: Translucency,
+    /// How far the backdrop is blurred. Zero is translucent without blurring —
+    /// glass that refracts nothing.
+    pub blur: f32,
+    /// A card's own alpha. Menu and Input keep their ratio to it.
+    pub fill: f32,
+    /// White laid over the fill, out of 255, in the dark theme; the light one
+    /// keeps its ratio to it.
+    pub sheen: f32,
+    pub edge: Edge,
+    /// Multiplies the whole radius ladder at once.
+    pub corners: f32,
+    /// The accent halo behind a focused surface.
+    pub glow: f32,
+
+    // ── How it moves
+    /// How long a hover, a selection, a morph or a fade takes to settle.
+    pub motion: f32,
+    /// One pass of light across any surface that changes size.
+    pub sweep: bool,
+    /// One highlight that travels and stretches, rather than two rows half-lit
+    /// for the settle time.
+    pub liquid: bool,
+    /// Progress inside the address pill, which gives it back the points it
+    /// reserves for a spinner.
+    pub pill_progress: bool,
+
+    // ── What colour it is
+    /// How far the accent is mixed into the chrome. The shipped 0.045 is quiet
+    /// enough that ten accents produce ten near-identical greys.
+    pub candy: f32,
+    /// Take the accent from the active workspace instead of one global choice,
+    /// so the window changes colour when you change space.
+    pub workspace_accent: bool,
+
+    // ── What shape it is
+    pub spine: Spine,
+    pub shelf: ShelfHome,
+    /// Centre the sidebar's nav row on the window controls. macOS only; there
+    /// is nothing to centre on anywhere else.
+    pub align_nav: bool,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        // What the browser opens on. The study argues for `Candy`, and the
+        // Appearance page is one press away — but the arrangement that ships
+        // is the one every other part of this design is drawn against, and a
+        // browser should not open on an argument.
+        Preset::Zervo.appearance()
+    }
+}
+
+impl Appearance {
+    /// The arrangement that shipped before the study, for anyone who wants it
+    /// back. Named rather than spelled out, so there is one copy of it.
+    pub fn classic() -> Self {
+        Preset::Zervo.appearance()
+    }
+
+    /// Mark the arrangement as the reader's own. Every control on the settings
+    /// page calls this: once a value has been moved, the row of presets is
+    /// describing something that is no longer true.
+    pub fn customised(&mut self) {
+        self.preset = None;
+    }
+
+    /// Where this arrangement sits between the accent ratio that shipped and
+    /// the one turn 5 argues for, 0..1.
+    ///
+    /// The ladder in `resolve` names both ends of every rung and slides
+    /// between them. This is that same slide, for the handful of things that
+    /// are accent-coloured without being one of those rungs — the sidebar's
+    /// own tint, the glow on a workspace dot — so all of it arrives together
+    /// rather than each one carrying its own idea of when candy starts.
+    pub fn candy_t(&self) -> f32 {
+        ((self.candy - SHIPPED_CANDY) / (STUDY_CANDY - SHIPPED_CANDY)).clamp(0.0, 1.0)
+    }
+
+    pub fn preset_label(&self) -> &'static str {
+        self.preset.map_or("Custom", Preset::label)
+    }
+
+    /// Whether two arrangements look the same, whatever they are called.
+    ///
+    /// The name is not part of the look: an arrangement somebody saved and
+    /// then arrived at again by moving sliders is the same arrangement, and a
+    /// preset row that could not say so would be showing nothing selected
+    /// while the reader is plainly looking at it.
+    pub fn same_look(&self, other: &Appearance) -> bool {
+        Appearance {
+            preset: other.preset,
+            ..*self
+        } == *other
+    }
+
+    /// Whether the card fill is being held back so that Frosted means
+    /// something.
+    ///
+    /// True only for an arrangement that asks for an opaque card and is also
+    /// asking to be frosted — Flat and Material, the moment somebody turns the
+    /// control on. Worth saying out loud on the settings page, because
+    /// otherwise the Fill slider appears to stop responding near the top.
+    pub fn frost_is_capped(&self) -> bool {
+        self.translucency == Translucency::Frosted && self.fill > THICKEST_TINT
+    }
+
+    /// This arrangement as JSON — the file format the settings page writes
+    /// out, ready to be pasted back into `settings.json` or handed to somebody
+    /// else.
+    pub fn as_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+
+    /// The material this arrangement comes to.
+    ///
+    /// [`Material::ZERVO`] is the base rather than a blank one. The fields the
+    /// settings page does not offer — how much heavier a surface gets at full
+    /// strength, how far a shadow reaches, row height, control padding — were
+    /// tuned against each other, and there is nothing to be gained by making
+    /// each of them a slider nobody moves.
+    pub fn material(&self) -> Material {
+        let asked = self.fill.clamp(0.0, 1.0);
+        // A card may be opaque at Solid — a flat desktop toolkit wants exactly
+        // that. At Frosted it may not be, or the Solid/Frosted control is one
+        // that does nothing on half the arrangements offered. `tint_over`
+        // already refuses to take a surface past this same ceiling, and for
+        // the same reason: past it the blur has stopped showing through and it
+        // is not glass any more.
+        let fill = if self.translucency == Translucency::Frosted {
+            asked.min(THICKEST_TINT)
+        } else {
+            asked
+        };
+        let sheen = self.sheen.max(0.0);
+        let blur = self.blur.max(0.0);
+        Material {
+            name: self.preset_label(),
+            fill,
+            menu_fill: fill * MENU_OF_FILL,
+            input_fill: (fill * INPUT_OF_FILL).min(1.0),
+            frosted_fill: (fill * FROSTED_OF_FILL).min(1.0),
+            sheen_dark: sheen,
+            sheen_light: (sheen * LIGHT_SHEEN_OF_DARK).min(255.0),
+            edge: self.edge,
+            glow: self.glow.max(0.0),
+            // Translucent and blurred are two different things, and the panel
+            // lets them come apart: a material may be see-through and refract
+            // nothing at all. `frosts` is what asks for the expensive half.
+            frosts: self.translucency == Translucency::Frosted && blur > 0.0,
+            blur,
+            radius: Material::ZERVO.radius.scaled(self.corners.max(0.0)),
+            animation: self.motion.max(0.0),
+            ..Material::ZERVO
+        }
+    }
+}
+
+impl Material {
+    /// This material as the Rust constant somebody would paste into
+    /// `theme.rs`, beside [`Material::ZERVO`].
+    ///
+    /// THEMING.md has carried one open question since it was written: a theme
+    /// is a Rust constant, with no file format and no loader. Half the answer
+    /// is that every value is settable at runtime now. This is the other half
+    /// — the constant, written back out from whatever the reader arranged, so
+    /// a look somebody tuned by hand can be checked in rather than described.
+    pub fn as_rust(&self) -> String {
+        let Material {
+            name,
+            fill,
+            fill_strength,
+            translucency,
+            menu_fill,
+            input_fill,
+            frosted_fill,
+            frosted_fill_strength,
+            sheen_dark,
+            sheen_light,
+            edge_dark,
+            edge_light,
+            edge,
+            lift_dark,
+            lift_light,
+            shadow_reach,
+            shadow_reach_per_radius,
+            glow,
+            glow_reach,
+            frosts,
+            blur,
+            radius,
+            row_height,
+            control_padding,
+            item_spacing,
+            animation,
+        } = self;
+        format!(
+            "pub const {}: Material = Material {{\n\
+             \x20   name: {name:?},\n\
+             \x20   fill: {fill:?},\n\
+             \x20   fill_strength: {fill_strength:?},\n\
+             \x20   translucency: {translucency:?},\n\
+             \x20   menu_fill: {menu_fill:?},\n\
+             \x20   input_fill: {input_fill:?},\n\
+             \x20   frosted_fill: {frosted_fill:?},\n\
+             \x20   frosted_fill_strength: {frosted_fill_strength:?},\n\
+             \x20   sheen_dark: {sheen_dark:?},\n\
+             \x20   sheen_light: {sheen_light:?},\n\
+             \x20   edge_dark: {edge_dark:?},\n\
+             \x20   edge_light: {edge_light:?},\n\
+             \x20   edge: Edge::{edge:?},\n\
+             \x20   lift_dark: {lift_dark:?},\n\
+             \x20   lift_light: {lift_light:?},\n\
+             \x20   shadow_reach: {shadow_reach:?},\n\
+             \x20   shadow_reach_per_radius: {shadow_reach_per_radius:?},\n\
+             \x20   glow: {glow:?},\n\
+             \x20   glow_reach: {glow_reach:?},\n\
+             \x20   frosts: {frosts:?},\n\
+             \x20   blur: {blur:?},\n\
+             \x20   radius: Radii {{\n\
+             \x20       hairline: {},\n\
+             \x20       control: {},\n\
+             \x20       row: {},\n\
+             \x20       card: {},\n\
+             \x20       panel: {},\n\
+             \x20       pill: {},\n\
+             \x20       window: {},\n\
+             \x20   }},\n\
+             \x20   row_height: {row_height:?},\n\
+             \x20   control_padding: Vec2::new({:?}, {:?}),\n\
+             \x20   item_spacing: Vec2::new({:?}, {:?}),\n\
+             \x20   animation: {animation:?},\n\
+             }};\n",
+            name.to_uppercase().replace(' ', "_"),
+            radius.hairline,
+            radius.control,
+            radius.row,
+            radius.card,
+            radius.panel,
+            radius.pill,
+            radius.window,
+            control_padding.x,
+            control_padding.y,
+            item_spacing.x,
+            item_spacing.y,
+        )
+    }
 }
 
 /// Cross one palette into another.
@@ -613,6 +1365,11 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         surface_hover: blend(a.surface_hover, b.surface_hover),
         active: blend(a.active, b.active),
         accent: blend(a.accent, b.accent),
+        warm: blend(a.warm, b.warm),
+        warning: blend(a.warning, b.warning),
+        success: blend(a.success, b.success),
+        danger: blend(a.danger, b.danger),
+        info: blend(a.info, b.info),
         text: blend(a.text, b.text),
         text_muted: blend(a.text_muted, b.text_muted),
         border: blend(a.border, b.border),
@@ -620,19 +1377,32 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         // Not a colour and not part of the theme, so it does not cross over —
         // it is whatever the setting says, on both sides of the fade.
         translucency: b.translucency,
+        fills_window: b.fills_window,
         backdrop: b.backdrop,
         // Not a colour either. A crossfade between two *materials* would mean
         // interpolating corner radii and metrics, which is a different and
         // much larger idea than fading two palettes into each other.
         material: b.material,
+        appearance: b.appearance,
     }
 }
 
 impl Palette {
-    /// Stamp the reader's translucency setting on. `resolve` has no business
-    /// knowing about Settings, so main.rs does this once a frame.
+    /// Stamp the reader's translucency setting on.
+    ///
+    /// Both copies of it, so they cannot come apart: the palette's own field
+    /// is what every `glass::shapes` call reads, and the arrangement's is what
+    /// the material was built from.
+    /// Say that the page has the window to itself — full-page mode.
+    pub fn filling_window(mut self, fills: bool) -> Self {
+        self.fills_window = fills;
+        self
+    }
+
     pub fn with_translucency(mut self, translucency: Translucency) -> Self {
         self.translucency = translucency;
+        self.appearance.translucency = translucency;
+        self.material = self.appearance.material();
         self
     }
 
@@ -645,12 +1415,20 @@ impl Palette {
     ///
     /// At Solid everything is opaque and the classes collapse into one; below
     /// that each carries the weight the material gave it.
+    ///
+    /// All three rungs come off the material now. `Card` used to read the
+    /// translucency setting's own 0.34 instead, which happens to be the number
+    /// `menu_fill` also carries — so a card and a menu were drawn at exactly
+    /// the same weight, and the ladder the material describes had two rungs
+    /// rather than three. A menu must never be heavier than a card or it stops
+    /// reading as the same glass; being *equal* to one is the same failure,
+    /// quietly.
     pub fn tint_for(&self, surface: Surface) -> f32 {
         if self.translucency.scales() {
             return 1.0;
         }
         match surface {
-            Surface::Card => self.translucency.surface(),
+            Surface::Card => self.material.fill,
             Surface::Menu => self.material.menu_fill,
             Surface::Input => self.material.input_fill,
         }
@@ -695,6 +1473,16 @@ impl Palette {
     /// number a theme cannot change.
     pub fn radius(&self, tier: Tier) -> u8 {
         self.material.radius.of(tier)
+    }
+
+    /// The same, as the four corners egui wants.
+    ///
+    /// Every `CornerRadius::same(<literal>)` in the application is a corner a
+    /// theme cannot reach, and there were enough of them that a row could be
+    /// drawn at eleven points with its own hover rectangle at eight. This is
+    /// the one-character-longer way to spell it that answers to the ladder.
+    pub fn corner(&self, tier: Tier) -> CornerRadius {
+        CornerRadius::same(self.radius(tier))
     }
 
     /// Put a blurred backdrop behind every glass surface that sits on it.
@@ -839,6 +1627,79 @@ impl Palette {
             ..*self
         }
     }
+    /// The colour of a chrome pane — the sidebar, the shelf — as against a
+    /// card or a menu.
+    ///
+    /// 5a paints its sidebar `accent(0.14)`: the accent *itself* at low alpha
+    /// over the window's own light, with `saturate(1.5)` behind it. That is a
+    /// different thing from a grey with some accent mixed into it, and the
+    /// difference is most of why the artboard's sidebar reads as a coloured
+    /// pane while `surface` at the same ratio reads as grey.
+    ///
+    /// It cannot simply be `surface`, because `surface` is also every card and
+    /// every menu, and those have body text sitting on them at 4.5:1. A pane
+    /// holds rows, and a row brings its own fill and its own ink with it.
+    /// A modest step past `surface`, not a second helping of it. 5a's own
+    /// ladder is `accent(.14)` on the pane and `accent(.34)` on the row inside
+    /// it, so the pane has to stay well below the selection or the selected
+    /// tab disappears into the sidebar holding it — which is exactly what a
+    /// bolder tint here did.
+    pub fn pane_tint(&self) -> Color32 {
+        mix(self.surface, self.accent, 0.25 * self.appearance.candy_t())
+    }
+
+    /// The accent ring the study draws round its lit surfaces, at `alpha` of
+    /// the accent — or nothing, on an arrangement that lights nothing.
+    ///
+    /// 5a rings very nearly everything: `0 0 0 1px accent(.28)` on the address
+    /// pill, .24 on the search field, .2 on a chip, .18 on a card. It is the
+    /// cheap half of "the accent as a light source" — the ring is the edge of
+    /// the glass catching it, and it is what carries the colour onto surfaces
+    /// whose own fill has to stay near-neutral to keep their text readable.
+    ///
+    /// Scaled by the same `glow` that lights the halo behind a surface, so the
+    /// two arrive together: an arrangement that asked for no glow gets no
+    /// rings either, and Zervo and Flat are untouched by all of this.
+    pub fn accent_ring(&self, alpha: f32) -> Option<Color32> {
+        let glow = self.appearance.glow;
+        // Measured against the study's own glow rather than against one, so
+        // Candy — which is the arrangement these alphas were read off — gets
+        // them at full strength, and an arrangement that lights less rings
+        // proportionally less rather than being scaled down for no reason.
+        let strength = (glow / STUDY_GLOW).min(1.0);
+        (glow > 0.0 && alpha > 0.0).then(|| self.accent.gamma_multiply(alpha * strength))
+    }
+
+    /// The ink that reads on a surface of this exact colour, and the muted
+    /// shade beside it.
+    ///
+    /// [`Palette::over`] asks this of a photograph. This asks it of a colour
+    /// the theme mixed itself — which is what an active row, a filled button
+    /// or an accent-tinted chip is, and none of them have a picture behind
+    /// them to measure.
+    ///
+    /// 5b names `Palette::over` and `prefers_light_ink` as the two that
+    /// "become load-bearing here rather than a backstop" once the accent is
+    /// turned up. This is the third of them, for the surfaces the theme itself
+    /// made.
+    ///
+    /// Same hysteresis as `over`, for the same reason: the theme keeps its own
+    /// ink unless the other is clearly better, so text does not flip colour
+    /// halfway through the animation that carries a row from unselected to
+    /// selected.
+    pub fn ink_on(&self, surface: Color32) -> (Color32, Color32) {
+        let brightness = f32::from(luminance_of(surface)) / 255.0;
+        let (theirs, ours) = if self.dark {
+            (DARK_INK, LIGHT_INK)
+        } else {
+            (LIGHT_INK, DARK_INK)
+        };
+        if contrast(theirs.0, brightness) > contrast(ours.0, brightness) * FLIP_MARGIN {
+            theirs
+        } else {
+            ours
+        }
+    }
 
     /// Whether pale text reads better than dark text at `rect`, or `None` when
     /// there is nothing behind it.
@@ -967,6 +1828,40 @@ pub struct Palette {
     /// Active tab fill — accent-tinted surface.
     pub active: Color32,
     pub accent: Color32,
+    /// Something is wrong but recoverable: an unencrypted connection, a
+    /// download that failed, a permission a page is asking for.
+    ///
+    /// A theme colour rather than a literal at the call site, for the same
+    /// reason `accent` is one. There were two of these in the tree — a 220,138,
+    /// 40 amber mixed into the address pill's warning badge and nothing at all
+    /// for its opposite — so 7c's amber chip and 7b's green tick both came out
+    /// grey, and the one warning that did exist could not answer to a theme.
+    ///
+    /// Not the accent: the accent is a preference and this is a fact about the
+    /// page. A reader whose accent is amber must still be able to tell a
+    /// warning from a highlight.
+    pub warning: Color32,
+    /// Something finished, or is safe: a download complete, a task done.
+    pub success: Color32,
+    /// Something is wrong and is *not* recoverable by carrying on: a
+    /// certificate that does not match the site it was served for.
+    ///
+    /// Distinct from `warning` because 7b needs the distinction and says why:
+    /// "the one error page that must not be candy". An engine gap is a wait,
+    /// and a bad certificate is a decision — the two must not be the same
+    /// colour, or the page that wants you to stop looks like the one that
+    /// wants you to be patient.
+    pub danger: Color32,
+    /// Something is merely so: you are offline, four tabs are queued. Not an
+    /// error and not the accent either — the accent is a preference, and a
+    /// fact about the network is not one.
+    pub info: Color32,
+    /// The accent's partner round the wheel — the aurora's second lamp.
+    ///
+    /// Derived rather than set: see [`warm_of`]. It lives on the palette so
+    /// that every place that lights something with the accent can reach the
+    /// colour beside it without deriving its own and drifting.
+    pub warm: Color32,
     pub text: Color32,
     pub text_muted: Color32,
     pub border: Color32,
@@ -980,9 +1875,24 @@ pub struct Palette {
     /// and main.rs stamps the setting on, the same way `dark` is a fact about
     /// the theme rather than a colour.
     pub translucency: Translucency,
+    /// Whether the page has the whole window to itself.
+    ///
+    /// A fact about the layout rather than about the theme, here for the same
+    /// reason `translucency` is: the palette already reaches every drawing
+    /// function, and the alternative was a parameter on all of them.
+    /// `resolve` leaves it false and main.rs stamps the layout on.
+    pub fills_window: bool,
     /// What surfaces are made of: corner radii, fills, edges, shadows, the
     /// lot. See [`Material`].
     pub material: Material,
+    /// The arrangement the material was built from, and the handful of chrome
+    /// decisions that are not about what a surface is made of — where the seam
+    /// falls, what a hidden sidebar leaves behind, where the shelf lives.
+    ///
+    /// Here rather than in `Settings` for the same reason the material is: the
+    /// palette already reaches every drawing function in the application, and
+    /// the alternative was another parameter on all of them.
+    pub appearance: Appearance,
     /// What is behind the chrome, blurred, if anything is.
     ///
     /// The backdrop, not the frost: `material.frosts` says whether surfaces
@@ -1002,11 +1912,152 @@ pub struct Palette {
 // low ratios, so the accent choice retints the whole chrome, not just
 // highlights.
 
-/// Corner radius of the floating web-content card, in points.
-/// Largest element gets the largest radius in the size-tiered system.
-pub const CONTENT_RADIUS: f32 = Material::GLASS.radius.panel as f32;
+/// The accent ratio the chrome shipped with, and what a candy setting is
+/// measured against.
+///
+/// It is a small number, and that was the complaint: mixed in this quietly,
+/// ten accent presets produce ten near-identical greys. The whole ladder below
+/// scales off it, so a reader who leaves it alone gets exactly the chrome that
+/// always shipped and one who moves it moves every rung together.
+const SHIPPED_CANDY: f32 = 0.045;
+
+/// The ratio turn 5 argues for, and the far end of the ladder.
+const STUDY_CANDY: f32 = 0.3;
+
+/// The glow the study's own arrangement carries, and what a ring is measured
+/// against. Candy sits exactly here; an arrangement that glows less rings less.
+const STUDY_GLOW: f32 = 0.55;
+
+/// Where one rung of the accent ladder sits at this candy setting.
+///
+/// The rungs are named at both ends rather than scaled from one. `shipped` is
+/// what the chrome has always mixed; `study` is the ratio turn 5 asks for by
+/// name — "0.16 on the base, 0.24 on surfaces, 0.5 on the active tab" — and
+/// the setting slides between them, carrying on past the study's end at the
+/// same rate for anyone who wants more than it asked for.
+///
+/// Scaling every rung by `candy / SHIPPED_CANDY` was the first shape of this
+/// and it overshoots badly: at the study's own 0.3 it puts 0.30 of the accent
+/// in the base and 0.40 in the surfaces, roughly twice what is being asked
+/// for. That is not a brighter turn 5, it is a muddier one. The artboards keep
+/// their *surfaces* close to neutral and do the colouring with the light
+/// behind them — `frame::paint_chrome_aurora` is where the colour comes from,
+/// and a base already 40% of the way to the accent leaves it nothing to add.
+fn rung(candy: f32, shipped: f32, study: f32) -> f32 {
+    let t = (candy.max(0.0) - SHIPPED_CANDY) / (STUDY_CANDY - SHIPPED_CANDY);
+    (shipped + (study - shipped) * t).clamp(0.0, 1.0)
+}
+
+/// The radius the window's own corners are cut to by the platform, in points.
+///
+/// Not a theme value, and deliberately not on the [`Radii`] ladder: the window
+/// server draws this one and the chrome cannot argue with it. Painting a
+/// different radius at the same corner does not replace the platform's, it
+/// puts a second arc beside it — which is what "double corners" looks like,
+/// and is exactly what a page rounded to `Tier::Window` did against a macOS
+/// window rounded to ten.
+///
+/// There is no API for it on any of the three. macOS has masked windows at
+/// 10pt since Big Sur; Windows 11 rounds at 8 device-independent pixels and
+/// Windows 10 does not round at all, so the smaller of the two is the safe
+/// answer where a square corner is the failure that shows; X11 and Wayland
+/// leave it to the compositor and most draw nothing, so the theme keeps its
+/// own value there and nothing is being contradicted.
+///
+/// `None` means "no platform opinion, use the ladder".
+pub const fn platform_window_radius() -> Option<f32> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(10.0)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Some(8.0)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+/// The radius a surface flush with the window's edge must take.
+///
+/// The platform's, where the platform has one — see
+/// [`platform_window_radius`]. It does not answer to the corner scale for the
+/// same reason: the reader can make every surface in the chrome rounder, and
+/// the window is not one of the chrome's surfaces.
+pub fn window_radius(palette: &Palette) -> f32 {
+    platform_window_radius().unwrap_or_else(|| f32::from(palette.radius(Tier::Window)))
+}
+
+/// Corner radius of the web-content card, in points.
+///
+/// Two tiers rather than one. While the card is inset it is a panel among
+/// panels and rounds like one; once it reaches the window's edge its corner
+/// *is* the window's corner, and it has to be the window's radius or the two
+/// disagree by four points in the one place where nobody can miss it.
+pub fn content_radius(palette: &Palette) -> f32 {
+    if palette.fills_window || palette.appearance.seam.closes_gap() {
+        window_radius(palette)
+    } else {
+        f32::from(palette.radius(Tier::Panel))
+    }
+}
+
 /// Gap between the chrome panels and the web-content card, in points.
-pub const CONTENT_MARGIN: f32 = 8.0;
+///
+/// Nothing in full-page mode: there are no chrome panels to be apart from, so
+/// a gap there is a margin around the whole window rather than a seam between
+/// two things — an inset page with the desktop showing through the strip
+/// outside it. Every preset carries a gap of its own and three of them are
+/// non-zero, so this was a border round the page in three arrangements out of
+/// five and nothing in the layout said why.
+pub fn content_margin(palette: &Palette) -> f32 {
+    if palette.fills_window || palette.appearance.seam.closes_gap() {
+        0.0
+    } else {
+        palette.appearance.gap.max(0.0)
+    }
+}
+
+/// Which of the card's corners are round.
+///
+/// Once the gap closes the card is flush against the sidebar on its left and
+/// against the window everywhere else, so the two corners touching the sidebar
+/// square off and only the window's own stay round. That is also two fewer
+/// corners to erase out of the framebuffer every frame, which is the rare
+/// change that costs less than what it replaces.
+pub fn content_corners(palette: &Palette) -> CornerRadius {
+    let radius = content_radius(palette) as u8;
+    // In full-page mode all four of the page's corners *are* the window's, so
+    // all four take the window's radius. The seam's own rule below is about a
+    // page flush against a sidebar, and there is no sidebar here.
+    if palette.fills_window {
+        return CornerRadius::same(radius);
+    }
+    if palette.appearance.seam.closes_gap() {
+        CornerRadius {
+            nw: 0,
+            sw: 0,
+            ne: radius,
+            se: radius,
+        }
+    } else {
+        CornerRadius::same(radius)
+    }
+}
+
+/// The same four corners as points, in the order the framebuffer eraser and
+/// the mask fans walk them: north-west, north-east, south-east, south-west.
+pub fn content_corner_radii(palette: &Palette) -> [f32; 4] {
+    let corners = content_corners(palette);
+    [
+        f32::from(corners.nw),
+        f32::from(corners.ne),
+        f32::from(corners.se),
+        f32::from(corners.sw),
+    ]
+}
 
 /// Workspace dot colors, cycled by workspace index. Mid-saturation pastels
 /// that read on both light and dark chrome.
@@ -1018,8 +2069,59 @@ pub const WORKSPACE_COLORS: [Color32; 5] = [
     Color32::from_rgb(219, 120, 140),
 ];
 
+/// The second light in each space, from the study's own table.
+///
+/// Turn 5's aurora is not one colour: every workspace carries a `warm` beside
+/// its `rgb`, and the second of the three radials is that one. One hue at
+/// three sizes reads as a gradient; two hues read as a room with two lamps in
+/// it, and that is the whole of the difference between the artboard and a
+/// tinted rectangle.
+pub const WORKSPACE_WARMS: [Color32; 5] = [
+    Color32::from_rgb(200, 120, 240),
+    Color32::from_rgb(70, 200, 200),
+    Color32::from_rgb(170, 200, 90),
+    Color32::from_rgb(230, 110, 90),
+    Color32::from_rgb(150, 90, 220),
+];
+
+/// The partner of any accent at all, not just the five.
+///
+/// The spaces get the study's own pairings. Anything else — the ten accent
+/// presets, or a colour somebody mixed on the Appearance page — is rotated a
+/// fifth of the way toward the warm end of the wheel, round whichever side is
+/// shorter, which is an approximation of what those five pairs are doing by
+/// eye. It is stated as an approximation because it is one: Nightshift's pair
+/// goes the other way, and no single rule reproduces all five.
+pub fn warm_of(accent: Color32) -> Color32 {
+    if let Some(index) = WORKSPACE_COLORS.iter().position(|colour| *colour == accent) {
+        return WORKSPACE_WARMS[index];
+    }
+    let mut hsva = egui::ecolor::Hsva::from(accent);
+    // Orange, as the warm end.
+    let mut delta = 0.06 - hsva.h;
+    if delta > 0.5 {
+        delta -= 1.0;
+    } else if delta < -0.5 {
+        delta += 1.0;
+    }
+    hsva.h = (hsva.h + delta * 0.22).rem_euclid(1.0);
+    hsva.s = (hsva.s * 1.05).min(1.0);
+    Color32::from(hsva)
+}
+
 pub fn workspace_color(index: usize) -> Color32 {
     WORKSPACE_COLORS[index % WORKSPACE_COLORS.len()]
+}
+
+/// The same, rotated so that the first workspace takes the colour somebody
+/// chose for it and the ones after it carry on round the ring.
+///
+/// Rotating rather than storing a colour per workspace: the point of the list
+/// is that two spaces never look alike, and a free choice per space is a way
+/// to end up with two blues. This keeps the guarantee and still lets the first
+/// one — the only one that exists at first run — be picked.
+pub fn workspace_color_from(index: usize, first: usize) -> Color32 {
+    workspace_color(index + first)
 }
 
 /// The base the new tab page is painted on: deeper than the chrome in the dark
@@ -1030,6 +2132,30 @@ pub fn page_base(palette: &Palette) -> Color32 {
         mix(palette.bg, Color32::BLACK, 0.35)
     } else {
         mix(palette.bg, Color32::WHITE, 0.45)
+    }
+}
+
+/// The least anything the page paints over is ever veiled.
+///
+/// Below this the header controls and the credit line stop being readable on a
+/// bright picture — and it is also exactly enough to keep a card legible once
+/// the page has stopped painting a base of its own, which is why the seam
+/// reaches for the same number rather than inventing a second one.
+pub const MIN_VEIL: f32 = 0.15;
+
+/// What the page lays down under itself, given where the seam falls.
+///
+/// At [`Seam::Card`] it is an opaque base with a colour of its own — which is
+/// precisely what makes the seam visible, because that colour and the chrome's
+/// are two greys that never quite agree. Past that the page stops painting a
+/// background at all and lays down only the veil that keeps a card readable,
+/// so what shows through is the window's own backdrop: the same one thing the
+/// chrome is a tint on.
+pub fn page_ground(palette: &Palette) -> Color32 {
+    if palette.appearance.seam.page_paints_base() {
+        page_base(palette)
+    } else {
+        page_veil(palette, MIN_VEIL)
     }
 }
 
@@ -1049,48 +2175,117 @@ pub fn page_veil(palette: &Palette, amount: f32) -> Color32 {
     )
 }
 
-pub fn resolve(mode: ThemeMode, system_dark: bool, accent: AccentColor) -> Palette {
+pub fn resolve(
+    mode: ThemeMode,
+    system_dark: bool,
+    accent: AccentColor,
+    appearance: &Appearance,
+) -> Palette {
     let dark = match mode {
         ThemeMode::Dark => true,
         ThemeMode::Light => false,
         ThemeMode::Auto => system_dark,
     };
     let accent_color = accent.color(dark);
+    let material = appearance.material();
+    // How far the accent reaches into each rung of the chrome. At the shipped
+    // ratio every one of these comes out at the byte the chrome has always
+    // been; at the study's, at the ratio the study names.
+    let candy = appearance.candy;
     let mut palette = if dark {
         Palette {
             dark: true,
-            bg: mix(Color32::from_rgb(27, 27, 27), accent_color, 0.045),
-            surface: mix(Color32::from_rgb(38, 38, 38), accent_color, 0.06),
-            surface_hover: mix(Color32::from_rgb(51, 51, 51), accent_color, 0.07),
+            bg: mix(
+                Color32::from_rgb(27, 27, 27),
+                accent_color,
+                rung(candy, 0.045, 0.16),
+            ),
+            surface: mix(
+                Color32::from_rgb(38, 38, 38),
+                accent_color,
+                rung(candy, 0.06, 0.24),
+            ),
+            surface_hover: mix(
+                Color32::from_rgb(51, 51, 51),
+                accent_color,
+                rung(candy, 0.07, 0.28),
+            ),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
+            warm: warm_of(accent_color),
+            warning: Color32::from_rgb(240, 187, 120),
+            success: Color32::from_rgb(122, 214, 160),
+            danger: Color32::from_rgb(240, 148, 170),
+            info: Color32::from_rgb(125, 196, 240),
             text: LIGHT_INK.0,
             text_muted: LIGHT_INK.1,
-            border: mix(Color32::from_rgb(60, 60, 62), accent_color, 0.08),
+            border: mix(
+                Color32::from_rgb(60, 60, 62),
+                accent_color,
+                rung(candy, 0.08, 0.32),
+            ),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 90),
-            translucency: Translucency::Solid,
-            material: Material::GLASS,
+            translucency: appearance.translucency,
+            fills_window: false,
+            material,
+            appearance: *appearance,
             backdrop: None,
         }
     } else {
         Palette {
             dark: false,
-            bg: mix(Color32::from_rgb(235, 235, 235), accent_color, 0.03),
-            surface: mix(Color32::from_rgb(226, 226, 226), accent_color, 0.04),
-            surface_hover: mix(Color32::from_rgb(213, 213, 213), accent_color, 0.05),
+            bg: mix(
+                Color32::from_rgb(235, 235, 235),
+                accent_color,
+                rung(candy, 0.03, 0.10),
+            ),
+            surface: mix(
+                Color32::from_rgb(226, 226, 226),
+                accent_color,
+                rung(candy, 0.04, 0.16),
+            ),
+            surface_hover: mix(
+                Color32::from_rgb(213, 213, 213),
+                accent_color,
+                rung(candy, 0.05, 0.19),
+            ),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
+            warm: warm_of(accent_color),
+            // Darker in the light theme, or an amber chip on white is a pale
+            // smudge — the same reason every other rung has two values.
+            warning: Color32::from_rgb(176, 108, 20),
+            success: Color32::from_rgb(28, 132, 82),
+            danger: Color32::from_rgb(186, 42, 78),
+            info: Color32::from_rgb(30, 110, 176),
             text: DARK_INK.0,
             text_muted: DARK_INK.1,
-            border: Color32::from_rgb(204, 204, 204),
+            // The one rung that starts at nothing, because the light border
+            // always has. It only picks the accent up once the reader asks for
+            // more candy than shipped.
+            border: mix(
+                Color32::from_rgb(204, 204, 204),
+                accent_color,
+                rung(candy, 0.0, 0.18),
+            ),
             shadow: Color32::from_rgba_premultiplied(0, 0, 0, 50),
-            translucency: Translucency::Solid,
-            material: Material::GLASS,
+            translucency: appearance.translucency,
+            fills_window: false,
+            material,
+            appearance: *appearance,
             backdrop: None,
         }
     };
-    // The active-tab tint follows the accent.
-    palette.active = mix(palette.bg, palette.accent, if dark { 0.30 } else { 0.24 });
+    // The active-tab tint follows the accent, and reaches Turn 5's half at the
+    // candy the study asks for. Not past it: at more than half its own colour
+    // the selected row has stopped being a tinted surface and become a swatch.
+    let wanted = rung(candy, if dark { 0.30 } else { 0.24 }, 0.5);
+    // The full ratio, kept. Which of the two inks lands on the row is decided
+    // from the colour that was actually asked for, and then that colour is
+    // deepened until the ink reads on it — rather than the ratio being the
+    // thing that gives way.
+    let asked = mix(palette.bg, palette.accent, wanted);
+    palette.active = readable_over(asked, palette.ink_on(asked).0, MIN_INK_CONTRAST);
     palette
 }
 
@@ -1160,6 +2355,19 @@ pub fn apply(ctx: &Context, palette: &Palette) {
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
     visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.border);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text_muted);
+    // Every hint in the application, and the only way to set one.
+    //
+    // `TextEdit::hint_text` takes a `RichText` and then throws its colour away:
+    // egui overwrites it with `weak_text_color()`, and says so in a comment
+    // apologising for it ("Sucks, since it means users won't be able to
+    // override it"). Left at the default that is the text colour at 0.6, which
+    // over a frosted pill on a lit page is a hint you cannot read — and it is
+    // the *only* thing an empty search field says.
+    //
+    // Set here rather than worked around at the two call sites, because it is
+    // a theme colour: it is the muted tier, which is what a hint has always
+    // been, and setting it once means a field added later gets it too.
+    visuals.weak_text_color = Some(palette.text_muted);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text_muted);
     visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
     visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
@@ -1181,7 +2389,12 @@ mod tests {
 
     /// A page at 100,100 → 900,700 showing the middle half of a picture.
     fn palette_with_backdrop() -> Palette {
-        let mut palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        let mut palette = resolve(
+            ThemeMode::Dark,
+            true,
+            AccentColor::Lavender,
+            &Appearance::classic(),
+        );
         palette.backdrop = Some(Backdrop {
             texture: TextureId::default(),
             rect: Rect::from_min_max(pos2(100.0, 100.0), pos2(900.0, 700.0)),
@@ -1275,7 +2488,7 @@ mod tests {
             (ThemeMode::Dark, true, 255_u8),
             (ThemeMode::Light, false, 0_u8),
         ] {
-            let mut palette = resolve(mode, dark, AccentColor::Lavender);
+            let mut palette = resolve(mode, dark, AccentColor::Lavender, &Appearance::classic());
             palette.translucency = Translucency::Frosted;
             palette.backdrop = Some(Backdrop {
                 luma: [page; LUMA_CELLS * LUMA_CELLS],
@@ -1283,7 +2496,7 @@ mod tests {
             });
             let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
 
-            let thin = Material::GLASS.frosted_fill;
+            let thin = Material::ZERVO.frosted_fill;
             let thick = palette.tint_over(card, thin);
             assert!(thick > thin, "{mode:?}: the tint has to thicken: {thick}");
             assert!(thick < 1.0, "{mode:?}: and stay glass: {thick}");
@@ -1308,7 +2521,7 @@ mod tests {
         palette.translucency = Translucency::Frosted;
         palette.backdrop.as_mut().unwrap().luma = [10; LUMA_CELLS * LUMA_CELLS];
         let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
-        let thin = Material::GLASS.frosted_fill;
+        let thin = Material::ZERVO.frosted_fill;
         assert_eq!(palette.tint_over(card, thin), thin);
     }
 
@@ -1339,7 +2552,7 @@ mod tests {
     #[test]
     fn a_surface_tint_counts_the_class_as_well_as_the_fill() {
         let palette = palette_with_backdrop().with_translucency(Translucency::Frosted);
-        let fill = Material::GLASS.frosted_fill + Material::GLASS.frosted_fill_strength;
+        let fill = Material::ZERVO.frosted_fill + Material::ZERVO.frosted_fill_strength;
         for surface in [Surface::Card, Surface::Menu, Surface::Input] {
             let nominal = palette.nominal_tint(surface);
             assert!(
@@ -1401,7 +2614,12 @@ mod tests {
     /// edge of the window.
     #[test]
     fn text_is_left_alone_where_there_is_nothing_underneath() {
-        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        let palette = resolve(
+            ThemeMode::Dark,
+            true,
+            AccentColor::Lavender,
+            &Appearance::classic(),
+        );
         let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
         assert!(palette.brightness_under(card).is_none());
         assert_eq!(palette.over(card).text, palette.text);
@@ -1417,7 +2635,12 @@ mod tests {
 
     #[test]
     fn nothing_frosts_without_a_backdrop() {
-        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        let palette = resolve(
+            ThemeMode::Dark,
+            true,
+            AccentColor::Lavender,
+            &Appearance::classic(),
+        );
         let card = Rect::from_min_max(pos2(300.0, 250.0), pos2(500.0, 400.0));
         assert!(palette.backdrop_under(card).is_none());
     }
@@ -1427,12 +2650,333 @@ mod tests {
     fn the_steps_are_two_different_things() {
         use Translucency::{Frosted, Solid};
         assert_eq!(Solid.chrome(), 1.0, "Solid has to mean an opaque window");
-        assert_eq!(Solid.surface(), 1.0, "Solid has to mean opaque surfaces");
         assert!(Frosted.chrome() < Solid.chrome());
-        assert!(Frosted.surface() < Solid.surface());
+        let at = |translucency| {
+            resolve(
+                ThemeMode::Dark,
+                true,
+                AccentColor::Lavender,
+                &Appearance::classic(),
+            )
+            .with_translucency(translucency)
+            .tint_for(Surface::Card)
+        };
+        assert_eq!(at(Solid), 1.0, "Solid has to mean opaque surfaces");
+        assert!(at(Frosted) < at(Solid));
         // The step that matters is not the tint, it is whether the platform is
         // asked for a backdrop at all.
         assert_ne!(Frosted.backdrop(), Solid.backdrop());
+    }
+
+    /// The Solid/Frosted control has to do something on every arrangement,
+    /// including the two that ship opaque. An arrangement whose card fill is
+    /// 1.0 would otherwise offer a switch that changes nothing.
+    #[test]
+    fn every_preset_can_be_frosted() {
+        for preset in Preset::ALL {
+            let mut appearance = preset.appearance();
+            appearance.translucency = Translucency::Solid;
+            let solid = resolve(ThemeMode::Dark, true, AccentColor::Lavender, &appearance)
+                .tint_for(Surface::Card);
+            appearance.translucency = Translucency::Frosted;
+            let frosted = resolve(ThemeMode::Dark, true, AccentColor::Lavender, &appearance)
+                .tint_for(Surface::Card);
+            assert_eq!(solid, 1.0, "{}: Solid means opaque", preset.label());
+            assert!(
+                frosted < 1.0,
+                "{}: Frosted has to let something through, got {frosted}",
+                preset.label()
+            );
+        }
+    }
+
+    /// The arrangement that shipped has to still resolve to the colours that
+    /// shipped. It is the fallback the whole preset row exists to preserve,
+    /// and a fallback that is nearly right is not one.
+    #[test]
+    fn the_classic_arrangement_resolves_to_what_shipped() {
+        let classic = Appearance::classic();
+        for accent in AccentColor::PRESETS {
+            for (mode, dark) in [(ThemeMode::Dark, true), (ThemeMode::Light, false)] {
+                let palette = resolve(mode, dark, accent, &classic);
+                let colour = accent.color(dark);
+                // The arithmetic as it was written before any of this, spelled
+                // out rather than referenced, so the two cannot drift together
+                // into being wrong in the same direction.
+                let (bg, surface, hover, active) = if dark {
+                    (
+                        mix(Color32::from_rgb(27, 27, 27), colour, 0.045),
+                        mix(Color32::from_rgb(38, 38, 38), colour, 0.06),
+                        mix(Color32::from_rgb(51, 51, 51), colour, 0.07),
+                        0.30,
+                    )
+                } else {
+                    (
+                        mix(Color32::from_rgb(235, 235, 235), colour, 0.03),
+                        mix(Color32::from_rgb(226, 226, 226), colour, 0.04),
+                        mix(Color32::from_rgb(213, 213, 213), colour, 0.05),
+                        0.24,
+                    )
+                };
+                assert_eq!(palette.bg, bg, "{accent:?} {mode:?} bg");
+                assert_eq!(palette.surface, surface, "{accent:?} {mode:?} surface");
+                assert_eq!(palette.surface_hover, hover, "{accent:?} {mode:?} hover");
+                assert_eq!(
+                    palette.active,
+                    mix(bg, colour, active),
+                    "{accent:?} {mode:?} active"
+                );
+                if !dark {
+                    assert_eq!(
+                        palette.border,
+                        Color32::from_rgb(204, 204, 204),
+                        "{accent:?}: the light border took accent it never used to"
+                    );
+                }
+            }
+        }
+        for (mode, dark) in [(ThemeMode::Dark, true), (ThemeMode::Light, false)] {
+            let palette = resolve(mode, dark, AccentColor::Lavender, &classic);
+            // And the material it builds is the one the constant describes.
+            assert_eq!(palette.material.fill, Material::ZERVO.fill);
+            assert!((palette.material.menu_fill - Material::ZERVO.menu_fill).abs() < 1e-6);
+            assert!((palette.material.input_fill - Material::ZERVO.input_fill).abs() < 1e-6);
+            assert_eq!(palette.material.blur, Material::ZERVO.blur);
+            assert_eq!(palette.material.animation, Material::ZERVO.animation);
+            assert_eq!(palette.material.edge, Edge::Hairline);
+            assert_eq!(palette.radius(Tier::Card), Material::ZERVO.radius.card);
+        }
+    }
+
+    /// Composite `over` onto `under` at `alpha`, and report the WCAG ratio of
+    /// `ink` against the result.
+    fn ratio_on(ink: Color32, under: Color32, over: Color32, alpha: f32) -> f32 {
+        let blend = mix(under, over, alpha.clamp(0.0, 1.0));
+        contrast(ink, f32::from(luminance_of(blend)) / 255.0)
+    }
+
+    /// Every arrangement, in both themes, with every accent, has to stay
+    /// readable.
+    ///
+    /// Turn 5 of the study raises the accent ratio from 0.045 to 0.3 and says
+    /// so plainly: "All of this is contrast you are spending." It names the
+    /// two workspace colours it expects to be worst. This is that warning made
+    /// into something that fails a build instead of a screenshot — because the
+    /// combination that breaks is a *product* of preset, theme and accent, and
+    /// nobody is going to look at all hundred of them.
+    ///
+    /// The thresholds are WCAG's, one step down for the muted tier: body text
+    /// at 4.5, and the caption colour beside it at 3.0, which is the large-text
+    /// bar and is what that tier is used for.
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the headroom is the useful half of this test — which combination is \
+                  closest to the line is what somebody moving a ratio needs to know, and \
+                  it is not a failure so it cannot be said in an assertion"
+    )]
+    fn every_arrangement_stays_readable() {
+        let mut worst = (f32::INFINITY, String::new());
+        for preset in Preset::ALL {
+            for (mode, dark) in [(ThemeMode::Dark, true), (ThemeMode::Light, false)] {
+                // The presets' own accents, plus the workspace colours, which
+                // become the accent outright when the reader asks the space to
+                // pick it.
+                let accents = AccentColor::PRESETS.into_iter().chain(
+                    WORKSPACE_COLORS
+                        .into_iter()
+                        .map(|c| AccentColor::Custom(c.r(), c.g(), c.b())),
+                );
+                for accent in accents {
+                    let palette = resolve(mode, dark, accent, &preset.appearance());
+                    let card = palette.tint_for(Surface::Card);
+                    let checks = [
+                        (
+                            "text on the chrome",
+                            palette.text,
+                            palette.bg,
+                            palette.bg,
+                            1.0,
+                            4.5,
+                        ),
+                        (
+                            "text on a card",
+                            palette.text,
+                            palette.bg,
+                            palette.surface,
+                            card,
+                            4.5,
+                        ),
+                        (
+                            // Whichever ink the row itself would use, which is
+                            // the point of `Palette::ink_on` — asserting on
+                            // `palette.text` here would test a colour no call
+                            // site draws on a selected row.
+                            "text on the selected row",
+                            palette.ink_on(palette.active).0,
+                            palette.bg,
+                            palette.active,
+                            1.0,
+                            4.5,
+                        ),
+                        (
+                            "muted text on the chrome",
+                            palette.text_muted,
+                            palette.bg,
+                            palette.bg,
+                            1.0,
+                            3.0,
+                        ),
+                        // The two semantic colours are icon tints and short
+                        // labels, held to WCAG's non-text bar: below 3.0 an
+                        // amber warning badge beside grey text is a decoration
+                        // rather than a warning.
+                        (
+                            "a warning on the chrome",
+                            palette.warning,
+                            palette.bg,
+                            palette.bg,
+                            1.0,
+                            3.0,
+                        ),
+                        (
+                            "a success on the chrome",
+                            palette.success,
+                            palette.bg,
+                            palette.bg,
+                            1.0,
+                            3.0,
+                        ),
+                        (
+                            "a danger on the chrome",
+                            palette.danger,
+                            palette.bg,
+                            palette.bg,
+                            1.0,
+                            3.0,
+                        ),
+                        (
+                            "information on the chrome",
+                            palette.info,
+                            palette.bg,
+                            palette.bg,
+                            1.0,
+                            3.0,
+                        ),
+                    ];
+                    for (what, ink, under, over, alpha, floor) in checks {
+                        let ratio = ratio_on(ink, under, over, alpha);
+                        if ratio < worst.0 {
+                            worst = (
+                                ratio,
+                                format!("{} / {mode:?} / {accent:?}: {what}", preset.label()),
+                            );
+                        }
+                        assert!(
+                            ratio >= floor,
+                            "{} / {mode:?} / {accent:?}: {what} is {ratio:.2}, under {floor}",
+                            preset.label()
+                        );
+                    }
+                }
+            }
+        }
+        // Printed rather than asserted on: it is the headroom, and knowing
+        // which combination is closest to the line is the useful part when
+        // somebody moves a ratio.
+        println!("closest to the line: {} at {:.2}", worst.1, worst.0);
+    }
+
+    /// Full-page mode has no chrome to be apart from, so the page takes the
+    /// window: no gap in any arrangement, and the window's own corner on all
+    /// four sides rather than the two the closed seam leaves round.
+    #[test]
+    fn a_page_with_the_window_to_itself_has_no_gap_in_any_arrangement() {
+        for preset in Preset::ALL {
+            let framed = resolve(
+                ThemeMode::Dark,
+                true,
+                AccentColor::Lavender,
+                &preset.appearance(),
+            );
+            let whole = framed.filling_window(true);
+
+            assert_eq!(
+                content_margin(&whole),
+                0.0,
+                "{} keeps a gap in full page",
+                preset.label()
+            );
+            let corners = content_corners(&whole);
+            let radius = window_radius(&whole) as u8;
+            assert_eq!(
+                corners,
+                CornerRadius::same(radius),
+                "{}'s full-page corners are not the window's",
+                preset.label()
+            );
+            // And the framed case is untouched: three of the five carry a gap
+            // and this must not have quietly removed it.
+            if !framed.appearance.seam.closes_gap() {
+                assert_eq!(
+                    content_margin(&framed),
+                    framed.appearance.gap,
+                    "{} lost its gap outside full page",
+                    preset.label()
+                );
+            }
+        }
+    }
+
+    /// The window's corner is the platform's, and does not answer to the corner
+    /// scale — painting a different radius at the same corner does not replace
+    /// the platform's arc, it puts a second one beside it.
+    #[test]
+    fn the_windows_corner_does_not_move_with_the_scale() {
+        let Some(native) = platform_window_radius() else {
+            // Nothing to hold it to; the ladder is the only answer here.
+            return;
+        };
+        let mut widest = f32::NEG_INFINITY;
+        let mut narrowest = f32::INFINITY;
+        for scale in [0.3_f32, 1.0, 1.8] {
+            let mut appearance = Preset::Zervo.appearance();
+            appearance.corners = scale;
+            let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender, &appearance);
+            let radius = window_radius(&palette);
+            assert_eq!(radius, native, "the corner scale moved the window's corner");
+            widest = widest.max(radius);
+            narrowest = narrowest.min(radius);
+        }
+        assert_eq!(widest, narrowest);
+    }
+
+    /// The corner scale has to move the whole ladder and keep its order, or a
+    /// pill ends up rounder than the window it is in.
+    #[test]
+    fn the_corner_scale_keeps_the_ladder_in_order() {
+        for scale in [0.0_f32, 0.3, 1.0, 1.35, 1.8, 2.0] {
+            let radii = Material::ZERVO.radius.scaled(scale);
+            let rungs = [
+                radii.hairline,
+                radii.control,
+                radii.row,
+                radii.card,
+                radii.panel,
+                radii.pill,
+                radii.window,
+            ];
+            for pair in rungs.windows(2) {
+                assert!(
+                    pair[0] <= pair[1],
+                    "at x{scale} the ladder went backwards: {rungs:?}"
+                );
+            }
+        }
+        assert_eq!(
+            Material::ZERVO.radius.scaled(1.0).card,
+            Material::ZERVO.radius.card
+        );
     }
 
     /// The point of the middle step is that you can see what is behind the
@@ -1452,8 +2996,16 @@ mod tests {
         );
         // And the surfaces have to be heavier than the base, or the words on
         // them have nothing to sit on.
+        let card = resolve(
+            ThemeMode::Dark,
+            true,
+            AccentColor::Lavender,
+            &Appearance::classic(),
+        )
+        .with_translucency(Frosted)
+        .tint_for(Surface::Card);
         assert!(
-            Frosted.surface() > Frosted.chrome() * 2.0,
+            card > Frosted.chrome() * 2.0,
             "surfaces need more tint than the chrome they sit on"
         );
     }
@@ -1463,8 +3015,13 @@ mod tests {
     /// because both of them sit on a blur.
     #[test]
     fn a_panel_is_glass_like_a_card_and_an_input_is_heavier() {
-        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender)
-            .with_translucency(Translucency::Frosted);
+        let palette = resolve(
+            ThemeMode::Dark,
+            true,
+            AccentColor::Lavender,
+            &Appearance::classic(),
+        )
+        .with_translucency(Translucency::Frosted);
         let card = palette.tint_for(Surface::Card);
         let menu = palette.tint_for(Surface::Menu);
         let input = palette.tint_for(Surface::Input);
@@ -1487,8 +3044,13 @@ mod tests {
     /// hierarchy above means anything.
     #[test]
     fn solid_collapses_the_classes() {
-        let palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender)
-            .with_translucency(Translucency::Solid);
+        let palette = resolve(
+            ThemeMode::Dark,
+            true,
+            AccentColor::Lavender,
+            &Appearance::classic(),
+        )
+        .with_translucency(Translucency::Solid);
         for class in [Surface::Card, Surface::Menu, Surface::Input] {
             assert_eq!(palette.tint_for(class), 1.0);
         }
@@ -1498,7 +3060,7 @@ mod tests {
     /// would give a surface square corners with no other sign.
     #[test]
     fn every_radius_tier_resolves() {
-        let radii = Material::GLASS.radius;
+        let radii = Material::ZERVO.radius;
         for tier in [
             Tier::Hairline,
             Tier::Control,
@@ -1506,6 +3068,7 @@ mod tests {
             Tier::Card,
             Tier::Panel,
             Tier::Pill,
+            Tier::Window,
         ] {
             assert!(radii.of(tier) > 0, "{tier:?} resolved to nothing");
         }

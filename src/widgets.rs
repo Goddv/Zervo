@@ -9,11 +9,11 @@ use egui::{
 };
 
 use crate::glass;
-use crate::theme::{self, Palette};
+use crate::theme::{self, Palette, Tier};
 
 /// Row height shared by every control, so stacked settings line up. The
 /// material's, so a theme that wants roomier controls says so once.
-const ROW_HEIGHT: f32 = crate::theme::Material::GLASS.row_height;
+const ROW_HEIGHT: f32 = crate::theme::Material::ZERVO.row_height;
 
 /// An iOS-style switch with a label. Returns true when toggled.
 pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str, palette: &Palette) -> bool {
@@ -59,11 +59,16 @@ pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str, palette: &Palette) -> 
         palette.accent,
         on,
     );
-    painter.rect_filled(track, CornerRadius::same(11), track_color);
+    // Half the track's own height, which is what makes a capsule a capsule —
+    // not a rung of the material's ladder, and it must not follow one. A
+    // switch rounded to Flat's corner scale is a rectangle with a circle
+    // sliding inside it.
+    let capsule = CornerRadius::same((track.height() * 0.5) as u8);
+    painter.rect_filled(track, capsule, track_color);
     if on < 1.0 {
         painter.rect_stroke(
             track,
-            CornerRadius::same(11),
+            capsule,
             Stroke::new(1.0_f32, palette.border.gamma_multiply(1.0 - on)),
             StrokeKind::Inside,
         );
@@ -170,13 +175,15 @@ pub fn slider(
     ));
 
     let painter = ui.painter();
-    painter.rect_filled(track, CornerRadius::same(3), palette.surface_hover);
+    // Half the track's height again: a slider's groove is a capsule.
+    let groove = CornerRadius::same((track.height() * 0.5) as u8);
+    painter.rect_filled(track, groove, palette.surface_hover);
     let filled = Rect::from_min_max(
         track.min,
         pos2(track.min.x + track.width() * t, track.max.y),
     );
     if filled.width() > 0.0 {
-        painter.rect_filled(filled, CornerRadius::same(3), palette.accent);
+        painter.rect_filled(filled, groove, palette.accent);
     }
     let knob = pos2(track.min.x + track.width() * t, track.center().y);
     painter.circle_filled(knob, 9.0 + hover, palette.shadow.gamma_multiply(0.5));
@@ -201,7 +208,7 @@ pub fn segmented(
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     ui.painter().rect_filled(
         rect,
-        CornerRadius::same(9),
+        palette.corner(Tier::Row),
         palette.surface_hover.gamma_multiply(0.7),
     );
 
@@ -230,13 +237,13 @@ pub fn segmented(
         if on > 0.0 {
             ui.painter().rect_filled(
                 slot_rect.shrink(3.0),
-                CornerRadius::same(7),
+                palette.corner(Tier::Control),
                 palette.accent.gamma_multiply(0.85 * on),
             );
         } else if hover > 0.0 {
             ui.painter().rect_filled(
                 slot_rect.shrink(3.0),
-                CornerRadius::same(7),
+                palette.corner(Tier::Control),
                 palette.surface.gamma_multiply(hover),
             );
         }

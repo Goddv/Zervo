@@ -1,5 +1,278 @@
 # Changelog
 
+## 0.5.0 — 23 August 2026
+
+**This release is where the chrome was redesigned, and it is a big one.** Eight
+turns of a design study went in: one material with every number reachable, four
+seams between the chrome and the page with a transition each, a new tab page
+that greets you rather than briefing you, five pages for when a page will not
+load, and a first run that explains itself. Zervo's own preset changed with it,
+to the arrangement the browser was actually tuned in.
+
+**Please break it.** 0.5.0 is the shape; 0.6.0 is the polish, and between them
+the useful thing is to be told what is wrong. Open an issue for anything —
+a corner that does not match, a preset that reads badly on your display, a
+crash, a page Servo cannot render that this browser fails to explain. Say which
+preset, which theme and which layout you were in; the four fixed in the days
+before this release were all found that way.
+
+**One material, and every number in it reachable.** The chrome had three
+surface weights, a hairline, a shadow and an opaque page base that only agreed
+by accident. They are one ladder now — `Surface::{Card, Menu, Input}` at the
+material's own fills, with `Tier::Window` added as the rung the content card
+and the window were both missing, and `Radii::scaled` moving the whole ladder
+at once. One real defect fell out of writing it down: `tint_for(Card)` read the
+translucency setting's 0.34, which is also the number `menu_fill` carries, so a
+card and a menu were being drawn at exactly the same weight and the three-rung
+ladder had two rungs.
+
+**`zervo://settings` → Appearance is the whole of it.** Five presets, a
+specimen pinned under the title that is the real chrome rather than a picture
+of it, and one control per named field — fill, sheen, blur, the edge, the
+corner scale, the glow, the settle time, how far the accent reaches. THEMING.md
+has asked since it was written how a theme could be anything but a recompile;
+the answer turned out not to be a loader. Every value is an ordinary setting
+now, so the loader is `settings.json` and the file format is whatever the panel
+writes out. "Copy as a Material" hands you the `const` you would otherwise have
+had to write.
+
+**The old look is a preset, not a memory.** `Preset::Zervo` is what shipped
+before all this, and a test pins it to the exact colours it produced, for all
+ten accents in both themes. Every arrangement keeps the Solid/Frosted switch,
+including the two that ship opaque — a control that does nothing on two of five
+presets is worse than one that is not offered.
+
+**The seam closes.** The gap, the radius and the page's own opaque base were
+three separate things that never quite agreed; they are one setting with four
+steps. Past the first, the page stops painting a base and shows the window's
+backdrop through a veil. Past the second, the gap shuts and only the window's
+own corners stay round — which also drops the corner-erase pass from four
+corners to two. At the last, the sidebar is glass laid *on* the new tab page
+and the page reaches back underneath it.
+
+**Full-page mode.** A third layout beside the sidebar and the bar, on ⌘S, with
+a floating address pill at the bottom, the tab spine at the window's edge, and
+a reveal that carries the utilities nothing else is showing. The sidebar-to-bar
+change is no longer a jump cut: it runs on the material's own settle time, and
+only width, height and opacity move — never position, or the tabs appear to
+fly.
+
+**The sidebar was missing three of its nine buttons.** Favourites, Extensions
+and History existed only in the collapsed bar, so *hiding* the sidebar added
+features. All nine are in both now, in the bar's own order.
+
+**Icons that report on state are drawn rather than lettered.** The sidebar
+toggle and the media transport morph between their two states instead of
+swapping a glyph — one frame with no continuity, which at seventeen points is
+frequently not noticed at all. The method is a port of morphicons (MIT, noted
+in `assets/licenses/`): resample by arc length, fit rotation and scale, and
+interpolate in polar space, so the rotation falls out of the arithmetic rather
+than being choreographed per pair.
+
+**A new tab opens on four cards, not eight.** Seven boxed panels out of the
+gate is a settings screen wearing a hat, and on a page whose point is a
+backdrop it amounts to choosing a picture and covering it. Nothing was removed:
+all thirteen cards are still on the same grid, still draggable, still one press
+of "Add card" away.
+
+**A new tab greets you rather than briefing you.** The page opens on the hour,
+one field, the session you actually abandoned, and the three sites you use —
+"Composed", in Settings → New tab page. The board of cards is the other choice
+and is one press of the header's own control away, with every card still on it.
+A new tab is opened to go somewhere, and thirteen panels is a settings screen
+wearing a hat.
+
+**Zervo's own preset is the arrangement it was tuned in.** It used to be a
+reconstruction of what shipped before the design study — a card seam, an eight
+point gap, no sweep, no liquid selection, no spine. It is now the one that was
+tuned by hand afterwards and lived in: the chrome laid on the page rather than
+beside it, favicons down the tab spine, the shelf wherever the chrome is, every
+motion switched on, and the accent taken from the space you are in. The colours
+have not moved a byte — `candy` is the only field the palette reads for them
+and it is still 0.045 — so a reader who liked the greys still has them.
+
+**The window's corners are the window's.** Zervo painted its page to
+`Tier::Window` — sixteen points, and twenty-nine once a preset made everything
+rounder — at a corner macOS had already masked to ten. Painting a different
+radius at the same corner does not replace the platform's arc, it puts a second
+one beside it, which is what the doubled corners were. The corner a surface
+flush with the window takes now comes from the platform: ten on macOS, eight on
+Windows, and the theme's own where the compositor rounds nothing. It is
+therefore the one corner on the Appearance page that does not move with the
+corner scale, which is true of the real window as well.
+
+**Full-page mode has no gap.** Every preset carries a gap of its own and three
+of the five are non-zero, so in full-page mode three arrangements out of five
+drew a margin around the whole window — an inset page with the desktop showing
+through the strip outside it — and nothing in the layout said why. There is no
+chrome there to be apart from, so there is nothing for a gap to be between.
+
+**The Appearance specimen was a rectangle with rounded furniture in it.** Its
+ground is a gradient of twenty-four vertical bands, every one of them square,
+painted over a rounded rectangle and followed by a "restore the corners" call
+that drew nothing at all — `rect_filled` with a transparent fill is no pixels.
+So each of the mini-window's inner surfaces had the ground's square corner
+showing beside its own round one. Only the two bands on the ends have corners
+now, which is the whole of what was needed.
+
+**The specimen's right-hand corners were square** while its left ones were
+round: the gradient's twenty-four bands were laid out with `step / (BANDS - 1)`,
+so the last one began exactly at the right edge and was drawn entirely outside
+the specimen — leaving the band that actually paints that edge with no corners
+at all.
+
+**The Appearance page's pinned specimen was smeared by what scrolled under
+it.** The header and the scroll viewport touched exactly, which is not the same
+as not overlapping: every settings section is a glass card, glass casts its
+shadow *outside* itself, and each card's fell across the specimen's bottom edge
+as it went past. There is a gap between them now, outside the scroll area so it
+survives scrolling.
+
+**A page's heading no longer hides under the window controls.** In full-page
+mode there is no sidebar and no bar to hold that strip, so Settings, History
+and Downloads each drew their title straight under the close, minimise and zoom
+buttons. Only the pages Zervo draws itself are inset; a web page still fills
+the window with the controls floating over it, which is what a fullsize content
+view is for.
+
+**First run says which preset is finished.** Five equally-confident options
+with no indication of which one the rest of the browser was built and tested
+against is a poor first ten minutes. Zervo's is marked, and the paragraph above
+the row says the other four came out of a design study, are worth trying, and
+are not a decision anybody is stuck with.
+
+**A debug banner on the Appearance page.** "First use of widget ID …", painted
+across the seam control. A `Frame` does not open an id scope, so every section
+on the page derived its widget ids from the same parent, and two segmented
+controls offering a choice that shared a word at the same position were one
+widget in two places. Each section has a scope of its own now.
+
+**Opening the sidebar over a reveal took the whole browser down.** In full-page
+mode, with the pointer at the window's edge, the revealed panel and the docked
+sidebar could both be on screen for the few frames the layout takes to change —
+and both draw the *same* sidebar body, into two different layers. egui asserts
+outright when one widget id is registered in two layers in one frame, so it did
+not merely look wrong: `DEBUG ASSERT: Widget changed layer_id during the frame`
+and the process was gone. Whether a frame landed inside that window was a
+matter of timing, which is why it crashed only sometimes. Exactly one sidebar
+body is drawn per frame now, and the floating address pill is gated on whether
+the reveal is *drawing* rather than on whether it is open — it keeps drawing
+while it slides away, which was a second window with the same shape.
+
+**Each seam gets the transition its own geometry implies.** A page on a tray
+behaves like a card in a deck and recedes; a tint on a backdrop has nothing to
+move, so it defocuses in place; a frame with a hard edge is a filmstrip whether
+you meant it or not, so it slides; and a page under floating glass travels
+upward while the glass stays exactly where it is. One rule, four answers, and
+no new control on the Appearance page — pick the seam and the motion comes with
+it. The crossing takes the material's own settle time, so turning motion down
+shortens it and turning it off removes it.
+
+Only the page that is *leaving* moves. Moving the one arriving means either
+handing the engine a moving rectangle, which is a resize per frame, or
+rendering every page to a texture of our own; the dissolve and the pass-under
+are whole regardless, because the design says of both that the arriving page
+does not translate.
+
+**A crashed page says so.** `notify_crashed` was the one failure this engine
+reports and the one Zervo ignored, so a dead content process was the last frame
+it painted, frozen, with nothing anywhere saying the page had stopped. The tab
+becomes `zervo://crashed` — carrying the address it was on and the engine's own
+reason — and offers to load it again. It is the fifth of the pages below and
+the only one that arrives on its own; `⌘R` is also bound now, having been
+advertised in two tooltips since the toolbar was written and bound nowhere.
+
+**Four pages for when a page will not load.** A browser on a young engine
+refuses a good deal of the web, and meeting that with a blank rectangle is
+lying by omission. `zervo://unsupported` says which feature the engine has not
+built and that it is the engine rather than Zervo, offers the page to a browser
+that can render it, and gives the wait a shape: a panel of the real gaps from
+`docs/PARITY.md`, which you can knock out with a ball or just press, and a
+score that reads "shipped". `zervo://offline` names what is queued rather than
+what failed and has no button at all. `zervo://certificate` is the one that
+must not be candy — same material, no glow, no game, and the way past is a line
+of plain text under the card. `zervo://notfound` asks the history what you
+probably meant, because a typo usually has an obvious answer sitting in it. And
+`zervo://crashed`, above, which is the only one of the five the browser can
+reach by itself.
+
+Each carries what it knows in its own address, so the address bar and the page
+agree and either can be typed back in — and so the engine can hand the detail
+over on the day it is able to. It is not able to yet: Servo 0.5.0's
+`WebViewDelegate` has no load-failure callback and no certificate hook, so
+nothing reaches these pages on its own and they are reachable by address only.
+
+*Reload means "try the site again" on them*, which is the whole point of the
+page — and it had to, because the offline page deliberately has no button and a
+greyed-out toolbar button would have left it with no way to try at all.
+
+**The accent stops being a highlight.** Turned all the way up, the chrome takes
+0.16 of it into the base and 0.24 into its surfaces, the window gets three
+enormous drifting lights of its own behind everything, and the address pill,
+the cards, the search field and the chips are ringed in it. It scales from
+where it has always been, so the arrangement that ships is untouched. A
+workspace can be the thing that picks the colour, in which case changing space
+changes the room you are in.
+
+*The contrast that costs is spent where it can be afforded.* The selected row
+keeps every bit of the accent asked for and is deepened until the ink on it
+reads, rather than the ratio being walked back — hue and saturation are what
+"more accent" means; luminance is the axis nobody was asking about.
+
+**Display type is set in a face that has one.** macOS ships SF Pro only as a
+variable font, and the rasteriser takes a variable font's default instance and
+no other, so every run of text in Zervo was Regular — a missing nuance at
+caption sizes and the wrong typeface at ninety-two points. The clock on the new
+tab page has a light face of its own now. Body text is deliberately unchanged.
+
+**A warning is amber and a success is green.** Both were grey: there were no
+such colours, only one amber literal mixed in at a single call site.
+
+**Four defects that only a picture could have found.** The browser can now
+photograph its own framebuffer (`ZERVO_SHOT`, debug builds only), which found
+these in an hour:
+
+- *The frost read a light theme as a dark one.* At Frosted the chrome paints
+  itself at a fifth and lets the platform's own vibrancy supply the rest, so a
+  copy of the framebuffer is the window's contribution over nothing — four
+  fifths of the way to black. The frost under a card was a dark smear, and the
+  code that picks text colour by measuring what is behind it read "dark" for a
+  pale page and handed back white text.
+- *The sidebar could never be the width it says.* egui remembers a panel's
+  width from the rect its contents used, floored at the minimum; nothing in the
+  sidebar stretched, so it wrote 200 back over its own 248 on the second frame
+  of every launch, and dragging it wider snapped back on release.
+- *The nav row widened everything under it.* At the sidebar's narrowest, five
+  icons and the macOS inset are wider than the column — and egui grows a
+  container to fit what overflowed it, silently, so the address pill hung fifty
+  points out over the page.
+- *An empty search field said nothing.* `TextEdit`'s hint text discards the
+  colour it is given, and what it substitutes landed within five values of the
+  frosted pill it sits on.
+
+**Full-page mode's one panel carries the whole browser.** It was drawn compact
+— no navigation row, no address pill, no widget shelf — which is right when it
+is supplementing a bar and wrong when it is the only chrome there is. The shelf
+is reachable there too, and "Bar only" no longer means "off" in a layout that
+has no bar.
+
+**The widget shelf stacks in a sidebar instead of piling up.** Three widgets
+side by side across the bar all clamped onto the same cell in a one-column
+host and were drawn on top of one another. They reflow, in the order they were
+in across the bar.
+
+**Every corner answers to the corner scale.** Forty of them were written as
+numbers, so a row was drawn at eleven points with its own hover rectangle at
+eight, and neither moved when the scale did. The handful that are still numbers
+are halves of their own height — a switch, a slider groove, a caret — and say
+so.
+
+**Two limitations say so where the feature is** rather than in the README where
+nobody using the browser will read them: downloads built without
+`engine-downloads`, and the reason a password is never offered for saving —
+the engine gives no hook for a submitted form, so Zervo never notices you have
+signed in.
+
 ## 0.4.2 — 22 August 2026
 
 **Notifications arrive.** They did not: permission was granted and nothing ever
@@ -385,7 +658,7 @@ far its shadow reaches, whether it frosts what is behind it and how far that is
 blurred — along with the corner-radius tier, the row height, the control
 padding and the animation time. It hangs off the palette, the way card opacity
 already did, so it reaches every surface in the application without a single
-signature changing. `Material::GLASS` is Zervo's own, and every value in it is
+signature changing. `Material::ZERVO` is Zervo's own, and every value in it is
 exactly what was previously written in place, so nothing looks different except
 where it now frosts.
 

@@ -65,6 +65,99 @@ engine bump or a chrome change, walk this list.
       along its underside.
 - [ ] The note and the to-do list survive a restart.
 
+## The chrome's own animations
+
+These only exist in the middle of themselves, so the harness drives them rather
+than waiting to catch one. Debug builds only.
+
+- `ZERVO_SHOT_PEEK=1` holds the sidebar's reveal open — it is otherwise opened
+  by the pointer, which the harness does not have. `ZERVO_SHOT_PEEK=<pass>`
+  lets go at that pass, so the closing half can be photographed too.
+- `ZERVO_SHOT_CYCLE=<n>` presses ⌘S every `n` frames.
+- `ZERVO_SHOT_NAV=<url>` navigates `ZERVO_SHOT_NAV_BEFORE` frames before the
+  picture, for the page transitions.
+- `ZERVO_SHOT_SETUP=<n>` opens the first run on that step. Every step after the
+  first is reached by pressing a button, so without it only the welcome card
+  can be photographed.
+
+The two together are the fuzz that found the layer-id crash: a long run with
+the reveal pinned open while the layout cycles underneath it puts the reveal and
+the docked sidebar on screen at the same time, over and over, which by hand is a
+matter of having the pointer in the right place at the right moment.
+
+- [ ] Every preset × every starting layout, `ZERVO_SHOT_CYCLE=6
+      ZERVO_SHOT_PEEK=1 ZERVO_SHOT_FRAME=260`, exits zero.
+
+## Between two pages
+
+Each seam has its own transition, and the point is that they are four different
+motions rather than one. Settings → Appearance → Seam, then navigate.
+
+- [ ] **Card** — the page recedes, drops a little and dims; the one arriving is
+      already there behind it.
+- [ ] **Frosted** — nothing translates. The old page defocuses and goes.
+- [ ] **Edge to edge** — the old frame slides off to the left going forward and
+      to the right going back, and does not leave a bright line along the edge
+      it left by.
+- [ ] **One surface** — the old page travels *up and under* the sidebar, and
+      the sidebar does not move a pixel with it.
+- [ ] Motion at zero in Appearance: navigation is a hard cut and no copy is
+      taken. Motion at both extremes: the crossing is shorter and longer.
+- [ ] Navigate twice quickly, resize the window mid-crossing, and change the
+      seam mid-crossing. None of the three should leave a page fragment behind.
+
+## Corners and the window's edge
+
+- [ ] Full-page mode, every preset: the page reaches all four window edges with
+      no gap, and its corner is one arc — the platform's, not a second one
+      beside it. Move the corner scale to both ends; the window's corner must
+      not move with it, and every other surface must.
+- [ ] The framed layouts keep their gap: Zervo's eight points, Flat's six.
+- [ ] Full-page mode, `zervo://settings`, `zervo://history` and
+      `zervo://downloads`: each page's heading clears the close, minimise and
+      zoom buttons. A web page is deliberately *not* inset.
+- [ ] Appearance: the specimen's four corners are all round and all the same,
+      and scrolling the page does not smear its bottom edge.
+
+## When a page will not load
+
+Each is reachable by typing its address, which is how to check them without an
+engine failure to hand. Only `zervo://crashed` is constructed automatically:
+there is no load-failure callback and no certificate hook in Servo 0.5.0, so
+nothing can tell the embedder why an ordinary load ended. See PARITY.md.
+
+- [ ] `zervo://unsupported` — the amber badge, the roadmap of bricks under the
+      message, and a score that counts up as they are cleared. Press a brick
+      directly; move the pointer into the panel and the paddle follows it and
+      the ball plays. Move the pointer out and the ball parks rather than
+      running in the background.
+- [ ] `zervo://unsupported?host=watch.example.com&detail=Media%20Source%20Extensions`
+      — the host is set in monospace, the missing feature in monospace amber,
+      and the three buttons appear. "Open in Safari" opens Safari and not
+      Zervo; "Try again" navigates *this* tab to the site.
+- [ ] `zervo://offline` — no buttons at all, and the count of waiting tabs is
+      the real one. Toolbar Reload is enabled and is the only way to try again.
+- [ ] `zervo://certificate?host=mail.example.com&detail=*.cdn.net` — the danger
+      colour, no glow on the card or the button, no game, and the way past is
+      one line of plain text under the card. It is deliberately inert and says
+      so on hover.
+- [ ] `zervo://notfound?host=srvo.org` — with `servo.org` in the history, the
+      page offers it by name with the visit count and a button that goes there.
+      With no history it says so instead of offering nothing.
+- [ ] `zervo://crashed?host=servo.org&detail=SIGSEGV` — the engine's own words
+      are quoted in the danger colour, "Load it again" goes back to the host,
+      and there is no game (a crash is not a wait). The real path: crash a
+      content process and check the tab is rewritten in place, keeps its pin
+      and its position, and that the dead page's last frame is gone rather than
+      showing through.
+- [ ] The address bar's own badge takes the page's icon and colour on all four
+      — a padlock in red on the certificate page, not a globe.
+- [ ] Pin one of them: the sidebar's tab row and the essentials grid show the
+      same icon.
+- [ ] Both themes, and a preset with no glow (Flat or Zervo): the pages are
+      readable and nothing rings or glows where the arrangement says it should
+      not.
+
 ## Navigation bar (sidebar collapsed)
 - [ ] The address pill stays centred on the window as it is resized, and drags
       wider and narrower.

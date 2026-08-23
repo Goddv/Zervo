@@ -349,7 +349,7 @@ pub const FROST_SIDE: u32 = 640;
 /// `heavier_blur_leaves_less_of_the_picture` is the test that caught it. The material's, since how frosted frosted
 /// glass is is a property of the material and not of the fetcher — this thread
 /// simply has no palette to ask.
-const FROST_BLUR: f32 = crate::theme::Material::GLASS.blur;
+const FROST_BLUR: f32 = crate::theme::Material::ZERVO.blur;
 /// The most the reader's setting may scale it to, as a share of the copy's
 /// shortest side — past this the artefacts above set in.
 const FROST_BLUR_CEILING: f32 = 0.06;

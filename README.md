@@ -17,34 +17,76 @@
 <tr>
 <td width="50%" valign="top">
 
-<a href="assets/screenshots/zervo-light.png">
+<a href="assets/screenshots/zervo-newtab-light.png">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light.png">
-  <img alt="The Zervo window with the sidebar open: workspaces and tabs in a column on the left, the new tab page in a floating content card" src="assets/screenshots/zervo-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-newtab-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-newtab-light.png">
+  <img alt="The Zervo window with the sidebar open: workspaces and tabs in a column on the left, a shelf of widgets below them, and a new tab page showing the time, one search field, the session you left and the sites you use" src="assets/screenshots/zervo-newtab-light.png" width="100%">
 </picture>
 </a>
 
 </td>
 <td width="50%" valign="top">
 
-<a href="assets/screenshots/zervo-light-bar.png">
+<a href="assets/screenshots/zervo-bar-light.png">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark-bar.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light-bar.png">
-  <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred" src="assets/screenshots/zervo-light-bar.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-bar-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-bar-light.png">
+  <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred, over servo.org rendered by Servo" src="assets/screenshots/zervo-bar-light.png" width="100%">
 </picture>
 </a>
 
 </td>
 </tr>
 <tr>
-<td align="center"><sub><b>Sidebar</b> — navigation, workspaces and tabs in one column<br>
-<a href="assets/screenshots/zervo-light.png">light</a> · <a href="assets/screenshots/zervo-dark.png">dark</a>, full size</sub></td>
+<td align="center"><sub><b>Sidebar</b> — navigation, workspaces, tabs and widgets in one column<br>
+<a href="assets/screenshots/zervo-newtab-light.png">light</a> · <a href="assets/screenshots/zervo-newtab-dark.png">dark</a>, full size</sub></td>
 <td align="center"><sub><b>Collapsed</b> — navigation moves into a bar across the top<br>
-<a href="assets/screenshots/zervo-light-bar.png">light</a> · <a href="assets/screenshots/zervo-dark-bar.png">dark</a>, full size</sub></td>
+<a href="assets/screenshots/zervo-bar-light.png">light</a> · <a href="assets/screenshots/zervo-bar-dark.png">dark</a>, full size</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+<a href="assets/screenshots/zervo-float-light.png">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-float-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-float-light.png">
+  <img alt="The window with no sidebar and no bar: the address pill floats near the bottom edge over the new tab page, and the chrome is otherwise out of the way" src="assets/screenshots/zervo-float-light.png" width="100%">
+</picture>
+</a>
+
+</td>
+<td width="50%" valign="top">
+
+<a href="assets/screenshots/zervo-page-light.png">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-page-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-page-light.png">
+  <img alt="The sidebar open over a web page, its glass carrying the colour of whatever sits behind the window" src="assets/screenshots/zervo-page-light.png" width="100%">
+</picture>
+</a>
+
+</td>
+</tr>
+<tr>
+<td align="center"><sub><b>Floating</b> — put the bar wherever you like, including nowhere<br>
+<a href="assets/screenshots/zervo-float-light.png">light</a> · <a href="assets/screenshots/zervo-float-dark.png">dark</a>, full size</sub></td>
+<td align="center"><sub><b>Glass</b> — the sidebar takes its light from what is behind it<br>
+<a href="assets/screenshots/zervo-page-light.png">light</a> · <a href="assets/screenshots/zervo-page-dark.png">dark</a>, full size</sub></td>
 </tr>
 </table>
+
+<sub>All four are the same theme — <b>Zervo</b>, the default — in light and dark.</sub>
+
+<br><br>
+
+<a href="assets/screenshots/zervo-appearance.png">
+<img alt="The Appearance settings page: a live specimen of the material pinned under the title, the preset row, and controls for the theme, the accent and how far it reaches into the chrome" src="assets/screenshots/zervo-appearance.png" width="82%">
+</a>
+
+<sub><b>Appearance</b> — every value the chrome is built from is a control, and the<br>
+specimen at the top is the real material rather than a picture of one:<br>
+it is wrong exactly when the chrome is wrong.</sub>
 
 </div>
 
@@ -76,10 +118,13 @@ so some sites will not work. See [Limitations](#limitations).
 
 ### The new tab page
 
-- **Thirteen kinds of card on a twelve-column grid** — clock, world clocks,
-  search, pinned tabs, most-visited, recent, favourites, downloads, now playing,
-  a note, a to-do list, workspaces, the mark. Press Customise to drag, resize
-  and remove them.
+- **It greets you rather than briefing you.** The time, one search field, the
+  session you actually left, and the three sites you use. A new tab is opened
+  to go somewhere.
+- **Or a board of thirteen cards on a twelve-column grid** — clock, world
+  clocks, search, pinned tabs, most-visited, recent, favourites, downloads, now
+  playing, a note, a to-do list, workspaces, the mark. One press away, and
+  every card can be dragged, resized and taken off.
 - **Eight backdrops**, chosen from the page's own header: Plain, Gradient, Grid,
   Mesh, Aurora, Waves, Particles, or a photograph fetched from Wikimedia Commons
   or Openverse and credited as its licence asks.
@@ -94,6 +139,19 @@ so some sites will not work. See [Limitations](#limitations).
   shadow reach and how far glass frosts are decided in one place and reach the
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
+- **And every number in it is a setting.** Settings → Appearance has one
+  control per named field: the fill, the sheen, the blur, the edge, the corner
+  scale, the glow, the settle time, and how far the accent reaches into the
+  chrome. Save an arrangement under a name, or copy it out as the Rust `const`
+  you would otherwise have written by hand.
+- **Zervo's own material is the finished one.** Four more presets — Candy,
+  Flat, Liquid Glass, Material — came out of the same design study and are
+  offered beside it, but they are experiments rather than settled work and are
+  still being tuned.
+- **The seam between the chrome and the page is one setting with four steps**,
+  and each step brings the page transition its own geometry implies: a card
+  recedes, a tint dissolves in place, a frame slides, a page under floating
+  glass travels up while the glass stays put.
 - **Frosted, over anything.** The chrome sits on real macOS vibrancy, and
   everything floating over a page frosts against a blurred copy of whatever that
   page is showing — so a menu over a website is the same glass as a card over a
@@ -103,10 +161,14 @@ so some sites will not work. See [Limitations](#limitations).
   colour of your own, and the accent is propagated into the engine so pages see
   the matching `prefers-color-scheme`.
 
-The material system is the seam a theme for another platform would be written
-against — Windows, GTK, Android Material, Liquid Glass. It is documented in
-[docs/THEMING.md](docs/THEMING.md), including what is not there yet: a theme is
-still a Rust constant, and nothing loads one at runtime.
+The material system is the seam a theme for another platform is written
+against — Windows, GTK, Android Material, Liquid Glass. Five arrangements ship,
+and every value one is built from is a control on `zervo://settings` →
+Appearance: the fill, the sheen, the blur, the edge, the corner scale, the
+glow, the settle time, how far the accent reaches, and where the chrome ends
+and the page begins. It is documented in [docs/THEMING.md](docs/THEMING.md),
+including what is still not there — palettes, and somewhere to save an
+arrangement under a name of your own.
 
 ## Building
 
@@ -245,16 +307,26 @@ on Linux and a piece of work not yet done on Windows.
 ## Limitations
 
 - **Servo is young.** Expect broken layouts, missing APIs, and sites that
-  refuse the user agent. This is a property of the engine, not of Zervo.
+  refuse the user agent. This is a property of the engine, not of Zervo — and
+  Zervo says so where it happens rather than in this list: a page the engine
+  cannot render gets `zervo://unsupported`, which names what is missing and
+  hands the page to another browser, and a content process that falls over
+  gets `zervo://crashed` rather than a frozen picture of itself.
 - **Streaming video does not work.** YouTube and the rest need Media Source
   Extensions, which Servo does not have. Local and progressive video plays.
 - **No extensions.** The engine has none, so neither does the button.
 - **Passwords cannot be filled into web forms.** The engine offers no hook for
   a submitted form, so saved logins are a vault plus HTTP authentication.
 - **No sync, no profiles.** Not yet.
-- **Themes are a recompile.** The material seam is real and every surface goes
-  through it, but a theme is a Rust constant — no file format, no loader, and
-  palettes are not themeable at all yet. See [docs/THEMING.md](docs/THEMING.md).
+- **Palettes are not themeable.** How a surface is *built* is yours to set, and
+  so is how far the accent reaches into it — and an arrangement can be saved
+  under a name of your own. The colours the two themes start from are still
+  constants. See [docs/THEMING.md](docs/THEMING.md).
+- **0.5.0 is a redesign, and it wants testing.** The chrome, the new tab page,
+  the error pages and the first run all changed. 0.6.0 is the polish pass;
+  until then, [open an issue](https://github.com/Goddv/Zervo/issues) for
+  anything that reads wrong — and say which preset, theme and layout you were
+  in, because most of what has been fixed so far only happened in one of them.
 - **Unsigned builds.** See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Contributing

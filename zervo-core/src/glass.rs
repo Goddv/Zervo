@@ -9,7 +9,20 @@ use egui::{
     Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2,
 };
 
-use crate::theme::{Material, Palette, Surface, Tier};
+use crate::theme::{Edge, Material, Palette, Surface, Tier};
+
+/// How heavy the bevel's shaded half is against its lit half.
+///
+/// Two numbers, and not close to each other. In the dark theme what sits below
+/// an edge is nearly black already, the highlight is doing most of the work,
+/// and the shade can afford to be the heavier of the two. In the light theme
+/// it is the other way round: a strong dark line under a pale surface reads as
+/// a drawn border, which is precisely the thing a bevel exists to stop being.
+///
+/// Taken from the study, which pairs a 0.16 top inset with a 0.3 bottom one in
+/// dark, and 0.85 with 0.1 in light.
+const BEVEL_SHADE_DARK: f32 = 1.9;
+const BEVEL_SHADE_LIGHT: f32 = 0.12;
 
 /// Expo-style ease-out for interaction animations (cubic out).
 pub fn ease_out(t: f32) -> f32 {
@@ -64,6 +77,15 @@ pub struct Glass {
     pub opaque: Option<Color32>,
     /// Hairline border color, overriding the default white translucency.
     pub border: Option<Color32>,
+    /// A second hairline, one point *outside* the silhouette.
+    ///
+    /// The study's lit surfaces carry two edges at once — `inset 0 1px 0
+    /// rgba(255,255,255,.24)` and `0 0 0 1px accent(.28)` on the same pill —
+    /// and they are doing different jobs: the inset white is the thickness of
+    /// the glass, the accent ring is the light landing on its rim. `border`
+    /// cannot express it because it replaces the first with the second, and a
+    /// bevelled surface then loses its bevel to gain a ring.
+    pub ring: Option<Color32>,
 }
 
 impl Glass {
@@ -79,11 +101,17 @@ impl Glass {
 
     /// A surface of this class, with the corners its class implies. The way to
     /// spell a menu, a card or a text field.
+    /// The corners each class rounds to.
+    ///
+    /// These are the study's own three: a card at 10, a menu at 12, an input
+    /// at 7 — the input being the *tightest*, not the loosest. They used to be
+    /// 10, 10 and 14, which put a text field's corners wider than a floating
+    /// panel's and made a card and a menu indistinguishable by shape.
     pub fn of(surface: Surface) -> Self {
         let tier = match surface {
             Surface::Card => Tier::Card,
-            Surface::Menu => Tier::Card,
-            Surface::Input => Tier::Pill,
+            Surface::Menu => Tier::Panel,
+            Surface::Input => Tier::Control,
         };
         Self {
             surface,
@@ -114,6 +142,7 @@ impl Glass {
             shadow: true,
             opaque: None,
             border: None,
+            ring: None,
         }
     }
 
@@ -126,6 +155,17 @@ impl Glass {
     /// Draw the hairline in a specific color rather than white translucency.
     pub fn border(mut self, color: Color32) -> Self {
         self.border = Some(color);
+        self
+    }
+
+    /// Ring the surface, outside its own edge, keeping whatever edge it has.
+    ///
+    /// Takes the `Option` [`Palette::accent_ring`] returns, so a call site can
+    /// ask for the study's ring by its own alpha and get nothing at all on an
+    /// arrangement that does not light its surfaces — without an `if` at every
+    /// one of them.
+    pub fn ring(mut self, color: Option<Color32>) -> Self {
+        self.ring = color;
         self
     }
 
@@ -485,14 +525,22 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // radius antialias the same curve twice over, so the corner composites
     // heavier than the straight edges beside it — one RectShape tessellates
     // both together and antialiases the silhouette once.
-    let hairline = glass.border.unwrap_or_else(|| {
-        let edge = if dark {
-            material.edge_dark
-        } else {
-            material.edge_light
-        };
-        Color32::from_white_alpha((edge * strength.max(0.6)) as u8)
-    });
+    //
+    // A bevel is the exception, and it is a deliberate one: it needs a lit top
+    // and a shaded bottom, which is two colours, which cannot be one stroke.
+    // It gets the ring treatment below instead, and the silhouette stroke is
+    // dropped so nothing is antialiased twice.
+    let edge = if dark {
+        material.edge_dark
+    } else {
+        material.edge_light
+    };
+    let bevelled = glass.border.is_none() && material.edge == Edge::Bevel;
+    let hairline = match glass.border {
+        Some(colour) => colour,
+        None if bevelled || material.edge == Edge::None => Color32::TRANSPARENT,
+        None => Color32::from_white_alpha((edge * strength.max(0.6)) as u8),
+    };
     // The blur goes under the fill, inside the same silhouette, and fades with
     // it: at zero card opacity a surface has to disappear completely, blur
     // included, or the setting stops meaning anything. It also fades with the
@@ -531,9 +579,66 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
         .into(),
     );
 
-    // Flat design: no specular sheen, no rim light, no bottom shade. Surfaces
-    // are carried by fill + hairline border alone; depth comes from the
-    // shadow and the accent glow, not from faked highlights.
+    // The two-tone bevel: the same one edge value, spent so that it reads as
+    // thickness rather than as a border drawn on a flat shape. Light along the
+    // top of the silhouette, dark along the bottom, one point of each.
+    //
+    // Drawn as an inset ring rather than a stroke because a stroke is one
+    // colour all the way round, and because the ring's own vertices can be
+    // faded per-position: the lit half has to reach nothing by the time it
+    // comes round to the sides, or the bevel reads as a bright outline with a
+    // gap in it.
+    // The ring, one point outside the silhouette, after the fill so it is not
+    // composited under it — and before the bevel, so a bevelled surface reads
+    // as lit glass with a rim rather than as a coloured outline with a
+    // highlight inside it.
+    if let Some(ring) = glass.ring {
+        out.push(
+            RectShape::new(
+                rect,
+                corner,
+                Color32::TRANSPARENT,
+                Stroke::new(1.0_f32, ring.gamma_multiply(strength)),
+                StrokeKind::Outside,
+            )
+            .into(),
+        );
+    }
+
+    if bevelled && edge > 0.0 {
+        let weight = strength.max(0.6);
+        let lit = Color32::from_white_alpha((edge * weight).min(255.0) as u8);
+        let ratio = if dark {
+            BEVEL_SHADE_DARK
+        } else {
+            BEVEL_SHADE_LIGHT
+        };
+        let shade = Color32::from_black_alpha((edge * weight * ratio).min(255.0) as u8);
+        let outline = outline(rect, radius_px, segments(radius_px));
+        let mut mesh = Mesh::default();
+        // Two rows: flush with the silhouette, and one point inside it. The
+        // inner row is transparent so the bevel fades into the fill rather
+        // than ending on a second hard line.
+        for (offset, solid) in [(0.0_f32, true), (-1.0, false)] {
+            for (point, normal) in &outline {
+                // -1 straight up, +1 straight down. Squared so the two halves
+                // meet at nothing along the sides instead of crossing over.
+                let facing = normal.y;
+                let colour = if facing < 0.0 { lit } else { shade };
+                let along = facing * facing;
+                mesh.colored_vertex(
+                    *point + *normal * offset,
+                    if solid {
+                        colour.gamma_multiply(along)
+                    } else {
+                        Color32::TRANSPARENT
+                    },
+                );
+            }
+        }
+        stitch(&mut mesh, outline.len() as u32, 2);
+        out.push(Shape::mesh(mesh));
+    }
 
     out
 }
@@ -542,13 +647,18 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
 mod tests {
     use super::*;
     use crate::theme::{
-        AccentColor, Backdrop, LUMA_CELLS, Surface, ThemeMode, Translucency, resolve,
+        AccentColor, Appearance, Backdrop, LUMA_CELLS, Surface, ThemeMode, Translucency, resolve,
     };
     use egui::{Rect, TextureId, pos2};
 
     /// A page filling 100,100 → 900,700, as the content rect does.
     fn frosting_palette() -> Palette {
-        let mut palette = resolve(ThemeMode::Dark, true, AccentColor::Lavender);
+        let mut palette = resolve(
+            ThemeMode::Dark,
+            true,
+            AccentColor::Lavender,
+            &Appearance::classic(),
+        );
         palette.translucency = Translucency::Frosted;
         palette.backdrop = Some(Backdrop {
             texture: TextureId::default(),

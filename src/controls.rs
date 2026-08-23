@@ -14,8 +14,8 @@
 //! them, and confined to the content card rather than floating over the chrome.
 
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind,
-    TextEdit, Ui, pos2, vec2,
+    Align2, Color32, CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind, TextEdit, Ui, pos2,
+    vec2,
 };
 use servo::{
     AllowOrDenyRequest, AuthenticationRequest, ContextMenuAction, ContextMenuItem, EmbedderControl,
@@ -23,7 +23,7 @@ use servo::{
 };
 
 use crate::glass::{self, Glass};
-use crate::theme::Palette;
+use crate::theme::{Palette, Tier};
 
 /// An HTTP authentication challenge that a saved login matches.
 ///
@@ -700,7 +700,7 @@ fn panel<R>(
                 // `confirm`; not rare at all now that a download asks first.
                 ui.painter().rect_filled(
                     scrim,
-                    CornerRadius::same(crate::theme::CONTENT_RADIUS as u8),
+                    crate::theme::content_corners(palette),
                     dim(palette),
                 );
             }
@@ -750,11 +750,12 @@ fn button(ui: &mut Ui, label: &str, palette: &Palette, primary: bool) -> bool {
         (false, true) => palette.surface_hover,
         (false, false) => palette.surface,
     };
-    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+    ui.painter()
+        .rect_filled(rect, palette.corner(Tier::Control), fill);
     if !primary {
         ui.painter().rect_stroke(
             rect,
-            CornerRadius::same(7),
+            palette.corner(Tier::Control),
             Stroke::new(1.0_f32, palette.border),
             StrokeKind::Inside,
         );
@@ -1011,12 +1012,12 @@ fn select_row(
     if selected {
         ui.painter().rect_filled(
             rect,
-            CornerRadius::same(6),
+            palette.corner(Tier::Control),
             palette.accent.gamma_multiply(0.28),
         );
     } else if response.hovered() {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), palette.surface_hover);
+            .rect_filled(rect, palette.corner(Tier::Control), palette.surface_hover);
     }
     let colour = if disabled {
         palette.text_muted.gamma_multiply(0.6)
@@ -1094,7 +1095,7 @@ fn draw_color_picker(
             let response = ui.interact(cell, ui.id().with(index), Sense::click());
             ui.painter().rect_filled(
                 cell,
-                CornerRadius::same(5),
+                palette.corner(Tier::Control),
                 Color32::from_rgb(*red, *green, *blue),
             );
             let chosen = current.is_some_and(|colour| {
@@ -1103,7 +1104,7 @@ fn draw_color_picker(
             if chosen || response.hovered() {
                 ui.painter().rect_stroke(
                     cell,
-                    CornerRadius::same(5),
+                    palette.corner(Tier::Control),
                     Stroke::new(2.0_f32, palette.accent),
                     StrokeKind::Outside,
                 );
@@ -1185,7 +1186,7 @@ fn draw_context_menu(
                     if *enabled && response.hovered() {
                         ui.painter().rect_filled(
                             rect,
-                            CornerRadius::same(6),
+                            palette.corner(Tier::Control),
                             palette.surface_hover,
                         );
                     }

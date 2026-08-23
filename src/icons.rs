@@ -9,7 +9,7 @@ use egui::{
 };
 
 use crate::phosphor::glyph;
-use crate::theme::Palette;
+use crate::theme::{Palette, Tier};
 
 /// The egui font family the Phosphor face is registered under.
 pub const PHOSPHOR_FAMILY: &str = "phosphor";
@@ -81,6 +81,7 @@ pub enum Icon {
     Reset,
     Minus,
     Link,
+    Copy,
     SkipBack,
     SkipForward,
     Bell,
@@ -144,6 +145,7 @@ impl Icon {
             Icon::TrendUp => glyph::TRENDUP,
             Icon::Recent => glyph::CLOCKCOUNTER,
             Icon::Reset => glyph::ARROWCOUNTER,
+            Icon::Copy => glyph::COPY,
             Icon::Minus => glyph::MINUS,
             Icon::Link => glyph::LINK,
             Icon::SkipBack => glyph::SKIPBACK,
@@ -161,6 +163,78 @@ pub fn draw_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         phosphor_font(rect.height()),
         color,
     );
+}
+
+/// The same button, drawn as geometry that can move between two states.
+///
+/// For the few icons that report on something rather than labelling it. `on`
+/// says which of the two the button is in; the crossing itself runs on the
+/// material's own clock, like every other transition in the chrome.
+///
+/// Everything except the glyph is `icon_button`'s, deliberately: a control
+/// that hovered, pressed and dimmed even slightly differently from the ones
+/// beside it would announce that it is special, and being special is not the
+/// point — being legible while it changes is.
+pub fn morph_button(
+    ui: &mut Ui,
+    size: f32,
+    palette: &Palette,
+    enabled: bool,
+    off: zervo_core::morph::Figure,
+    on: zervo_core::morph::Figure,
+    lit: bool,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(size + 12.0, size + 8.0),
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    let hover_t = crate::glass::ease_out(ui.ctx().animate_bool_with_time(
+        response.id.with("hover"),
+        enabled && response.hovered(),
+        0.12,
+    ));
+    let is_down = enabled && response.is_pointer_button_down_on();
+    let press_t = crate::glass::ease_out(ui.ctx().animate_bool_with_time(
+        response.id.with("press"),
+        is_down,
+        if is_down { 0.03 } else { 0.12 },
+    ));
+    let cross = crate::glass::ease_out(ui.ctx().animate_bool_with_time(
+        response.id.with("morph"),
+        lit,
+        palette.material.animation,
+    ));
+
+    let painter = ui.painter();
+    if hover_t > 0.0 {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(palette.radius(crate::theme::Tier::Row)),
+            palette.surface_hover.gamma_multiply(hover_t),
+        );
+    }
+    let color = if enabled {
+        crate::theme::mix(palette.text_muted, palette.text, hover_t)
+    } else {
+        palette.text_muted.gamma_multiply(0.35)
+    };
+    let scale = 1.0 - 0.10 * press_t;
+    crate::morphicons::draw(
+        painter,
+        egui::Rect::from_center_size(rect.center(), vec2(size, size) * scale),
+        off,
+        on,
+        cross,
+        color,
+    );
+    if enabled {
+        response.clone().on_hover_cursor(CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// A ghost icon button: rounded hover fill, palette-derived glyph color,
@@ -198,7 +272,7 @@ pub fn icon_button(
     if hover_t > 0.0 {
         painter.rect_filled(
             rect,
-            CornerRadius::same(8),
+            palette.corner(Tier::Row),
             palette.surface_hover.gamma_multiply(hover_t),
         );
     }

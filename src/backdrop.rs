@@ -74,7 +74,7 @@ const SIDE: i32 = crate::wallpaper::FROST_SIDE as i32 * 3 / 4;
 /// to itself the number means nothing: blur is only ever relative to the size
 /// of the thing being blurred.
 const BLUR: f32 =
-    crate::theme::Material::GLASS.blur * (SIDE as f32) / (crate::wallpaper::FROST_SIDE as f32);
+    crate::theme::Material::ZERVO.blur * (SIDE as f32) / (crate::wallpaper::FROST_SIDE as f32);
 /// A readback stalls the pipeline, so it is worth doing only about as often as
 /// what it is copying actually changes.
 const EVERY: Duration = Duration::from_millis(120);
@@ -84,20 +84,83 @@ pub struct PageBackdrop {
     framebuffer: Option<glow::Framebuffer>,
     texture: Option<glow::Texture>,
     size: (i32, i32),
+    /// How large a copy this one takes, on its long side, and how far it is
+    /// blurred afterwards.
+    ///
+    /// Two callers want the same delicate readback at two different sizes: the
+    /// frost wants something tiny and heavily blurred, and a page transition
+    /// wants something large enough to still look like the page while it moves.
+    /// Everything else about the copy — the scaled blit, the scissor and pack
+    /// state, the error checks, the composite over the chrome's colour — is
+    /// identical, and two of it would be two of the hardest code in the tree.
+    ///
+    /// `None` on both means the shipped frost, which is what `Default` gives.
+    longest: Option<i32>,
+    blur: Option<f32>,
     /// The most recent copy, waiting for the main thread to upload it.
-    ready: Option<egui::ColorImage>,
+    ///
+    /// Kept as the framebuffer's own *premultiplied* bytes rather than as a
+    /// finished image, because what is missing from them — everything the
+    /// window is not opaque enough to have painted — can only be supplied by
+    /// the main thread, which is the one that knows the palette.
+    ready: Option<(Vec<u8>, [usize; 2])>,
     taken_at: Option<Instant>,
 }
 
 impl PageBackdrop {
+    /// A copier at a size and blur of its own.
+    pub fn at(longest: i32, blur: f32) -> PageBackdrop {
+        PageBackdrop {
+            longest: Some(longest.max(1)),
+            blur: Some(blur.max(0.0)),
+            ..PageBackdrop::default()
+        }
+    }
+
+    /// How far the next copy is softened. The transition sets this per seam:
+    /// only the dissolve wants a defocused page.
+    pub fn soften_by(&mut self, radius: f32) {
+        self.blur = Some(radius.max(0.0));
+    }
+
     /// Whether enough time has passed to be worth another copy.
     pub fn due(&self) -> bool {
         self.taken_at.is_none_or(|taken| taken.elapsed() >= EVERY)
     }
 
-    /// Take the newest copy, for the caller to make a texture of.
-    pub fn take(&mut self) -> Option<egui::ColorImage> {
-        self.ready.take()
+    /// Take the newest copy, composited over `ground`, for the caller to make
+    /// a texture of.
+    ///
+    /// The framebuffer is premultiplied and the window is deliberately not
+    /// opaque: at Frosted the chrome paints itself at a fifth and lets the
+    /// platform's vibrancy supply the rest. So the bytes that come back are
+    /// the window's own contribution over *nothing* — a light theme reads back
+    /// as a dark one, four fifths of the way to black.
+    ///
+    /// Two things then go wrong at once, and both of them quietly. The frost
+    /// under a card is a dark smear rather than a blurred copy of the chrome.
+    /// And `Palette::prefers_light_ink` measures this copy to decide which ink
+    /// a panel takes, so on a pale theme it reads "dark" and hands back white
+    /// text for a page that is not.
+    ///
+    /// Compositing over the chrome's own colour is the fix and the honest one:
+    /// what the window is composited over belongs to the window server and
+    /// cannot be read back, but the chrome's colour is what a reader perceives
+    /// the window to *be*.
+    pub fn take(&mut self, ground: egui::Color32) -> Option<egui::ColorImage> {
+        let (mut pixels, size) = self.ready.take()?;
+        let (red, green, blue) = (ground.r(), ground.g(), ground.b());
+        for pixel in pixels.chunks_exact_mut(4) {
+            let missing = u32::from(255 - pixel[3]);
+            let over = |channel: u8, base: u8| {
+                (u32::from(channel) + u32::from(base) * missing / 255).min(255) as u8
+            };
+            pixel[0] = over(pixel[0], red);
+            pixel[1] = over(pixel[1], green);
+            pixel[2] = over(pixel[2], blue);
+            pixel[3] = 255;
+        }
+        Some(egui::ColorImage::from_rgba_unmultiplied(size, &pixels))
     }
 
     /// Copy `source` — a rectangle of the framebuffer currently bound for
@@ -116,10 +179,15 @@ impl PageBackdrop {
             return;
         }
         // Keep the page's shape, so the blur is not stretched.
-        let scale = f32::from(SIDE as i16) / width.max(height) as f32;
+        let longest = self.longest.unwrap_or(SIDE);
+        // Never up. `longest` is a ceiling on the copy, not a target: a page
+        // rect already smaller than it is copied one for one, rather than
+        // magnified on the way into the texture and shrunk again on the way
+        // out — which costs memory to lose detail.
+        let scale = (longest as f32 / width.max(height) as f32).min(1.0);
         let small = (
-            ((width as f32 * scale) as i32).clamp(1, SIDE),
-            ((height as f32 * scale) as i32).clamp(1, SIDE),
+            ((width as f32 * scale) as i32).clamp(1, longest),
+            ((height as f32 * scale) as i32).clamp(1, longest),
         );
 
         // SAFETY: the caller guarantees a current context, which is what makes
@@ -235,7 +303,7 @@ impl PageBackdrop {
                 gl.enable(glow::SCISSOR_TEST);
             }
 
-            self.ready = blur(pixels, small);
+            self.ready = soften(pixels, small, self.blur.unwrap_or(BLUR));
             self.taken_at = Some(Instant::now());
         }
     }
@@ -331,15 +399,18 @@ impl PageBackdrop {
 /// GL hands back rows from the bottom, and every other picture in the chrome
 /// runs the other way — a backdrop sampled upside down is worse than no
 /// backdrop, because it looks almost right.
-fn blur(pixels: Vec<u8>, size: (i32, i32)) -> Option<egui::ColorImage> {
+fn soften(pixels: Vec<u8>, size: (i32, i32), radius: f32) -> Option<(Vec<u8>, [usize; 2])> {
     let (width, height) = (size.0 as u32, size.1 as u32);
     let mut image = image::RgbaImage::from_raw(width, height, pixels)?;
     image::imageops::flip_vertical_in_place(&mut image);
-    let blurred = image::imageops::fast_blur(&image, BLUR);
-    Some(egui::ColorImage::from_rgba_unmultiplied(
-        [width as usize, height as usize],
-        &blurred,
-    ))
+    if radius <= 0.0 {
+        return Some((image.into_raw(), [width as usize, height as usize]));
+    }
+    // Blurred while still premultiplied, which is the only way a blur of a
+    // partly transparent picture is right: unmultiplying first weights a
+    // nearly-invisible pixel's colour as heavily as an opaque one's.
+    let blurred = image::imageops::fast_blur(&image, radius);
+    Some((blurred.into_raw(), [width as usize, height as usize]))
 }
 
 /// An erase pass: geometry drawn to take the destination's alpha down rather
@@ -387,10 +458,20 @@ impl Eraser {
     ///
     /// `rect` is the card in physical pixels with a bottom-left origin, as a
     /// viewport is. `radius` is its corner radius in the same units.
-    pub fn cut_corners(&mut self, gl: &glow::Context, rect: [i32; 4], radius: f32) {
+    /// Erase the card's rounded corners out of the framebuffer.
+    ///
+    /// One radius per corner, in the order the framebuffer's own origin
+    /// implies — bottom left, bottom right, top left, top right. They are not
+    /// all the same once the seam closes: the card is then flush against the
+    /// sidebar on its left, so its left corners are square and there is
+    /// nothing there to erase. Cutting them anyway would punch two holes
+    /// through to the backdrop along the join.
+    pub fn cut_corners(&mut self, gl: &glow::Context, rect: [i32; 4], radii: [f32; 4]) {
         let [x, y, width, height] = rect;
-        let radius_px = radius.min(width as f32 / 2.0).min(height as f32 / 2.0);
-        if radius_px <= 0.5 || width <= 0 || height <= 0 {
+        let cap = (width as f32 / 2.0).min(height as f32 / 2.0);
+        let radii = radii.map(|radius| radius.min(cap));
+        let widest = radii.iter().copied().fold(0.0_f32, f32::max);
+        if widest <= 0.5 || width <= 0 || height <= 0 {
             return;
         }
         let Some((program, array, buffer)) = self.ready(gl) else {
@@ -403,7 +484,7 @@ impl Eraser {
         // only ran along the bottom edge, where the arc meets flat chrome;
         // against the lit band at the top the facets are visible as stair
         // steps on the curve.
-        let steps = ((radius_px * 2.0).ceil() as usize).clamp(16, 192);
+        let steps = ((widest * 2.0).ceil() as usize).clamp(16, 192);
         let mut vertices: Vec<f32> = Vec::with_capacity(steps * 36);
         let to_ndc = |px: f32, py: f32| {
             (
@@ -425,30 +506,37 @@ impl Eraser {
         // the same backdrop, with nothing left to match.
         let corners = [
             (
+                radii[0],
                 (x as f32, y as f32),
-                (x as f32 + radius_px, y as f32 + radius_px),
+                (x as f32 + radii[0], y as f32 + radii[0]),
                 std::f32::consts::PI,
             ),
             (
+                radii[1],
                 ((x + width) as f32, y as f32),
-                ((x + width) as f32 - radius_px, y as f32 + radius_px),
+                ((x + width) as f32 - radii[1], y as f32 + radii[1]),
                 1.5 * std::f32::consts::PI,
             ),
             (
+                radii[2],
                 (x as f32, (y + height) as f32),
-                (x as f32 + radius_px, (y + height) as f32 - radius_px),
+                (x as f32 + radii[2], (y + height) as f32 - radii[2]),
                 0.5 * std::f32::consts::PI,
             ),
             (
+                radii[3],
                 ((x + width) as f32, (y + height) as f32),
                 (
-                    (x + width) as f32 - radius_px,
-                    (y + height) as f32 - radius_px,
+                    (x + width) as f32 - radii[3],
+                    (y + height) as f32 - radii[3],
                 ),
                 0.0,
             ),
         ];
-        for (corner, centre, start) in corners {
+        for (radius_px, corner, centre, start) in corners {
+            if radius_px <= 0.5 {
+                continue;
+            }
             let at = |angle: f32, r: f32| (centre.0 + r * angle.cos(), centre.1 + r * angle.sin());
             let inner = radius_px - FEATHER_PX * 0.5;
             let outer = radius_px + FEATHER_PX * 0.5;
@@ -668,7 +756,7 @@ fn bytemuck_cast(values: &[f32]) -> &[u8] {
 pub fn cut_corners_into(
     painter: &egui::Painter,
     rect: egui::Rect,
-    radius: f32,
+    radii: [f32; 4],
     eraser: &Arc<Mutex<Eraser>>,
 ) {
     let eraser = eraser.clone();
@@ -687,7 +775,7 @@ pub fn cut_corners_into(
                     clip.width_px,
                     clip.height_px,
                 ],
-                radius * info.pixels_per_point,
+                radii.map(|radius| radius * info.pixels_per_point),
             );
         })),
     });
