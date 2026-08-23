@@ -4,8 +4,9 @@ Everything a release produces comes out of `scripts/`, and CI does nothing a
 person cannot do by hand.
 
 ```bash
-# macOS — a universal .app and a disk image
-./scripts/bundle-macos.sh --universal --dmg --features engine-downloads,media
+# macOS — separate Apple Silicon and Intel disk images
+./scripts/bundle-macos.sh --target aarch64-apple-darwin --dmg --features engine-downloads,media
+./scripts/bundle-macos.sh --target x86_64-apple-darwin --dmg --features engine-downloads,media
 
 # Linux — every format the machine has the tools for
 ./scripts/package-linux.sh --all --features engine-downloads,media
@@ -20,12 +21,13 @@ Each script takes `--help`.
 
 | File | Built on | Runs on |
 | --- | --- | --- |
-| `Zervo-<v>-universal.dmg` | macOS 15, Apple Silicon | macOS 11 and later, Intel and Apple Silicon |
-| `zervo_<v>_amd64.deb`, `zervo_<v>_arm64.deb` | Ubuntu 24.04 | Ubuntu 24.04 and later, Debian 13 and later |
-| `zervo_<v>+ubuntu26.04_<arch>.deb` | Ubuntu 26.04 | Ubuntu 26.04 only |
-| `zervo-<v>-1.fc44.<arch>.rpm` | Fedora 44 | Fedora 44 |
-| `Zervo-<v>-<arch>.AppImage` (+ `.zsync`) | Ubuntu 22.04 | any glibc 2.35 or newer |
-| `zervo-<v>-<arch>-linux-gnu.tar.gz` | Ubuntu 24.04 | anything the `.deb` runs on, unpacked anywhere |
+| `Zervo-<v>-arm64.dmg` | macOS 15, Apple Silicon | macOS 11 and later, Apple Silicon |
+| `Zervo-<v>-x86_64.dmg` | macOS 15, Apple Silicon | macOS 11 and later, Intel |
+| `zervo_<v>_amd64.deb` | Ubuntu 24.04 | Ubuntu 24.04 and later, Debian 13 and later |
+| `zervo_<v>+ubuntu26.04_amd64.deb` | Ubuntu 26.04 | Ubuntu 26.04 only |
+| `zervo-<v>-1.fc44.x86_64.rpm` | Fedora 44 | Fedora 44 |
+| `Zervo-<v>-x86_64.AppImage` (+ `.zsync`) | Ubuntu 22.04 | any glibc 2.35 or newer |
+| `zervo-<v>-x86_64-linux-gnu.tar.gz` | Ubuntu 24.04 | anything the `.deb` runs on, unpacked anywhere |
 | `Zervo-<v>-windows-x64.zip`, `-setup.exe` | Windows Server 2025 | Windows 10 1809 and later, x64 and ARM64 under Prism |
 | `zervo-aur-packages.tar.gz` | — | `PKGBUILD` + `.SRCINFO` for the AUR |
 | `SHA256SUMS` | — | every file above |
@@ -33,23 +35,24 @@ Each script takes `--help`.
 The `.deb` is built on the *older* LTS on purpose. glibc runs old binaries on
 new systems and never the reverse, so a 24.04 build installs on 24.04 and on
 26.04, while a 26.04 build acquires a `libc6 (>= 2.43)` dependency that 24.04
-cannot satisfy. The 26.04-native packages are built as well, version-suffixed,
-for anyone who would rather have one; they are not the ones to reach for.
+cannot satisfy. The 26.04-native package is built as well, version-suffixed,
+for anyone who would rather have one; it is not the one to reach for.
 
 ---
 
 ## macOS
 
-### Universal, in one job
+### Separate Apple Silicon and Intel variants
 
-The bundle carries both architectures. Building the Intel half turns out to be
-cheap: `mozjs` downloads a prebuilt SpiderMonkey for `x86_64-apple-darwin`
-rather than compiling it, so the second `cargo build --target` is minutes
-rather than hours — and every dylib in the GStreamer framework Servo pins is
-*already* universal, which leaves exactly one file for `lipo` to merge.
+macOS releases are produced as separate disk images for Apple Silicon (`arm64`)
+and Intel (`x86_64`). Building the Intel half turns out to be cheap: `mozjs`
+downloads a prebuilt SpiderMonkey for `x86_64-apple-darwin` rather than
+compiling it, so cross-compiling the Intel target on an Apple Silicon runner
+takes minutes rather than hours.
 
 ```bash
-./scripts/bundle-macos.sh --universal --dmg
+./scripts/bundle-macos.sh --target aarch64-apple-darwin --dmg
+./scripts/bundle-macos.sh --target x86_64-apple-darwin --dmg
 ```
 
 `--features media` needs one extra thing when cross-compiling, and the script
@@ -58,7 +61,7 @@ that is not the host. `PKG_CONFIG_ALLOW_CROSS=1` is normally a loaded gun,
 because one set of `.pc` files usually describes one architecture; here it does
 not, because the framework is universal.
 
-A single-architecture bundle gets its GStreamer libraries thinned to match,
+Each single-architecture bundle gets its GStreamer libraries thinned to match,
 which removes about 80 MB of code that could never run.
 
 ### The minimum macOS version
@@ -423,8 +426,8 @@ on, and it will either work or say exactly why not.
 a token that can write one.
 
 ```
-draft ──┬─ linux.yml   (deb ×4, rpm ×2, AppImage ×2, PKGBUILD)
-        ├─ macos.yml   (universal .dmg)
+draft ──┬─ linux.yml   (deb ×2, rpm, AppImage, PKGBUILD)
+        ├─ macos.yml   (arm64 & x86_64 .dmg)
         ├─ windows.yml (zip + installer)
         └─ source      (git archive)
                 │

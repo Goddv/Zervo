@@ -145,15 +145,16 @@ render simply are not offered for saving.
 ### Packaging
 
 ```bash
-./scripts/bundle-macos.sh --universal --dmg      # macOS, Intel and Apple Silicon
-./scripts/package-linux.sh --all                 # .deb, .rpm, AppImage, tarball, PKGBUILD
-pwsh scripts/package-windows.ps1 -Installer      # Windows, .zip and a setup .exe
+./scripts/bundle-macos.sh --target aarch64-apple-darwin --dmg  # macOS, Apple Silicon
+./scripts/bundle-macos.sh --target x86_64-apple-darwin --dmg   # macOS, Intel
+./scripts/package-linux.sh --all                               # .deb, .rpm, AppImage, tarball, PKGBUILD
+pwsh scripts/package-windows.ps1 -Installer                    # Windows, .zip and a setup .exe
 ```
 
-A release tag produces all of it: a universal `.dmg`, `.deb`s for Ubuntu 24.04
-and 26.04 on both architectures, `.rpm`s for Fedora 44, x86_64 and aarch64
-AppImages, a portable tarball, `PKGBUILD`s for the AUR, a Windows zip and
-installer, and a `SHA256SUMS` covering the lot.
+A release tag produces all of it: Apple Silicon and Intel `.dmg`s, `.deb`s for
+Ubuntu 24.04 and 26.04, `.rpm`s for Fedora 44, x86_64 AppImages, a portable
+tarball, `PKGBUILD`s for the AUR, a Windows zip and installer, and a
+`SHA256SUMS` covering the lot.
 
 Nothing is signed. On macOS that means macOS will refuse to open the app until
 the quarantine flag is cleared, and on Windows it means SmartScreen shows a
@@ -192,18 +193,19 @@ Every release tag builds all of these. Only the first has been run.
 
 | Platform | Package | State |
 | --- | --- | --- |
-| **macOS** 11+, Intel and Apple Silicon | universal `.dmg`, GStreamer bundled | ✅ Used daily by its author, on Apple Silicon |
-| **Ubuntu / Debian** | `.deb`, amd64 and arm64 | ⚠️ Builds and installs — never started |
-| **Fedora 44** | `.rpm`, x86_64 and aarch64 | ⚠️ Builds and installs — never started |
-| **Any glibc 2.35+** | `.AppImage`, x86_64 and aarch64 | ⚠️ Never run |
+| **macOS** 11+, Apple Silicon | `.dmg`, GStreamer bundled | ✅ Used daily by its author, on Apple Silicon |
+| **macOS** 11+, Intel | `.dmg`, GStreamer bundled | ⚠️ Built and tested in CI |
+| **Ubuntu / Debian** | `.deb`, amd64 | ⚠️ Builds and installs — never started |
+| **Fedora 44** | `.rpm`, x86_64 | ⚠️ Builds and installs — never started |
+| **Any glibc 2.35+** | `.AppImage`, x86_64 | ⚠️ Never run |
 | **Arch** | `PKGBUILD` for the AUR, not yet published | ⚠️ Validated, never built |
 | **Windows** x64 | `.zip` and an installer | ⚠️ Builds — startup crash fixed in 0.4.1, unconfirmed |
 | **Windows** ARM64 | — | ⛔ Blocked upstream; the x64 build runs under Prism |
 
-The macOS bundle carries both architectures now. Building the Intel half costs
-minutes rather than hours — `mozjs` downloads a prebuilt SpiderMonkey for it,
-and the GStreamer framework Servo pins is already universal — so there is one
-download rather than two, and it runs on macOS 11 and later rather than 13.
+macOS releases are produced as separate disk images for Apple Silicon and Intel.
+Building the Intel half costs minutes rather than hours — `mozjs` downloads a
+prebuilt SpiderMonkey for it, and the GStreamer framework Servo pins is already
+universal — and both run on macOS 11 and later.
 
 Windows on ARM has no build because Servo does not have one: a `float16_t`
 collision between MSVC's `<arm_fp16.h>` and the vendored `glsl-optimizer`, whose

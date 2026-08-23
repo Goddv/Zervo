@@ -91,11 +91,9 @@ jobs:
           # 24.04 build installs on 24.04 and on 26.04, while a 26.04 build
           # picks up a `libc6 (>= 2.43)` floor that 24.04 cannot satisfy.
           - { runner: ubuntu-24.04,     image: "ubuntu-24.04", arch: amd64, suffix: "",           preview: false, tarball: true }
-          - { runner: ubuntu-24.04-arm, image: "ubuntu-24.04", arch: arm64, suffix: "",           preview: false, tarball: true }
           # And a native 26.04 build beside them, version-suffixed so the two
           # can sit in one release without colliding.
           - { runner: ubuntu-26.04,     image: "ubuntu-26.04", arch: amd64, suffix: "ubuntu26.04", preview: true,  tarball: false }
-          - { runner: ubuntu-26.04-arm, image: "ubuntu-26.04", arch: arm64, suffix: "ubuntu26.04", preview: true,  tarball: false }
 
     steps:
       - uses: actions/checkout@v7
@@ -258,7 +256,6 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-24.04,     fedora: "44", arch: x86_64 }
-          - { runner: ubuntu-24.04-arm, fedora: "44", arch: aarch64 }
 
     steps:
       - name: Install build dependencies
@@ -362,7 +359,6 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-24.04,     arch: x86_64 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64 }
 
     env:
       # appimagetool and linuxdeploy are themselves AppImages, and mounting an

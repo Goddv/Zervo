@@ -10,7 +10,7 @@ pkgname=zervo-bin
 pkgver=@VERSION@
 pkgrel=1
 pkgdesc='A sidebar-first browser built on the Servo engine'
-arch=('x86_64' 'aarch64')
+arch=('x86_64')
 url='https://github.com/Goddv/Zervo'
 license=('MPL-2.0')
 provides=("zervo=$pkgver")
@@ -49,13 +49,11 @@ optdepends=(
     'gst-libav: additional media formats'
 )
 
-source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/zervo-$pkgver-x86_64-linux-gnu.tar.gz")
-source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/v$pkgver/zervo-$pkgver-aarch64-linux-gnu.tar.gz")
-sha256sums_x86_64=('@SHA256_X86_64@')
-sha256sums_aarch64=('@SHA256_AARCH64@')
+source=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/zervo-$pkgver-x86_64-linux-gnu.tar.gz")
+sha256sums=('@SHA256_X86_64@')
 
 package() {
-    local _root="$srcdir/zervo-$pkgver-$CARCH-linux-gnu"
+    local _root="$srcdir/zervo-$pkgver-x86_64-linux-gnu"
 
     install -Dm755 "$_root/bin/zervo" "$pkgdir/usr/bin/zervo"
     install -Dm644 "$_root/share/applications/app.zervo.Zervo.desktop" \

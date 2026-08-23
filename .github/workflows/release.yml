@@ -212,8 +212,9 @@ jobs:
           for pkg in zervo zervo-bin; do
             echo "=== $pkg ==="
             cat "target/linux/aur/$pkg/PKGBUILD"
-            grep -q SKIP "target/linux/aur/$pkg/PKGBUILD" \
-              && echo "::warning::$pkg still has a SKIP checksum" || true
+            if grep -q SKIP "target/linux/aur/$pkg/PKGBUILD"; then
+              echo "::warning::$pkg still has a SKIP checksum"
+            fi
           done
 
       - uses: actions/upload-artifact@v7
