@@ -1,26 +1,22 @@
 name: macOS
 
-# One job, one universal .app.
+# Two disk images, one per architecture, each built natively on its own runner.
 #
-# It used to be one arm64 build on one runner, and "Apple Silicon only" in the
-# release notes. Building the Intel half turns out to be nearly free: mozjs
-# downloads a prebuilt SpiderMonkey for x86_64-apple-darwin rather than
-# compiling it, so the second `cargo build --target` is minutes rather than
-# hours, and every dylib in the GStreamer framework Servo pins is already
-# universal. That leaves exactly one file to `lipo`.
+# `lipo` can fuse them into one universal bundle instead — the bundler still
+# takes `--universal`, and it is cheap, because mozjs downloads a prebuilt
+# SpiderMonkey per target and the GStreamer framework Servo pins is already
+# fat. Two are shipped rather than one because a download that says which Mac
+# it is for is worth more than one that runs on both, and because each of these
+# is half the size: a single-architecture bundle has its GStreamer libraries
+# thinned to match, which is about 80 MB that could never have run.
 #
-# So there is no Intel runner here, and no second disk image. `macos-15-intel`
-# exists and is free, but a second full job to produce a second download that
-# half the users would pick wrongly is worse than one file that runs anywhere.
+# Both labels are generally available and free on a public repository.
 on:
   workflow_call:
     inputs:
       profile:
         type: string
         default: release
-      runner:
-        type: string
-        default: macos-15
       engine-downloads:
         type: boolean
         default: true
@@ -50,11 +46,6 @@ on:
         type: choice
         options: [release, dev-fast]
         default: release
-      runner:
-        description: Runner label. Both are Apple Silicon and both are GA.
-        type: choice
-        options: [macos-15, macos-26]
-        default: macos-15
       engine-downloads:
         description: Build with engine-backed downloads (uses the patched engine)
         type: boolean
@@ -80,9 +71,15 @@ env:
 
 jobs:
   build:
-    name: Universal .app
-    runs-on: ${{ inputs.runner }}
+    name: ${{ matrix.arch }} .app
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15,       arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
 
     steps:
       - uses: actions/checkout@v7
@@ -106,9 +103,6 @@ jobs:
       - uses: ./.github/actions/setup-build
         with:
           key: macos
-
-      - name: Add the Intel target
-        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
 
       - name: Install GStreamer
         if: inputs.media
@@ -174,7 +168,7 @@ jobs:
           if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
           if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
 
-          ARGS=(--profile "$PROFILE" --universal --dmg)
+          ARGS=(--profile "$PROFILE" --dmg)
           if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
           if [ -n "$SIGN_IDENTITY" ]; then
             ARGS+=(--sign "$SIGN_IDENTITY")
@@ -191,24 +185,27 @@ jobs:
         # to notice from a green build: whether both architectures actually
         # made it in, whether the two halves agree on how old a macOS they will
         # run on, and whether the signature the loader insists on is present.
+        env:
+          WANT_ARCH: ${{ matrix.arch }}
         run: |
           BIN=target/Zervo.app/Contents/MacOS/Zervo
-          echo "--- architectures ---"
-          lipo -archs "$BIN"
-          lipo -archs "$BIN" | grep -q x86_64 || { echo "no Intel slice"; exit 1; }
-          lipo -archs "$BIN" | grep -q arm64  || { echo "no Apple Silicon slice"; exit 1; }
+          echo "--- architecture ---"
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "$ARCHS"
+          # Exactly one, and the one this runner was for. A cross-build that
+          # silently produced the host's architecture would otherwise ship as
+          # the other one's download.
+          [ "$ARCHS" = "$WANT_ARCH" ] || { echo "expected $WANT_ARCH, got '$ARCHS'"; exit 1; }
 
-          echo "--- deployment target, per slice ---"
-          # Both halves must claim the same floor. lipo fuses two binaries that
-          # disagree without a word, and the result advertises two different
-          # minimums for one file. .cargo/config.toml forces the value; this is
-          # what notices when something has got past it.
+          echo "--- deployment target ---"
+          # .cargo/config.toml forces this; the check is what notices when
+          # something has got past it.
           otool -l "$BIN" | grep -E 'minos|sdk ' || true
           MINOS="$(otool -l "$BIN" | awk '/minos/ { print $2 }' | sort -u | tr '\n' ' ')"
           case "$(echo "$MINOS" | wc -w | tr -d ' ')" in
-            1) echo "both slices target macOS $MINOS" ;;
+            1) echo "targets macOS $MINOS" ;;
             0) echo "::warning::no LC_BUILD_VERSION found; cannot check the deployment target" ;;
-            *) echo "the architectures disagree about the minimum macOS: $MINOS"; exit 1 ;;
+            *) echo "more than one minimum macOS in one slice: $MINOS"; exit 1 ;;
           esac
 
           PLIST_MIN="$(plutil -extract LSMinimumSystemVersion raw target/Zervo.app/Contents/Info.plist)"
@@ -230,7 +227,7 @@ jobs:
       # with it a disk image that took hours to produce.
       - uses: actions/upload-artifact@v7
         with:
-          name: zervo-macos-universal
+          name: zervo-macos-${{ matrix.arch }}
           path: target/*.dmg
           if-no-files-found: error
           retention-days: 30

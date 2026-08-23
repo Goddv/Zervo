@@ -4,8 +4,8 @@ Everything a release produces comes out of `scripts/`, and CI does nothing a
 person cannot do by hand.
 
 ```bash
-# macOS — a universal .app and a disk image
-./scripts/bundle-macos.sh --universal --dmg --features engine-downloads,media
+# macOS — an .app and a disk image for this machine's architecture
+./scripts/bundle-macos.sh --dmg --features engine-downloads,media
 
 # Linux — every format the machine has the tools for
 ./scripts/package-linux.sh --all --features engine-downloads,media
@@ -20,46 +20,64 @@ Each script takes `--help`.
 
 | File | Built on | Runs on |
 | --- | --- | --- |
-| `Zervo-<v>-universal.dmg` | macOS 15, Apple Silicon | macOS 11 and later, Intel and Apple Silicon |
-| `zervo_<v>_amd64.deb`, `zervo_<v>_arm64.deb` | Ubuntu 24.04 | Ubuntu 24.04 and later, Debian 13 and later |
-| `zervo_<v>+ubuntu26.04_<arch>.deb` | Ubuntu 26.04 | Ubuntu 26.04 only |
-| `zervo-<v>-1.fc44.<arch>.rpm` | Fedora 44 | Fedora 44 |
-| `Zervo-<v>-<arch>.AppImage` (+ `.zsync`) | Ubuntu 22.04 | any glibc 2.35 or newer |
-| `zervo-<v>-<arch>-linux-gnu.tar.gz` | Ubuntu 24.04 | anything the `.deb` runs on, unpacked anywhere |
+| `Zervo-<v>-arm64.dmg` | macOS 15, Apple Silicon | macOS 11 and later, Apple Silicon |
+| `Zervo-<v>-x86_64.dmg` | macOS 15, Intel | macOS 11 and later, Intel |
+| `zervo_<v>_amd64.deb` | Ubuntu 26.04 | Ubuntu 26.04 and later |
+| `zervo-<v>-1.fc44.x86_64.rpm` | Fedora 44 | Fedora 44 |
+| `Zervo-<v>-x86_64.AppImage` (+ `.zsync`) | Ubuntu 22.04 | any glibc 2.35 or newer |
+| `zervo-<v>-x86_64-linux-gnu.tar.gz` | Ubuntu 26.04 | anything the `.deb` runs on, unpacked anywhere |
 | `Zervo-<v>-windows-x64.zip`, `-setup.exe` | Windows Server 2025 | Windows 10 1809 and later, x64 and ARM64 under Prism |
 | `zervo-aur-packages.tar.gz` | — | `PKGBUILD` + `.SRCINFO` for the AUR |
 | `SHA256SUMS` | — | every file above |
 
-The `.deb` is built on the *older* LTS on purpose. glibc runs old binaries on
-new systems and never the reverse, so a 24.04 build installs on 24.04 and on
-26.04, while a 26.04 build acquires a `libc6 (>= 2.43)` dependency that 24.04
-cannot satisfy. The 26.04-native packages are built as well, version-suffixed,
-for anyone who would rather have one; they are not the ones to reach for.
+Everything except macOS is x86_64. There is no technical obstacle to arm64 on
+Linux — the runners are generally available and free — but nobody is asking for
+it, and each one is another hour of engine build.
+
+**The `.deb` requires Ubuntu 26.04 or newer, and that is the trade it makes.**
+glibc runs old binaries on new systems and never the reverse, so a package
+built on 26.04 acquires a `libc6 (>= 2.43)` dependency that 24.04 cannot
+satisfy. Building on the older LTS instead would cover both — it is the usual
+advice — but only one `.deb` is built, and it is built on the release Ubuntu
+currently ships. Anyone older is covered by the AppImage, which is built
+against glibc 2.35 precisely so that it reaches back further than any distro
+package can.
+
+Two things about that runner are worth knowing. `ubuntu-26.04` is **public
+preview**: GitHub excludes it from its service level agreement and warns about
+capacity, and it is the one runner a release artefact now depends on. And its
+toolchain is aggressive — CMake 4, GCC 15, clang 21 — which has already broken
+this build once (see below).
 
 ---
 
 ## macOS
 
-### Universal, in one job
+### Two disk images, one per architecture
 
-The bundle carries both architectures. Building the Intel half turns out to be
-cheap: `mozjs` downloads a prebuilt SpiderMonkey for `x86_64-apple-darwin`
-rather than compiling it, so the second `cargo build --target` is minutes
-rather than hours — and every dylib in the GStreamer framework Servo pins is
-*already* universal, which leaves exactly one file for `lipo` to merge.
+CI builds each natively — `macos-15` for Apple Silicon, `macos-15-intel` for
+Intel — and ships both.
 
 ```bash
-./scripts/bundle-macos.sh --universal --dmg
+./scripts/bundle-macos.sh --dmg                # this machine's architecture
+./scripts/bundle-macos.sh --dmg --target x86_64-apple-darwin
+./scripts/bundle-macos.sh --universal --dmg    # both, fused with lipo
 ```
 
-`--features media` needs one extra thing when cross-compiling, and the script
+`--universal` still works and is cheap: `mozjs` downloads a prebuilt
+SpiderMonkey per target rather than compiling it, so the second
+`cargo build --target` is minutes rather than hours, and every dylib in the
+GStreamer framework Servo pins is *already* fat — which leaves exactly one file
+for `lipo` to merge. It is not what a release ships, because two named
+downloads beat one that runs on both, and because each of these is about 80 MB
+smaller: a single-architecture bundle has its GStreamer libraries thinned to
+match, and a universal one cannot be.
+
+Cross-compiling with `--features media` needs one extra thing, and the script
 sets it: `glib-sys` and `gstreamer-sys` refuse to run `pkg-config` for a target
 that is not the host. `PKG_CONFIG_ALLOW_CROSS=1` is normally a loaded gun,
 because one set of `.pc` files usually describes one architecture; here it does
 not, because the framework is universal.
-
-A single-architecture bundle gets its GStreamer libraries thinned to match,
-which removes about 80 MB of code that could never run.
 
 ### The minimum macOS version
 
@@ -423,14 +441,50 @@ on, and it will either work or say exactly why not.
 a token that can write one.
 
 ```
-draft ──┬─ linux.yml   (deb ×4, rpm ×2, AppImage ×2, PKGBUILD)
-        ├─ macos.yml   (universal .dmg)
+draft ──┬─ linux.yml   (deb, rpm, AppImage, PKGBUILD)
+        ├─ macos.yml   (.dmg ×2: arm64, x86_64)
         ├─ windows.yml (zip + installer)
         └─ source      (git archive)
                 │
               aur ─────┐
                        ├─ publish: SHA256SUMS, provenance, upload, publish
 ```
+
+**A failing job inside a called workflow fails the caller's job**, whatever
+`continue-on-error` says about the matrix leg — and `publish` is guarded on no
+job having failed. So there is no such thing as a non-blocking leg inside
+`linux.yml`: anything in there that can fail can hold up a release. The only
+shape that reliably reports success for a job that did nothing is a gate step
+that every other step is `if:`-conditional on, which is what the Windows arm64
+leg used before it was removed outright.
+
+### When clang moves under you
+
+Ubuntu 26.04 carries several LLVM versions. `mozangle` runs bindgen over
+ANGLE's shader translator, and bindgen loads `libclang` at runtime while
+reading the headers that `clang` resolves to — but clang-sys picks the *newest*
+libclang it can find. So bindgen parsed LLVM 21's headers with a newer
+libclang, and every SSE builtin those headers name had been removed in the
+meantime:
+
+```
+/usr/lib/llvm-21/lib/clang/21/include/xmmintrin.h:245:18:
+    error: use of undeclared identifier '__builtin_ia32_sqrtss'
+```
+
+Twenty of those, then `fatal error: too many errors emitted`, then a panic in a
+build script an hour into the job. The fix is to make the two the same version
+by construction rather than by luck:
+
+```bash
+RESOURCE_DIR="$(clang -print-resource-dir)"     # /usr/lib/llvm-21/lib/clang/21
+echo "LIBCLANG_PATH=${RESOURCE_DIR%/clang/*}"   # /usr/lib/llvm-21/lib
+```
+
+The `.deb` and AppImage jobs both do this; the Fedora one pins `/usr/lib64`
+for the same reason, because `clang-libs` there ships only a versioned
+`libclang.so.NN` and the unversioned symlink bindgen prefers lives in
+`clang-devel`.
 
 Draft first, attach everything to the draft, publish last. The three platform
 workflows used to attach their own artefacts to the tag as they finished, which

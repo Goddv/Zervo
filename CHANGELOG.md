@@ -44,11 +44,12 @@ a pull request never builds the binary. The revision lives in one file now
 instead of four.
 
 **A macOS build that runs on Intel.** Releases were Apple Silicon only, and the
-disk image said so. Building the other half turns out to cost minutes rather
-than hours — `mozjs` downloads a prebuilt SpiderMonkey for `x86_64-apple-darwin`
-instead of compiling it, and every dylib in the GStreamer framework Servo pins
-is already universal — so the two are `lipo`'d into one binary on one runner.
-One download, both architectures.
+disk image said so. There are two now, one per architecture, each built
+natively and each about eighty megabytes smaller than a universal bundle would
+be, because a single-architecture app has its GStreamer libraries thinned to
+match. The bundler will still fuse them with `lipo` if you would rather have
+one file; a release ships two, because a download that says which Mac it is for
+is worth more than one that runs on both.
 
 **...and on macOS 11, which it always could.** `LSMinimumSystemVersion` said
 13.0. The binary's own floor was 11.0, because nobody had set a deployment
@@ -59,14 +60,18 @@ than merely suggested, and the plist reads it rather than repeating it — which
 also stops `lipo` fusing two halves that disagree, since the Intel default was
 10.12 and nothing would have said so.
 
-**Four more ways to install it on Linux.** An **AppImage** for x86_64 and
-aarch64, built inside Ubuntu 22.04 because glibc runs old binaries on new
-systems and never the reverse; a portable **tarball**; **`PKGBUILD`s** for the
-AUR, both `zervo` and `zervo-bin`, generated with the real checksums of the
-artefacts that were built and validated in an Arch container against everything
-the AUR's own hook would reject a push for; and `.deb`s for **arm64** as well as
-amd64, on **Ubuntu 26.04** as well as 24.04. Fedora moves to **44**, on both
-architectures.
+**Three more ways to install it on Linux.** An **AppImage**, built inside
+Ubuntu 22.04 because glibc runs old binaries on new systems and never the
+reverse — so it reaches back further than any distribution package can. A
+portable **tarball**. And **`PKGBUILD`s** for the AUR, both `zervo` and
+`zervo-bin`, generated with the real checksums of the artefacts that were built
+and validated in an Arch container against everything the AUR's own hook would
+reject a push for.
+
+The `.deb` moves to **Ubuntu 26.04** and now needs 26.04 or newer; the `.rpm`
+moves to **Fedora 44**. Everything except macOS is x86_64: arm64 Linux runners
+are free and generally available, but nobody is asking for it and each one is
+another hour of engine build.
 
 The AppImage deliberately bundles neither the graphics stack nor GStreamer. A
 bundled `libwayland-client` against a newer host Mesa makes `eglGetDisplay`
@@ -93,12 +98,13 @@ Default apps. The Visual C++ runtime travels with the exe, which it always
 should have, and with `-GStreamerRoot` so does GStreamer, which means audio and
 video on Windows for the first time. Nobody has watched any of it run.
 
-Windows on ARM is wired and switched off. `aarch64-pc-windows-msvc` is Rust tier
-1 and `mozjs` publishes a SpiderMonkey for it, but MSVC's `<arm_fp16.h>`
-typedefs `float16_t` and the vendored `glsl-optimizer` declares a struct of the
-same name; both the upstream fix and the Servo PR carrying it are open and
-unmerged, and there is no GStreamer build for Windows on ARM at all. The x64
-build runs on those machines under Prism, which does not emulate the GPU path.
+There is no Windows on ARM build. `aarch64-pc-windows-msvc` is Rust tier 1 and
+`mozjs` publishes a SpiderMonkey for it, but MSVC's `<arm_fp16.h>` typedefs
+`float16_t` and the vendored `glsl-optimizer` declares a struct of the same
+name; both the upstream fix and the Servo PR carrying it are open and unmerged,
+and there is no GStreamer build for Windows on ARM at all. The x64 build runs
+on those machines under Prism, which emulates x64 user-mode code and does not
+emulate the GPU path.
 
 **One workflow owns a release.** Three of them used to attach their own
 artefacts to the tag as they finished — a create-or-update race, no way to

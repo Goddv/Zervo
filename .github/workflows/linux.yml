@@ -7,8 +7,11 @@ name: Linux
 #
 # Four package formats come out of here, all from one staging tree:
 #
-#   .deb       built on Ubuntu 24.04, which installs on 24.04 and 26.04 alike,
-#              plus a native 26.04 build for anyone who wants one
+#   .deb       built on Ubuntu 26.04, and so requiring 26.04 or newer: glibc
+#              runs old binaries on new systems and never the reverse. Note
+#              that 26.04 runners are public preview and excluded from
+#              GitHub's SLA — this is the one release artefact that depends on
+#              one. The AppImage covers everything older.
 #   .rpm       built inside Fedora 44, because rpmbuild derives the package's
 #              requirements from the binary and those have to be Fedora's
 #              sonames
@@ -76,26 +79,9 @@ env:
 jobs:
   # ── .deb ───────────────────────────────────────────────────────────────
   deb:
-    name: ${{ matrix.image }} ${{ matrix.arch }} (.deb)
-    runs-on: ${{ matrix.runner }}
+    name: Ubuntu 26.04 (.deb)
+    runs-on: ubuntu-26.04
     timeout-minutes: 300
-    # The 26.04 runners are public preview: excluded from GitHub's SLA, and
-    # the announcement warns about capacity. A release must not hinge on them.
-    continue-on-error: ${{ matrix.preview }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # The packages a release ships. Built on the older LTS on purpose:
-          # glibc runs old binaries on new systems and never the reverse, so a
-          # 24.04 build installs on 24.04 and on 26.04, while a 26.04 build
-          # picks up a `libc6 (>= 2.43)` floor that 24.04 cannot satisfy.
-          - { runner: ubuntu-24.04,     image: "ubuntu-24.04", arch: amd64, suffix: "",           preview: false, tarball: true }
-          - { runner: ubuntu-24.04-arm, image: "ubuntu-24.04", arch: arm64, suffix: "",           preview: false, tarball: true }
-          # And a native 26.04 build beside them, version-suffixed so the two
-          # can sit in one release without colliding.
-          - { runner: ubuntu-26.04,     image: "ubuntu-26.04", arch: amd64, suffix: "ubuntu26.04", preview: true,  tarball: false }
-          - { runner: ubuntu-26.04-arm, image: "ubuntu-26.04", arch: arm64, suffix: "ubuntu26.04", preview: true,  tarball: false }
 
     steps:
       - uses: actions/checkout@v7
@@ -168,18 +154,24 @@ jobs:
             xorg-dev libxkbcommon0 libxkbcommon-x11-0 \
             mesa-vulkan-drivers dpkg-dev fakeroot lintian $OPTIONAL
 
+      - name: Point bindgen at a matching libclang
+        # mozangle runs bindgen over ANGLE's shader translator, and bindgen
+        # loads libclang at runtime while reading the headers that `clang`
+        # resolves to. clang-sys picks the newest libclang it can find, and
+        # Ubuntu 26.04 carries several — so bindgen parsed LLVM 21's headers
+        # with a newer libclang, and every SSE builtin those headers name had
+        # been removed in the meantime: "use of undeclared identifier
+        # '__builtin_ia32_sqrtss'", twenty of them, then a panic in a build
+        # script. Derived from clang's own resource directory so the two are
+        # the same version by construction.
+        run: |
+          RESOURCE_DIR="$(clang -print-resource-dir)"
+          echo "clang resource dir: $RESOURCE_DIR"
+          echo "LIBCLANG_PATH=${RESOURCE_DIR%/clang/*}" >> "$GITHUB_ENV"
+
       - uses: ./.github/actions/setup-build
         with:
-          key: deb-${{ matrix.image }}
-
-      - name: Do not let the preview legs evict the cache
-        # Every job in this repository shares one 10 GB Actions cache with
-        # seven-day eviction, and sccache writes one entry per compilation
-        # unit. The 26.04 legs are a canary, not a release; letting them fill
-        # the cache would push out the entries the packages that ship depend
-        # on.
-        if: matrix.preview
-        run: echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"
+          key: deb
 
       - name: Build and package
         env:
@@ -191,12 +183,9 @@ jobs:
           # a caller could otherwise put shell in it and have it run in a job
           # holding the cargo and sccache credentials.
           PROFILE: ${{ inputs.profile }}
-          WANT_TARBALL: ${{ matrix.tarball }}
-          VERSION_SUFFIX: ${{ matrix.suffix }}
-          # Ubuntu 26.04 ships CMake 4, which removed every policy older than
-          # 3.5 and so refuses to configure a good many of the vendored C++
-          # projects in this dependency graph. This is the documented escape
-          # hatch, and it is set only where the newer CMake is.
+          # 26.04 ships CMake 4, which removed every policy older than 3.5 and
+          # so refuses to configure a good many of the vendored C++ projects in
+          # this dependency graph. This is the documented escape hatch.
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
           set -o pipefail
@@ -204,9 +193,7 @@ jobs:
           if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
           if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
 
-          ARGS=(--profile "$PROFILE" --deb)
-          if [ "$WANT_TARBALL" = "true" ]; then ARGS+=(--tarball); fi
-          if [ -n "$VERSION_SUFFIX" ]; then ARGS+=(--version-suffix "$VERSION_SUFFIX"); fi
+          ARGS=(--profile "$PROFILE" --deb --tarball)
           if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
 
           ./scripts/package-linux.sh "${ARGS[@]}" 2>&1 | tee build.log
@@ -235,7 +222,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: zervo-deb-${{ matrix.image }}-${{ matrix.arch }}
+          name: zervo-deb
           path: |
             target/linux/*.deb
             target/linux/*.tar.gz
@@ -257,8 +244,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-24.04,     fedora: "44", arch: x86_64 }
-          - { runner: ubuntu-24.04-arm, fedora: "44", arch: aarch64 }
+          - { runner: ubuntu-24.04, fedora: "44", arch: x86_64 }
 
     steps:
       - name: Install build dependencies
@@ -361,8 +347,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-24.04,     arch: x86_64 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64 }
+          - { runner: ubuntu-24.04, arch: x86_64 }
 
     env:
       # appimagetool and linuxdeploy are themselves AppImages, and mounting an
@@ -413,6 +398,21 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --default-toolchain none --no-modify-path
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Point bindgen at a matching libclang
+        # mozangle runs bindgen over ANGLE's shader translator, and bindgen
+        # loads libclang at runtime while reading the headers that `clang`
+        # resolves to. clang-sys picks the newest libclang it can find, and
+        # Ubuntu 26.04 carries several — so bindgen parsed LLVM 21's headers
+        # with a newer libclang, and every SSE builtin those headers name had
+        # been removed in the meantime: "use of undeclared identifier
+        # '__builtin_ia32_sqrtss'", twenty of them, then a panic in a build
+        # script. Derived from clang's own resource directory so the two are
+        # the same version by construction.
+        run: |
+          RESOURCE_DIR="$(clang -print-resource-dir)"
+          echo "clang resource dir: $RESOURCE_DIR"
+          echo "LIBCLANG_PATH=${RESOURCE_DIR%/clang/*}" >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/setup-build
         with:

@@ -16,8 +16,10 @@ name: Windows
 # system libraries. So the x64 build runs on those machines; it is slower at
 # CPU-bound work and correct at everything else.
 #
-# The arm64 job below is wired and switched off. Turn it on by hand when
-# glslopt lands, and it will either work or say exactly why not.
+# There is no arm64 job. It was here, wired and switched off, and an always-
+# skipped matrix leg is a job that still claims a runner and a line in every
+# summary to do nothing. The note above is the useful part; add the leg back
+# when glslopt lands.
 on:
   workflow_call:
     inputs:
@@ -30,9 +32,6 @@ on:
       media:
         type: boolean
         default: true
-      try-arm64:
-        type: boolean
-        default: false
   workflow_dispatch:
     inputs:
       profile:
@@ -48,10 +47,6 @@ on:
         description: Build with audio and video (bundles GStreamer beside the exe)
         type: boolean
         default: true
-      try-arm64:
-        description: "Also attempt aarch64. Expected to fail: see the note at the top of this file."
-        type: boolean
-        default: false
 
 permissions: {}
 
@@ -84,51 +79,16 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.runner }}
+    name: x64
+    runs-on: windows-2025
     timeout-minutes: 300
-    continue-on-error: ${{ matrix.experimental }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: x64
-            slug: x64
-            runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            gst-arch: X86_64
-            experimental: false
-            enabled: true
-          - name: arm64 (experimental)
-            slug: arm64
-            # Pinned to the VS2026 label rather than plain `windows-11-arm`,
-            # which migrates to that image in September 2026 and loses a
-            # Windows SDK on the way.
-            runner: windows-11-vs2026-arm
-            target: aarch64-pc-windows-msvc
-            gst-arch: ARM64
-            experimental: true
-            enabled: false
 
     steps:
-      - name: Should this leg run?
-        id: gate
-        shell: bash
-        run: |
-          if [ "${{ matrix.enabled }}" = "true" ] || [ "${{ inputs.try-arm64 }}" = "true" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::${{ matrix.name }} is off; see the note at the top of windows.yml"
-          fi
-
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.run == 'true'
         with:
           persist-credentials: false
 
       - name: Allow long paths
-        if: steps.gate.outputs.run == 'true'
         # The Servo checkout contains web-platform-tests, whose test262 paths
         # run well past the 260-character limit Windows applies by default.
         # Cargo cannot check the repository out at all without this, and fails
@@ -141,14 +101,12 @@ jobs:
           git config --global core.longpaths true
 
       - name: Show environment
-        if: steps.gate.outputs.run == 'true'
         run: |
           cmake --version
           ninja --version
           clang --version
 
       - name: Fetch moztools
-        if: steps.gate.outputs.run == 'true'
         # SpiderMonkey's build needs it, and expects it under the target
         # directory rather than anywhere on PATH.
         shell: pwsh
@@ -165,7 +123,7 @@ jobs:
           Get-ChildItem $dir
 
       - name: Install GStreamer
-        if: steps.gate.outputs.run == 'true' && inputs.media && matrix.gst-arch == 'X86_64'
+        if: inputs.media
         # Servo's own pinned MSIs, unpacked administratively rather than
         # installed, which is what `mach bootstrap` does. There is no arm64
         # build published, which is one of the reasons the arm64 leg is off.
@@ -186,16 +144,10 @@ jobs:
           "$root\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - uses: ./.github/actions/setup-build
-        if: steps.gate.outputs.run == 'true'
         with:
-          key: windows-${{ matrix.name }}
-
-      - name: Add the target
-        if: steps.gate.outputs.run == 'true'
-        run: rustup target add ${{ matrix.target }}
+          key: windows-x64
 
       - name: Build and package
-        if: steps.gate.outputs.run == 'true'
         shell: pwsh
         env:
           FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
@@ -203,17 +155,14 @@ jobs:
           # Through the environment rather than interpolated into the script
           # body. `profile` is a free-form string on the workflow_call side.
           PROFILE: ${{ inputs.profile }}
-          TARGET_TRIPLE: ${{ matrix.target }}
-          GST_ARCH: ${{ matrix.gst-arch }}
         run: |
           $features = @()
           if ($env:FEATURES_ENGINE_DOWNLOADS -eq 'true') { $features += 'engine-downloads' }
-          if ($env:FEATURES_MEDIA -eq 'true' -and $env:GST_ARCH -eq 'X86_64') { $features += 'media' }
+          if ($env:FEATURES_MEDIA -eq 'true') { $features += 'media' }
 
           # Not $args: that is a PowerShell automatic variable.
           $packageArgs = @(
             '-CargoProfile', $env:PROFILE
-            '-Target', $env:TARGET_TRIPLE
             '-Output', "$env:GITHUB_WORKSPACE\dist"
             '-Installer'
           )
@@ -224,7 +173,6 @@ jobs:
           & pwsh -NoProfile -File scripts/package-windows.ps1 @packageArgs
 
       - name: Check the package
-        if: steps.gate.outputs.run == 'true'
         shell: pwsh
         # ANGLE is the one that has already gone wrong once: the exe links
         # against libEGL, so a package without it does not start, and the
@@ -240,14 +188,12 @@ jobs:
           Get-ChildItem "$env:GITHUB_WORKSPACE\dist"
 
       - name: sccache stats
-        if: steps.gate.outputs.run == 'true'
         shell: bash
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
       - uses: actions/upload-artifact@v7
-        if: steps.gate.outputs.run == 'true'
         with:
-          name: zervo-windows-${{ matrix.slug }}
+          name: zervo-windows-x64
           path: |
             dist/*.zip
             dist/*setup.exe
