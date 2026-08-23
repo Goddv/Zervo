@@ -182,6 +182,19 @@ export ARCH
 "$PLUGIN" --appdir "$APPDIR"
 
 [ -f "$OUT" ] || die "the appimage plugin produced no file at $OUT"
+
+# The plugin runs `zsyncmake -u <basename> <absolute path>` with no -o, and
+# zsyncmake writes its output to the *working directory* rather than beside its
+# input — so the .zsync was generated, reported as a success, and left at the
+# repository root while the upload looked for it in target/linux. Moved rather
+# than regenerated: it is correct, it was just written somewhere else.
+ZSYNC="$(basename -- "$OUT").zsync"
+if [ -f "$ZSYNC" ]; then
+    mv -f -- "$ZSYNC" "$OUTPUT/$ZSYNC"
+    note "$OUTPUT/$ZSYNC"
+elif [ ! -f "$OUTPUT/$ZSYNC" ]; then
+    warn "no $ZSYNC anywhere; AppImageUpdate will not be able to update this build"
+fi
 chmod +x "$OUT"
 zervo_sha256 "$OUT" >&2
 note "$OUT"

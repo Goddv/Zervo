@@ -513,4 +513,8 @@ jobs:
         with:
           name: zervo-pkgbuild
           path: target/linux/aur/**
+          # .SRCINFO is a dotfile, and upload-artifact has excluded hidden
+          # files by default since v4.4 — so the one file the AUR actually
+          # serves was generated, reported, and then silently left behind.
+          include-hidden-files: true
           if-no-files-found: error

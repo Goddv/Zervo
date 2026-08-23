@@ -221,6 +221,9 @@ jobs:
         with:
           name: zervo-aur
           path: target/linux/aur/**
+          # .SRCINFO is a dotfile; without this, upload-artifact drops it and
+          # the AUR packages arrive missing the only file the AUR reads.
+          include-hidden-files: true
           if-no-files-found: error
 
   publish:
