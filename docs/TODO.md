@@ -10,13 +10,16 @@ people do not write it twice.
 
 ## Next
 
-- **Themes that are not a recompile.** The material seam is real and every
-  surface goes through it ([THEMING.md](THEMING.md)), but a theme is still a
-  Rust `const`. What is missing is a file format, a loader, and palettes that a
-  theme can set rather than only the material. The stated goal is that somebody
-  can write a Windows, GTK, Android Material or Liquid Glass theme without
-  touching drawing code; the engine is arranged for it and the door is not open
-  yet.
+- **Themeable palettes, and presets somebody can name.** A theme is no longer a
+  recompile: every value a material is built from is a field of `Appearance`,
+  which is an ordinary setting, so the loader is `settings.json` and the file
+  format is what the Appearance page writes out ([THEMING.md](THEMING.md)).
+  One thing is still missing. `resolve` builds both palettes from hardcoded
+  colours plus the accent, so an arrangement can change how surfaces are built
+  and how far the accent reaches into them, but not what colour they start
+  from. Arrangements themselves can be saved under a name now, so the shape of
+  the answer for palettes is the same one: put the colours on `Appearance` and
+  the settings file carries them.
 - **Run the Linux and Windows builds.** They compile, package and install and
   nobody has started one. This is the single most useful thing anyone with a
   Linux box or a Windows machine can do right now, and a report that it does not
@@ -33,8 +36,6 @@ people do not write it twice.
 - **A favicon store on disk.** Icons are fetched per live webview and kept in
   memory, so history and favourites show initials instead. One small cache would
   fix both lists.
-- **Crash handling.** `notify_crashed` is unimplemented, so a dead content
-  process is a frozen page with no explanation. Even an error page beats that.
 
 ## Soon
 

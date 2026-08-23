@@ -44,6 +44,19 @@ Notifications are shown inside the window rather than handed to the system —
 that wants a signed bundle and `UNUserNotificationCenter` on macOS, and an
 equivalent everywhere else — and their icons, badges and images are dropped.
 
+As of 0.5.0: the whole chrome, on a design study — one material with every
+number settable, four seams with a transition each, the composed new tab page,
+five pages for a page that will not load, and a first run. See the changelog.
+`⌘R` is bound, having been advertised in two tooltips and bound nowhere.
+
+**Crash handling** is done: `notify_crashed` rewrites the tab into
+`zervo://crashed`, carrying the address it was on and the engine's own reason,
+so a dead content process is a page that says what happened and offers to load
+it again rather than the last frame it painted, frozen. It is the only failure
+this engine version reports — there is still no load-failure callback and no
+certificate hook, which is why the other four pages in `src/trouble.rs` are
+reachable by address and nothing else.
+
 Tier 0 is done. What is left is the list below.
 
 ## Streaming video does not work
@@ -67,8 +80,6 @@ is also absent, so anything DRM-protected is out regardless.
 
 Each of these is a delegate method or a `WebView` call away.
 
-- **Crash handling.** `notify_crashed` is not implemented, so a crashed content
-  process is a frozen page with no explanation.
 - **Fullscreen.** `notify_fullscreen_state_changed` is not implemented, so the
   fullscreen button on a video player does nothing useful.
   `WebView::exit_fullscreen` is there for the way back out.

@@ -812,6 +812,53 @@ impl servo::WebViewDelegate for AppState {
 
     /// Media session state, which is what makes the player widgets real rather
     /// than decorative.
+    /// The content process serving this tab died.
+    ///
+    /// `docs/PARITY.md` has asked for this since it was written: without it a
+    /// crashed process is a frozen page with no explanation, because the last
+    /// frame the engine painted stays on screen and nothing about the window
+    /// says the page has stopped. It is also the *only* failure this version of
+    /// the engine reports at all — there is no load-failure callback and no
+    /// certificate hook — so it is the one trouble page that arrives on its own
+    /// rather than by being typed.
+    ///
+    /// The address the tab was on goes into the trouble page's own query, which
+    /// is what makes "Load it again" possible: the page carries where it came
+    /// from, so recovering is one press rather than retyping.
+    fn notify_crashed(&self, webview: WebView, reason: String, backtrace: Option<String>) {
+        // The backtrace is for the log, not for the page. Somebody whose tab
+        // just died needs to know what to do, and a Rust backtrace tells them
+        // nothing they can act on.
+        log::error!(
+            "ZERVO content process crashed: {reason}{}",
+            backtrace
+                .map(|trace| format!("\n{trace}"))
+                .unwrap_or_default()
+        );
+        let mut browser = self.browser.borrow_mut();
+        let Some(tab) = browser.tab_for_webview_mut(&webview) else {
+            drop(browser);
+            self.window.request_redraw();
+            return;
+        };
+        // Rewritten in place rather than replaced: the tab keeps its id, its
+        // position and whether it is pinned. A second tab beside it would leave
+        // the dead one sitting there looking perfectly well.
+        let host = crate::ui::host_of(&tab.url);
+        tab.url = crate::trouble::address(crate::trouble::Trouble::Crashed, &host, &reason);
+        tab.kind = crate::state::TabKind::Trouble(crate::trouble::Trouble::Crashed);
+        tab.title = crate::trouble::Trouble::Crashed.title().to_owned();
+        // The engine's handle goes with the process it was talking to. Holding
+        // it would leave the blit drawing the last frame the dead page painted,
+        // straight over the page that explains it is dead.
+        tab.webview = None;
+        tab.loading = false;
+        tab.can_go_back = false;
+        tab.can_go_forward = false;
+        drop(browser);
+        self.window.request_redraw();
+    }
+
     fn notify_media_session_event(&self, _webview: WebView, event: servo::MediaSessionEvent) {
         use servo::{MediaSessionEvent, MediaSessionPlaybackState};
         let mut media = self.media.borrow_mut();

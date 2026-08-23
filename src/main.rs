@@ -48,14 +48,18 @@ mod gpu;
 mod icons;
 mod keyboard;
 mod library;
+mod morphicons;
 mod newtab;
 mod notifications;
 mod passwords;
 mod phosphor;
+mod transition;
+mod trouble;
 // macOS has its own paths inline, using the AppKit bindings it already has.
 #[cfg(not(target_os = "macos"))]
 mod platform;
 mod settings;
+mod shot;
 mod state;
 mod ui;
 #[cfg(target_os = "macos")]
@@ -177,6 +181,14 @@ struct RunningApp {
     settings: Settings,
     /// Current OS appearance, driving ThemeMode::Auto.
     system_dark: bool,
+    /// A picture of the window, when one was asked for. Debug builds only.
+    shot: Option<shot::Shot>,
+    /// Which workspace the chrome is currently in.
+    ///
+    /// Cached rather than read where it is wanted: `target_palette` is called
+    /// from inside the frame, where `AppState::browser` is already borrowed,
+    /// and a second borrow there would be a panic rather than a colour.
+    space: usize,
     /// Favicon textures by tab, rebuilt when the engine reports changes.
     favicons: HashMap<TabId, egui::TextureHandle>,
     /// Whether the settings page currently covers the content area.
@@ -188,6 +200,11 @@ struct RunningApp {
     webview_relative_mouse: Cell<Point2D<f32, DevicePixel>>,
     /// The content rect left over after the chrome panels, in egui points.
     content_rect_points: egui::Rect,
+    /// The surface the page was painted on last frame, which is what the
+    /// blurred copy every glass surface frosts against is a copy of. Not the
+    /// card's own rectangle once the chrome floats over the page — see
+    /// [`ui::UiOutput::page_rect`].
+    page_rect_points: egui::Rect,
     /// A page-initiated dialog or menu is up.
     controls_open: bool,
     /// Accumulates scroll events into trackpad swipes.
@@ -222,6 +239,15 @@ struct RunningApp {
         bool,
         theme::Translucency,
     ),
+    /// The rest of the arrangement, which is a repaint rather than a theme
+    /// change.
+    ///
+    /// Kept apart from `applied_theme` on purpose. Nothing in here touches the
+    /// platform's appearance or the engine, so none of it is worth a crossfade
+    /// or a `prefers-color-scheme` message to every webview — and half of it
+    /// is a slider, which would send one per frame of a drag. Restyling egui's
+    /// own widgets from it is cheap, so that happens whenever any of it moves.
+    applied_appearance: theme::Appearance,
     applied_icon: settings::AppIcon,
     /// A theme change in flight: the palette it started from, and when.
     ///
@@ -245,6 +271,21 @@ struct RunningApp {
     /// because anything here is on another thread. It never contends.
     page_backdrop: Arc<std::sync::Mutex<backdrop::PageBackdrop>>,
     page_backdrop_texture: Option<theme::Frost>,
+    /// Which page the frost above is a copy of.
+    ///
+    /// It is only ever *replaced*, never dropped, and three of the internal
+    /// pages never register a capture at all — so switching to History, or to
+    /// a page that has just crashed, left every glass surface on it frosted
+    /// against a picture of the page that had gone.
+    frosted_for: Option<(state::TabId, state::TabKind)>,
+    /// The readback that takes a picture of a page on its way out, and what it
+    /// has taken. See [`crate::transition`].
+    crossing_copier: backdrop::PageBackdrop,
+    crossing: Option<transition::Crossing>,
+    crossing_wanted: Option<transition::Wanted>,
+    /// True only while the redraw is applying the actions its own pass
+    /// produced. See `want_crossing`.
+    draining: bool,
     /// Owns the little program that takes the card's corners out of the
     /// framebuffer; it is compiled on first use inside a paint callback.
     corner_eraser: Arc<Mutex<backdrop::Eraser>>,
@@ -369,7 +410,12 @@ impl ApplicationHandler<WakerEvent> for App {
         let system_dark = matches!(window.theme(), Some(winit::window::Theme::Dark));
         theme::apply(
             &egui_glow.egui_ctx,
-            &theme::resolve(settings.theme, system_dark, settings.accent),
+            &theme::resolve(
+                settings.theme,
+                system_dark,
+                settings.accent,
+                &settings.appearance,
+            ),
         );
         install_fonts(&egui_glow.egui_ctx);
 
@@ -390,7 +436,12 @@ impl ApplicationHandler<WakerEvent> for App {
         // Every navigation used to flash white first, which in a dark theme is
         // the most visible thing the browser does. A page with a background of
         // its own still wins: this is only the default underneath.
-        let start = theme::resolve(settings.theme, system_dark, settings.accent);
+        let start = theme::resolve(
+            settings.theme,
+            system_dark,
+            settings.accent,
+            &settings.appearance,
+        );
         let shell_background = {
             let bg = start.bg;
             let channel = |v: u8| f64::from(v) / 255.0;
@@ -484,7 +535,20 @@ impl ApplicationHandler<WakerEvent> for App {
             servo,
             window_rendering_context,
             rendering_context,
-            browser: RefCell::new(BrowserState::new(start_url.as_str())),
+            browser: RefCell::new({
+                let mut browser = BrowserState::new(start_url.as_str());
+                // Workspaces are session state — nothing writes them out — so
+                // the name somebody gave their first space at setup lives in
+                // `Settings` and is put back here. Asking for a name and then
+                // forgetting it on the next launch would be worse than not
+                // asking.
+                if !settings.first_space.trim().is_empty()
+                    && let Some(first) = browser.workspaces.first_mut()
+                {
+                    first.name = settings.first_space.trim().to_owned();
+                }
+                browser
+            }),
             pending_popups: RefCell::new(Vec::new()),
             pending_closes: RefCell::new(Vec::new()),
             pending_keyboard_events: RefCell::new(HashMap::new()),
@@ -526,8 +590,9 @@ impl ApplicationHandler<WakerEvent> for App {
             settings.theme,
             settings.accent,
             system_dark,
-            settings.translucency,
+            settings.appearance.translucency,
         );
+        let applied_appearance = settings.appearance;
         let applied_icon = settings.app_icon;
         // Whatever was cached last time, decoded on a thread so a launch never
         // waits on a photograph.
@@ -544,6 +609,7 @@ impl ApplicationHandler<WakerEvent> for App {
             cursor: PhysicalPosition::default(),
             webview_relative_mouse: Cell::new(Point2D::zero()),
             content_rect_points: egui::Rect::ZERO,
+            page_rect_points: egui::Rect::ZERO,
             controls_open: false,
             swipe: gestures::Recognizer::default(),
             pointer_owner: PointerOwner::Free,
@@ -551,12 +617,21 @@ impl ApplicationHandler<WakerEvent> for App {
             pending_repaint_at: None,
             repaint_at,
             applied_theme,
+            applied_appearance,
+            shot: shot::Shot::from_env(),
+            space: 0,
             applied_icon,
             theme_fade: None,
             downloads: downloads::DownloadManager::default(),
             wallpaper,
             page_backdrop: Arc::new(std::sync::Mutex::new(backdrop::PageBackdrop::default())),
             page_backdrop_texture: None,
+            frosted_for: None,
+            // No blur: this one is a picture of the page, not a frost of it.
+            crossing_copier: backdrop::PageBackdrop::at(transition::COPY, 0.0),
+            crossing: None,
+            crossing_wanted: None,
+            draining: false,
             corner_eraser: Arc::new(Mutex::new(backdrop::Eraser::default())),
             translucent_window,
             wallpaper_texture: None,
@@ -669,9 +744,9 @@ impl RunningApp {
                 self.system_dark = matches!(new_theme, winit::window::Theme::Dark);
                 self.applied_theme = (
                     self.settings.theme,
-                    self.settings.accent,
+                    self.accent(),
                     self.system_dark,
-                    self.settings.translucency,
+                    self.settings.appearance.translucency,
                 );
                 self.apply_theme();
                 state.window.request_redraw();
@@ -981,6 +1056,17 @@ impl RunningApp {
             .shortcut(CMD_OR_CONTROL, ',', || {
                 self.apply_action(UiAction::OpenSettings);
             })
+            .shortcut(CMD_OR_CONTROL, 'R', || {
+                // Advertised in two tooltips since the toolbar was written and
+                // bound nowhere. It goes through the action rather than
+                // straight to the webview so it does what the button does,
+                // including on a trouble page, which has no webview and whose
+                // reload means "try the site again".
+                self.apply_action(UiAction::Reload);
+            })
+            .shortcut(CMD_OR_CONTROL, 'S', || {
+                self.apply_action(UiAction::CycleLayout);
+            })
             .shortcut(CMD_OR_CONTROL, 'L', || {
                 state.browser.borrow_mut().focus_address = true;
                 state.window.request_redraw();
@@ -1065,8 +1151,9 @@ impl RunningApp {
         // The page's blurred copy, taken by last frame's paint callback. On an
         // internal page there is nothing to copy, and a stale copy of the page
         // you were on before is worse than none.
+        let ground = self.palette().bg;
         if let Ok(mut backdrop) = self.page_backdrop.lock()
-            && let Some(image) = backdrop.take()
+            && let Some(image) = backdrop.take(ground)
         {
             self.page_backdrop_texture = Some(theme::Frost::upload(
                 &self.egui_glow.egui_ctx,
@@ -1108,6 +1195,10 @@ impl RunningApp {
             self.wallpaper.fetch(&self.settings.wallpaper_source);
         }
 
+        // Read once, before anything borrows the browser: the accent follows
+        // the space when the reader has asked it to.
+        self.space = self.state.browser.borrow().active_workspace;
+
         let palette = self.palette();
         if self.theme_fade.is_some() {
             // egui's own style has to follow the crossfade frame by frame:
@@ -1140,6 +1231,20 @@ impl RunningApp {
         let frosting = palette.translucency == theme::Translucency::Frosted;
         // Handed to the paint callback, which runs inside `run` and so cannot
         // borrow `self`.
+        // The frost is a copy of one page. When that is no longer the page on
+        // screen it is thrown away rather than kept until something happens to
+        // overwrite it: a frame of unfrosted glass while the next copy is
+        // taken is a great deal better than glass frosted against a page the
+        // reader has left.
+        let showing = state
+            .browser
+            .borrow()
+            .active_tab()
+            .map(|tab| (tab.id, tab.kind));
+        if self.frosted_for != showing {
+            self.frosted_for = showing;
+            self.page_backdrop_texture = None;
+        }
         let eraser = self.corner_eraser.clone();
         let translucent_window = self.translucent_window;
         let capture = (frosting
@@ -1156,7 +1261,7 @@ impl RunningApp {
             (Some(frost), false) => palette.with_backdrop(Some(theme::Backdrop {
                 texture: frost.id(),
                 luma: frost.luma(),
-                rect: self.content_rect_points,
+                rect: self.page_rect_points,
                 reach: 0.0,
                 uv: egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 alpha: 1.0,
@@ -1207,6 +1312,7 @@ impl RunningApp {
                 downloads: &self.downloads,
                 wallpaper,
                 capture: capture.clone(),
+                crossing: self.crossing.as_ref(),
                 status: status.as_deref(),
                 notifications: crate::notifications::View {
                     visible: &toasts,
@@ -1289,7 +1395,13 @@ impl RunningApp {
                         backdrop::cut_corners_into(
                             &root.layer_painter(LayerId::background()),
                             content_rect,
-                            theme::CONTENT_RADIUS,
+                            // The eraser walks the framebuffer's own corners,
+                            // whose origin is at the bottom left: south-west,
+                            // south-east, north-west, north-east.
+                            {
+                                let [nw, ne, se, sw] = theme::content_corner_radii(&palette);
+                                [sw, se, nw, ne]
+                            },
                             &eraser,
                         );
                     }
@@ -1347,15 +1459,37 @@ impl RunningApp {
         let mut ambient = false;
         if let Some(output) = ui_output {
             self.content_rect_points = output.content_rect;
+            self.page_rect_points = output.page_rect;
             state
                 .content_origin
                 .set((output.content_rect.min.x, output.content_rect.min.y));
             self.controls_open = output.controls_open;
             self.settings_open = output.settings_open;
             ambient = output.ambient;
+            // Debug-only, and only when asked: go somewhere so the picture at
+            // the end of this frame lands in the middle of a page transition.
+            // Here rather than at the top of the redraw, because *here* is
+            // where a real action lands — after the pass that built this
+            // frame's shapes, so the frame about to be painted is still the
+            // page being left. Applying it any earlier photographs the page
+            // that is arriving crossing over itself. See `shot.rs`.
+            if let Some(shot) = &mut self.shot
+                && let Some(url) = shot.navigate()
+            {
+                self.draining = true;
+                self.apply_action(UiAction::Navigate(url));
+                self.draining = false;
+            }
+            if self.shot.as_ref().is_some_and(crate::shot::Shot::cycle) {
+                self.draining = true;
+                self.apply_action(UiAction::CycleLayout);
+                self.draining = false;
+            }
+            self.draining = true;
             for action in output.actions {
                 self.apply_action(action);
             }
+            self.draining = false;
         }
         // Ambient animations (aurora new-tab page) tick at ~30fps via timed
         // wakes rather than a max-FPS redraw loop.
@@ -1440,11 +1574,177 @@ impl RunningApp {
             }
         }
         self.egui_glow.paint(&state.window);
+        // The picture of a page on its way out, taken in the one moment it can
+        // be: the chrome has just been painted, the framebuffer still holds the
+        // page the reader is leaving, and the buffers have not swapped. The
+        // action that starts a crossing was applied long before this, which is
+        // why it only left a note.
+        if let Some(wanted) = self.crossing_wanted.take() {
+            // egui's, not the window's: `pixels_per_point` is
+            // `zoom_factor * scale_factor`, and `was` is an egui rect in
+            // points. Every other point-to-pixel conversion in this file
+            // already uses it; with the raw scale factor a zoomed chrome
+            // photographs the wrong rectangle.
+            let scale = self.egui_glow.egui_ctx.pixels_per_point();
+            let size = state.window.inner_size();
+            let was = wanted.was;
+            // GL's origin is the bottom left and egui's is the top, so the
+            // rectangle has to be turned over before it is asked for.
+            let top = (was.min.y * scale).round() as i32;
+            let height = (was.height() * scale).round() as i32;
+            let source = [
+                (was.min.x * scale).round() as i32,
+                (size.height as i32 - top - height).max(0),
+                (was.width() * scale).round() as i32,
+                height,
+            ];
+            // Only the dissolve wants a defocused page; the other three want
+            // to be able to read theirs while it moves.
+            self.crossing_copier
+                .soften_by(transition::defocus(wanted.seam));
+            self.crossing_copier.capture(
+                state.window_rendering_context.glow_gl_api().as_ref(),
+                source,
+            );
+            let ground = crate::theme::page_base(&self.palette());
+            if let Some(image) = self.crossing_copier.take(ground) {
+                let page = self.egui_glow.egui_ctx.load_texture(
+                    "zervo-crossing",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.crossing = Some(transition::Crossing::new(
+                    page,
+                    was,
+                    wanted.seen,
+                    wanted.seam,
+                    wanted.way,
+                    wanted.motion,
+                ));
+            }
+            state.window.request_redraw();
+        }
+        if self
+            .crossing
+            .as_ref()
+            .is_some_and(transition::Crossing::done)
+        {
+            self.crossing = None;
+            state.window.request_redraw();
+        }
+        // Before the swap: after it the back buffer holds whatever the driver
+        // feels like, which here is the frame before last.
+        if let Some(shot) = &mut self.shot {
+            let size = state.window.inner_size();
+            if shot.tick(
+                state.window_rendering_context.glow_gl_api().as_ref(),
+                (size.width, size.height),
+            ) {
+                state.quit_requested.set(true);
+            }
+            state.window.request_redraw();
+        }
         state.window_rendering_context.present();
+    }
+
+    /// Ask for a picture of the page on its way out.
+    ///
+    /// Recorded rather than taken: the only moment the framebuffer holds the
+    /// departing page *and* still holds it is after the chrome has been painted
+    /// and before the buffers are swapped, and actions are applied well before
+    /// that. See `redraw`'s tail.
+    fn want_crossing(&mut self, way: transition::Way) {
+        // Only from inside the redraw's own action drain.
+        //
+        // The note is cashed at the end of a redraw, on the reasoning that the
+        // frame just painted is still the page being left — which is true only
+        // because the drain runs *after* the pass that built that frame's
+        // shapes. An action applied from an event handler (a keyboard
+        // shortcut, a swipe, an open-url from the platform) is applied before
+        // any pass at all, so the next frame paints the page that has already
+        // arrived and photographing it crosses a page over itself.
+        //
+        // A hard cut is the right answer there. It is what happened before any
+        // of this existed, and it is a great deal better than a transition
+        // that animates the wrong picture.
+        if !self.draining {
+            return;
+        }
+        // One at a time. A second crossing armed while one is in flight would
+        // photograph the first one's own overlay — the copy is painted into
+        // the very framebuffer the next copy is read from — and blend two
+        // departing pages into one ghost. The second navigation cuts instead.
+        if self.crossing.is_some() {
+            self.crossing = None;
+            return;
+        }
+        let palette = self.palette();
+        if !transition::Crossing::wanted(&palette) || self.page_rect_points.width() < 1.0 {
+            return;
+        }
+        self.crossing_wanted = Some(transition::Wanted {
+            seam: palette.appearance.seam,
+            way,
+            was: self.page_rect_points,
+            seen: self.content_rect_points,
+            motion: palette.appearance.motion,
+        });
     }
 
     fn apply_action(&mut self, action: UiAction) {
         let state = self.state.clone();
+        // What is about to replace the page, and which way it is going. A
+        // crossing is asked for once, here, rather than at the eight places
+        // that can start one — and every one of them either loads something in
+        // this tab or shows a different tab, which are the same thing from the
+        // page's point of view.
+        //
+        // Gated on the navigation actually happening, not on the action's
+        // name. Clicking the tab you are already on pushes `SelectTab`, the
+        // back gesture pushes `Back` whether or not there is anything behind
+        // you, and `Open*` on the page already open is a no-op — and a page
+        // that slides out to reveal itself says "you went somewhere" when
+        // nothing happened.
+        let going = match &action {
+            UiAction::Back | UiAction::Forward => {
+                let forward = matches!(action, UiAction::Forward);
+                state
+                    .active_webview()
+                    .is_some_and(|webview| {
+                        if forward {
+                            webview.can_go_forward()
+                        } else {
+                            webview.can_go_back()
+                        }
+                    })
+                    .then_some(if forward {
+                        transition::Way::On
+                    } else {
+                        transition::Way::Back
+                    })
+            },
+            UiAction::SelectTab(id) => {
+                (state.browser.borrow().active_tab != Some(*id)).then_some(transition::Way::On)
+            },
+            UiAction::OpenSettings | UiAction::OpenHistory | UiAction::OpenDownloads => {
+                let kind = state.browser.borrow().active_tab().map(|tab| tab.kind);
+                let already = match action {
+                    UiAction::OpenSettings => Some(TabKind::Settings),
+                    UiAction::OpenHistory => Some(TabKind::History),
+                    _ => Some(TabKind::Downloads),
+                };
+                (kind != already).then_some(transition::Way::On)
+            },
+            UiAction::OpenTrouble(trouble, _) => {
+                let kind = state.browser.borrow().active_tab().map(|tab| tab.kind);
+                (kind != Some(TabKind::Trouble(*trouble))).then_some(transition::Way::On)
+            },
+            UiAction::Navigate(_) | UiAction::NewTab { .. } => Some(transition::Way::On),
+            _ => None,
+        };
+        if let Some(way) = going {
+            self.want_crossing(way);
+        }
         match action {
             UiAction::Navigate(address) => {
                 let Ok(url) = Url::parse(&address) else {
@@ -1456,7 +1756,13 @@ impl RunningApp {
                 // History and the new tab page both used to open Settings.
                 if url.scheme() == "zervo" {
                     let page = url.as_str();
-                    if page.contains("downloads") {
+                    // The four trouble pages first, and by their authority
+                    // rather than by a substring: they carry a query, and
+                    // `contains` on a whole address is a rule that quietly
+                    // stops holding the moment one of them names a host.
+                    if let Some(trouble) = crate::trouble::Trouble::from_url(page) {
+                        self.apply_action(UiAction::OpenTrouble(trouble, page.to_owned()));
+                    } else if page.contains("downloads") {
                         self.apply_action(UiAction::OpenDownloads);
                     } else if page.contains("history") {
                         self.apply_action(UiAction::OpenHistory);
@@ -1511,6 +1817,22 @@ impl RunningApp {
             UiAction::Reload => {
                 if let Some(webview) = state.active_webview() {
                     webview.reload();
+                    state.window.request_redraw();
+                    return;
+                }
+                // A trouble page has no webview to reload — it *is* what
+                // happened instead of one. Reloading it means trying the site
+                // again, which is the whole point of the page, so the address
+                // it is carrying is where reload goes.
+                let again = {
+                    let browser = state.browser.borrow();
+                    browser
+                        .active_tab()
+                        .filter(|tab| matches!(tab.kind, TabKind::Trouble(_)))
+                        .and_then(|tab| crate::trouble::retry_target(&tab.url))
+                };
+                if let Some(url) = again {
+                    self.apply_action(UiAction::Navigate(url));
                 }
             },
             UiAction::SelectTab(tab_id) => {
@@ -1545,8 +1867,13 @@ impl RunningApp {
                 },
             },
             UiAction::ToggleSidebar => {
-                let collapsed = state.browser.borrow().sidebar_collapsed;
-                state.browser.borrow_mut().sidebar_collapsed = !collapsed;
+                self.settings.layout = self.settings.layout.toggled();
+                self.settings.save();
+                state.window.request_redraw();
+            },
+            UiAction::CycleLayout => {
+                self.settings.layout = self.settings.layout.next();
+                self.settings.save();
                 state.window.request_redraw();
             },
             UiAction::SavePassword => {
@@ -1627,8 +1954,11 @@ impl RunningApp {
             },
             UiAction::AddWidget(kind) => {
                 let mut widget = dashboard::Placed::new(kind);
-                (widget.col, widget.row) =
-                    dashboard::free_cell(&self.settings.navbar_widgets, widget.size);
+                (widget.col, widget.row) = dashboard::free_cell(
+                    &self.settings.navbar_widgets,
+                    widget.size,
+                    dashboard::COLUMNS,
+                );
                 self.settings.navbar_widgets.push(widget);
                 self.settings.save();
                 state.window.request_redraw();
@@ -1672,6 +2002,13 @@ impl RunningApp {
                 let tab_id = state.browser.borrow_mut().find_or_create_history_tab();
                 state.activate_tab(tab_id);
             },
+            UiAction::OpenTrouble(trouble, url) => {
+                let tab_id = state
+                    .browser
+                    .borrow_mut()
+                    .find_or_create_trouble_tab(trouble, url);
+                state.activate_tab(tab_id);
+            },
             UiAction::ToggleFavourite => {
                 let (url, title) = state
                     .browser
@@ -1687,6 +2024,14 @@ impl RunningApp {
             UiAction::RenameFavourite(url, title) => {
                 state.library.borrow_mut().rename_favourite(&url, &title);
                 state.browser.borrow_mut().favourite_edit = None;
+                state.window.request_redraw();
+            },
+            UiAction::PinSite(url, title) => {
+                let mut library = state.library.borrow_mut();
+                if !library.favourites.iter().any(|entry| entry.url == url) {
+                    library.toggle_favourite(&url, &title);
+                }
+                drop(library);
                 state.window.request_redraw();
             },
             UiAction::RemoveFavourite(url) => {
@@ -1883,13 +2228,25 @@ impl RunningApp {
                 // note on `applied_theme`.
                 let look = (
                     self.settings.theme,
-                    self.settings.accent,
+                    self.accent(),
                     self.system_dark,
-                    self.settings.translucency,
+                    self.settings.appearance.translucency,
                 );
                 if look != self.applied_theme {
                     self.applied_theme = look;
                     self.start_theme_fade();
+                }
+                // Everything else about the arrangement: egui's own widgets
+                // take their metrics and their animation time from the
+                // material, so they have to be restyled when it moves. No
+                // crossfade and no platform call — this runs on every frame of
+                // a slider drag, which is exactly what makes the specimen
+                // follow the handle.
+                if self.settings.appearance != self.applied_appearance {
+                    self.applied_appearance = self.settings.appearance;
+                    let palette = self.palette();
+                    theme::apply(&self.egui_glow.egui_ctx, &palette);
+                    self.state.window.request_redraw();
                 }
                 #[cfg(target_os = "macos")]
                 if self.settings.app_icon != self.applied_icon {
@@ -1981,9 +2338,31 @@ impl RunningApp {
         }
     }
 
+    /// The accent actually in force.
+    ///
+    /// One global choice, unless the reader has asked for the workspace to
+    /// pick it — in which case `WORKSPACE_COLORS`, which used to be spent on a
+    /// seven-point dot, becomes the colour of the whole window and a space
+    /// stops being a filter over a tab list and starts being a place.
+    fn accent(&self) -> theme::AccentColor {
+        if !self.settings.appearance.workspace_accent {
+            return self.settings.accent;
+        }
+        let colour = theme::workspace_color_from(self.space, self.settings.space_colour);
+        theme::AccentColor::Custom(colour.r(), colour.g(), colour.b())
+    }
+
     fn target_palette(&self) -> Palette {
-        theme::resolve(self.settings.theme, self.system_dark, self.settings.accent)
-            .with_translucency(self.settings.translucency)
+        theme::resolve(
+            self.settings.theme,
+            self.system_dark,
+            self.accent(),
+            &self.settings.appearance,
+        )
+        // The layout, stamped on the same way the translucency setting is:
+        // in full-page mode the page has the window to itself, so its corners
+        // are the window's corners and there is no gap to hold.
+        .filling_window(self.settings.layout == crate::settings::Layout::FullPage)
     }
 
     /// Begin crossing to whatever the settings now say, from wherever the
@@ -2161,6 +2540,40 @@ fn install_fonts(ctx: &egui::Context) {
             proportional.insert(0, "SF Pro".to_owned());
         }
     }
+
+    // The display family: one real light face, for the handful of runs set
+    // large enough that Regular is the wrong typeface rather than a missing
+    // nuance. See `ui::DISPLAY_FAMILY` for why this cannot simply be SF Pro at
+    // another weight.
+    //
+    // Helvetica Neue Thin is face 12 of a fourteen-face collection every macOS
+    // has shipped for twenty years, and `FontData::index` is how a collection
+    // is addressed. Elsewhere the family is left to fall through to the
+    // proportional stack, which on egui's own bundled fonts is Ubuntu-Light
+    // and already lighter than its UI weight.
+    let mut display: Vec<String> = Vec::new();
+    #[cfg(target_os = "macos")]
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/HelveticaNeue.ttc") {
+        fonts.font_data.insert(
+            "display".to_owned(),
+            Arc::new(egui::FontData {
+                font: bytes.into(),
+                index: 12,
+                tweak: egui::FontTweak::default(),
+            }),
+        );
+        display.push("display".to_owned());
+    }
+    display.extend(
+        fonts
+            .families
+            .get(&egui::FontFamily::Proportional)
+            .cloned()
+            .unwrap_or_default(),
+    );
+    fonts
+        .families
+        .insert(egui::FontFamily::Name(ui::DISPLAY_FAMILY.into()), display);
 
     ctx.set_fonts(fonts);
 }

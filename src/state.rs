@@ -19,6 +19,14 @@ pub enum TabKind {
     History,
     /// The internal downloads page (zervo://downloads).
     Downloads,
+    /// One of the four pages a page that will not load lands on
+    /// (`zervo://unsupported` and its three siblings). See [`crate::trouble`].
+    ///
+    /// The kind carries which of the four it is, so two different troubles are
+    /// two different tabs rather than one that keeps changing its mind —
+    /// `find_or_create_internal` compares kinds, and the payload is part of
+    /// that comparison.
+    Trouble(crate::trouble::Trouble),
 }
 
 pub struct Tab {
@@ -87,6 +95,23 @@ impl Tab {
             pinned: false,
             title: "Downloads".to_owned(),
             url: "zervo://downloads".to_owned(),
+            webview: None,
+            loading: false,
+            can_go_back: false,
+            can_go_forward: false,
+        }
+    }
+
+    /// A page that will not load. `url` carries what is known about the
+    /// failure in its query string, so the address bar and the page agree and
+    /// either can be typed back in.
+    pub fn new_trouble(id: TabId, trouble: crate::trouble::Trouble, url: String) -> Self {
+        Self {
+            id,
+            kind: TabKind::Trouble(trouble),
+            pinned: false,
+            title: trouble.title().to_owned(),
+            url,
             webview: None,
             loading: false,
             can_go_back: false,
@@ -174,8 +199,7 @@ pub struct BrowserState {
     pub newtab_editing: bool,
     /// Which settings category the settings page is showing.
     pub settings_section: SettingsSection,
-    /// Sidebar hidden (session state, toggled from the chrome).
-    pub sidebar_collapsed: bool,
+
     next_tab_id: TabId,
 }
 
@@ -200,7 +224,6 @@ impl BrowserState {
             newtab_task_draft: String::new(),
             newtab_editing: false,
             settings_section: SettingsSection::Appearance,
-            sidebar_collapsed: false,
             next_tab_id: 0,
         };
         let id = state.add_tab(0, initial_url);
@@ -242,6 +265,7 @@ impl BrowserState {
         let tab = match kind {
             TabKind::Downloads => Tab::new_downloads(id),
             TabKind::History => Tab::new_history(id),
+            TabKind::Trouble(trouble) => Tab::new_trouble(id, trouble, trouble.url()),
             _ => Tab::new_settings(id),
         };
         self.workspaces[workspace].tabs.push(tab);
@@ -258,6 +282,21 @@ impl BrowserState {
 
     pub fn find_or_create_downloads_tab(&mut self) -> TabId {
         self.find_or_create_internal(TabKind::Downloads)
+    }
+
+    /// The tab for one of the four trouble pages, at `url` — which carries
+    /// what is known about this particular failure and so has to be written
+    /// even when the tab already existed.
+    pub fn find_or_create_trouble_tab(
+        &mut self,
+        trouble: crate::trouble::Trouble,
+        url: String,
+    ) -> TabId {
+        let id = self.find_or_create_internal(TabKind::Trouble(trouble));
+        if let Some(tab) = self.tab_mut(id) {
+            tab.url = url;
+        }
+        id
     }
 
     pub fn add_workspace(&mut self, name: impl Into<String>) -> usize {

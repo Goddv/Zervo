@@ -103,10 +103,14 @@ so some sites will not work. See [Limitations](#limitations).
   colour of your own, and the accent is propagated into the engine so pages see
   the matching `prefers-color-scheme`.
 
-The material system is the seam a theme for another platform would be written
-against — Windows, GTK, Android Material, Liquid Glass. It is documented in
-[docs/THEMING.md](docs/THEMING.md), including what is not there yet: a theme is
-still a Rust constant, and nothing loads one at runtime.
+The material system is the seam a theme for another platform is written
+against — Windows, GTK, Android Material, Liquid Glass. Five arrangements ship,
+and every value one is built from is a control on `zervo://settings` →
+Appearance: the fill, the sheen, the blur, the edge, the corner scale, the
+glow, the settle time, how far the accent reaches, and where the chrome ends
+and the page begins. It is documented in [docs/THEMING.md](docs/THEMING.md),
+including what is still not there — palettes, and somewhere to save an
+arrangement under a name of your own.
 
 ## Building
 
@@ -245,16 +249,26 @@ on Linux and a piece of work not yet done on Windows.
 ## Limitations
 
 - **Servo is young.** Expect broken layouts, missing APIs, and sites that
-  refuse the user agent. This is a property of the engine, not of Zervo.
+  refuse the user agent. This is a property of the engine, not of Zervo — and
+  Zervo says so where it happens rather than in this list: a page the engine
+  cannot render gets `zervo://unsupported`, which names what is missing and
+  hands the page to another browser, and a content process that falls over
+  gets `zervo://crashed` rather than a frozen picture of itself.
 - **Streaming video does not work.** YouTube and the rest need Media Source
   Extensions, which Servo does not have. Local and progressive video plays.
 - **No extensions.** The engine has none, so neither does the button.
 - **Passwords cannot be filled into web forms.** The engine offers no hook for
   a submitted form, so saved logins are a vault plus HTTP authentication.
 - **No sync, no profiles.** Not yet.
-- **Themes are a recompile.** The material seam is real and every surface goes
-  through it, but a theme is a Rust constant — no file format, no loader, and
-  palettes are not themeable at all yet. See [docs/THEMING.md](docs/THEMING.md).
+- **Palettes are not themeable.** How a surface is *built* is yours to set, and
+  so is how far the accent reaches into it — and an arrangement can be saved
+  under a name of your own. The colours the two themes start from are still
+  constants. See [docs/THEMING.md](docs/THEMING.md).
+- **0.5.0 is a redesign, and it wants testing.** The chrome, the new tab page,
+  the error pages and the first run all changed. 0.6.0 is the polish pass;
+  until then, [open an issue](https://github.com/Goddv/Zervo/issues) for
+  anything that reads wrong — and say which preset, theme and layout you were
+  in, because most of what has been fixed so far only happened in one of them.
 - **Unsigned builds.** See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Contributing

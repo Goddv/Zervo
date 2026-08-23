@@ -141,6 +141,82 @@ pub(crate) fn paint_chrome_base(root: &Ui, palette: &Palette, top_glow: f32, opa
     let painter = root.ctx().layer_painter(egui::LayerId::background());
     let window = root.ctx().content_rect();
     paint_chrome_fill(&painter, window, window.top(), palette, top_glow, opacity);
+    paint_chrome_aurora(root, &painter, window, palette);
+}
+
+/// The window's own light, under everything.
+///
+/// Turn 5 asks for the accent to stop being a highlight and become a light
+/// source, and most of what makes its artboards look the way they do is not a
+/// tint on the surfaces at all — it is three enormous soft radials behind
+/// them, drifting. Without that the chrome is a flat grey with a slightly
+/// coloured hue and the surfaces have nothing to be lit *by*, which is exactly
+/// what "the accent as a light source" was arguing against.
+///
+/// It is also what makes a translucent light theme legible. Past the first
+/// seam step the page stops painting a base of its own, so if the window has
+/// nothing behind it either then pale glass sits on pale nothing and the text
+/// on it goes with them. The ground is what both problems were missing.
+///
+/// Scaled by the accent strength, so the arrangement that ships quiet stays
+/// quiet: at the shipped 0.045 this is invisible, and it has to be, or the
+/// fallback would stop being the fallback.
+pub(crate) fn paint_chrome_aurora(
+    root: &Ui,
+    painter: &egui::Painter,
+    window: Rect,
+    palette: &Palette,
+) {
+    let candy = palette.appearance.candy;
+    // Below roughly the shipped ratio there is nothing to say.
+    let strength = ((candy - 0.06) / 0.24).clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return;
+    }
+    // The study's own three lights, converted off its stylesheet rather than
+    // guessed at. Each is `radial-gradient(rx ry at x y, colour 0%, transparent
+    // 62%)` inside a box inset -18% on every side, so both the centres and the
+    // radii are in a frame 1.36 times the window: `at 18% 22%` lands at 6% 12%
+    // of the window, and a 44% radius that reaches nothing at 62% of itself is
+    // 0.37 of the window across. Two of them are mostly off the edge, which is
+    // what makes them read as light coming in from outside rather than as
+    // three circles arranged on the background.
+    //
+    // Two are the accent and the middle one is its partner round the wheel —
+    // one hue at three sizes is a gradient, two hues are a room with two lamps
+    // in it. `soft_blob` is round where the study's are slightly elliptical,
+    // which at this softness is not a difference anybody can see.
+    let width = window.width();
+    let time = root.input(|input| input.time) as f32;
+    // The light theme takes about half: the study never drew candy in light,
+    // and at full strength three saturated lights on a pale ground stop being
+    // light and become paint.
+    let scale = if palette.dark { 1.0 } else { 0.5 } * strength;
+    for (x, y, size, tint, alpha, phase) in [
+        (0.065, 0.119, 0.371, palette.accent, 0.85, 0.0),
+        (0.962, 0.908, 0.405, palette.warm, 0.60, 2.1),
+        (0.663, -0.098, 0.438, palette.accent, 0.45, 4.2),
+    ] {
+        // The study's `drift` keyframes, at their period: thirty seconds for
+        // one pass, which is slow enough that you never catch it moving and
+        // fast enough that the window is never quite the same twice.
+        let wander = vec2(
+            (time * 0.05 + phase).sin() * width * 0.03,
+            (time * 0.04 + phase).cos() * width * 0.02,
+        );
+        crate::ui::backdrops::soft_blob(
+            painter,
+            pos2(
+                window.min.x + window.width() * x,
+                window.min.y + window.height() * y,
+            ) + wander,
+            width * size,
+            tint.gamma_multiply(alpha * scale),
+        );
+    }
+    // A drifting light has to be repainted to drift.
+    root.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
 }
 
 /// Blend two colours that are already premultiplied, keeping them
@@ -205,7 +281,7 @@ pub(crate) fn paint_chrome_fill(
 /// card would otherwise add for itself. Applying both put 14pt under the
 /// address pill against 6pt above it, which is the card sitting lower than it
 /// needs to rather than a margin anyone chose.
-pub(crate) fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette, top: f32) -> Rect {
+pub(crate) fn paint_content_backdrop(root: &Ui, outer: Rect, palette: &Palette, top: f32) -> Rect {
     // No background fill here: the window-wide chrome base already covers
     // this area, and filling it again would cut the gradient off at the
     // sidebar edge.
@@ -213,9 +289,10 @@ pub(crate) fn paint_content_backdrop(root: &Ui, outer: Rect, _palette: &Palette,
     // whole square content rect, which would erase the shadow inside the
     // rounded corners and leave square unshadowed patches. It is painted as
     // a ring in `finish_content_frame`, after the corner masks.
+    let margin = theme::content_margin(palette);
     let inset = Rect::from_min_max(
-        pos2(outer.min.x + theme::CONTENT_MARGIN, outer.min.y + top),
-        outer.max - vec2(theme::CONTENT_MARGIN, theme::CONTENT_MARGIN),
+        pos2(outer.min.x + margin, outer.min.y + top),
+        outer.max - vec2(margin, margin),
     );
     snap_rect(inset, root.pixels_per_point())
 }
@@ -352,7 +429,7 @@ pub fn finish_content_frame(
     // The oversized fans must only bleed inward over the blit — clip them so
     // they can't notch the halo painted around the card.
     let fan_painter = painter.with_clip_rect(content_rect);
-    let radius = theme::CONTENT_RADIUS;
+    let radius = theme::content_radius(palette);
     let pad = 1.5;
 
     // One arc segment per physical pixel, so the facets are sub-pixel and the
@@ -361,32 +438,38 @@ pub fn finish_content_frame(
     // polygons disagree, the mask's hard mesh edge overhangs the cut's
     // feathered one and the difference reads as facets along the curve.
     let segments = ((radius * root.pixels_per_point() * 2.0).ceil() as usize).clamp(16, 192);
-    // (corner, arc center, start angle, outward direction)
+    // One radius per corner, in the same order the framebuffer eraser walks
+    // them. They are not all equal once the seam closes: the card is flush
+    // against the sidebar then, its left corners are square, and a mask over a
+    // corner that was never cut is a chrome-coloured notch on the page.
+    let [nw, ne, se, sw] = theme::content_corner_radii(palette);
+    // (radius, corner, arc center, start angle, outward direction)
     let corners = [
         (
+            nw,
             content_rect.left_top(),
-            pos2(content_rect.left() + radius, content_rect.top() + radius),
+            pos2(content_rect.left() + nw, content_rect.top() + nw),
             std::f32::consts::PI,
             vec2(-1.0, -1.0),
         ),
         (
+            ne,
             content_rect.right_top(),
-            pos2(content_rect.right() - radius, content_rect.top() + radius),
+            pos2(content_rect.right() - ne, content_rect.top() + ne),
             1.5 * std::f32::consts::PI,
             vec2(1.0, -1.0),
         ),
         (
+            se,
             content_rect.right_bottom(),
-            pos2(
-                content_rect.right() - radius,
-                content_rect.bottom() - radius,
-            ),
+            pos2(content_rect.right() - se, content_rect.bottom() - se),
             0.0,
             vec2(1.0, 1.0),
         ),
         (
+            sw,
             content_rect.left_bottom(),
-            pos2(content_rect.left() + radius, content_rect.bottom() - radius),
+            pos2(content_rect.left() + sw, content_rect.bottom() - sw),
             0.5 * std::f32::consts::PI,
             vec2(-1.0, 1.0),
         ),
@@ -426,7 +509,10 @@ pub fn finish_content_frame(
     if corners_style != Corners::AlreadyRounded {
         let mut mesh = Mesh::default();
         let mut arc_edges: Vec<(Vec<egui::Pos2>, Color32)> = Vec::new();
-        for (corner, center, start_angle, outward) in corners {
+        for (radius, corner, center, start_angle, outward) in corners {
+            if radius <= 0.5 {
+                continue;
+            }
             let corner_out = corner + outward * pad;
             let mut arc: Vec<egui::Pos2> = (0..=segments)
                 .map(|segment| {
@@ -523,19 +609,23 @@ pub fn finish_content_frame(
     // Drawn AFTER the corner masks: filling it beforehand works on internal
     // pages but not on web pages, where the blit wipes the square content rect
     // and leaves unshadowed patches in the corners.
+    // The halo and the shadow are rings around one silhouette, so they take a
+    // single radius: the widest corner the card actually has. A square corner
+    // simply gets the ring's straight run, which is what it should have.
+    let ring_radius = [nw, ne, se, sw].iter().copied().fold(0.0_f32, f32::max);
     if let Some((tint, amount)) = halo {
         paint_card_halo(
             root,
             &painter,
             content_rect,
-            radius,
+            ring_radius,
             palette,
             top_glow,
             (tint, amount),
         );
     }
     if let Some(amount) = shadow {
-        paint_card_shadow(&painter, content_rect, radius, palette, amount);
+        paint_card_shadow(&painter, content_rect, ring_radius, palette, amount);
     }
 
     // Flat: a single accent-tinted edge all the way around the card — no
@@ -544,7 +634,7 @@ pub fn finish_content_frame(
     if border {
         painter.rect_stroke(
             content_rect,
-            CornerRadius::same(radius as u8),
+            theme::content_corners(palette),
             Stroke::new(1.2_f32, theme::mix(palette.border, palette.accent, 0.55)),
             StrokeKind::Middle,
         );
