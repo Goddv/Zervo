@@ -21,7 +21,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light.png">
-  <img alt="The Zervo window with the sidebar open: workspaces and tabs in a column on the left, the new tab page in a floating content card" src="assets/screenshots/zervo-light.png" width="100%">
+  <img alt="The Zervo window with the sidebar open: workspaces and tabs in a column on the left, and a new tab page showing the time, one search field, the session you left and the sites you use" src="assets/screenshots/zervo-light.png" width="100%">
 </picture>
 </a>
 
@@ -32,7 +32,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-dark-bar.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-light-bar.png">
-  <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred" src="assets/screenshots/zervo-light-bar.png" width="100%">
+  <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred, over a web page rendered by Servo" src="assets/screenshots/zervo-light-bar.png" width="100%">
 </picture>
 </a>
 
@@ -45,6 +45,34 @@
 <a href="assets/screenshots/zervo-light-bar.png">light</a> · <a href="assets/screenshots/zervo-dark-bar.png">dark</a>, full size</sub></td>
 </tr>
 </table>
+
+<br>
+
+**Five presets, and every value behind them is a setting.**
+
+<table>
+<tr>
+<td width="25%"><a href="assets/screenshots/preset-zervo.png"><img alt="The Zervo preset: glass laid on the page, a quiet accent, dark" src="assets/screenshots/preset-zervo.png" width="100%"></a></td>
+<td width="25%"><a href="assets/screenshots/preset-candy.png"><img alt="The Candy preset: the accent as a light source, everything lit and rounder" src="assets/screenshots/preset-candy.png" width="100%"></a></td>
+<td width="25%"><a href="assets/screenshots/preset-flat.png"><img alt="The Flat preset: solid surfaces, a small radius, no sheen" src="assets/screenshots/preset-flat.png" width="100%"></a></td>
+<td width="25%"><a href="assets/screenshots/preset-material.png"><img alt="The Material preset: generous corners, edge to edge, no glass" src="assets/screenshots/preset-material.png" width="100%"></a></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Zervo</b><br>the one that is finished</sub></td>
+<td align="center"><sub><b>Candy</b><br>the accent as a light source</sub></td>
+<td align="center"><sub><b>Flat</b><br>no blur, no sheen, square</sub></td>
+<td align="center"><sub><b>Material</b><br>generous corners, no glass</sub></td>
+</tr>
+</table>
+
+<br>
+
+<a href="assets/screenshots/zervo-appearance.png">
+<img alt="The Appearance settings page: a live specimen of the material pinned under the title, the preset row, and controls for the theme, the accent and how far it reaches into the chrome" src="assets/screenshots/zervo-appearance.png" width="82%">
+</a>
+
+<sub><b>Appearance</b> — the specimen at the top is the real material, not a picture of one:<br>
+it is wrong exactly when the chrome is wrong.</sub>
 
 </div>
 
@@ -76,10 +104,13 @@ so some sites will not work. See [Limitations](#limitations).
 
 ### The new tab page
 
-- **Thirteen kinds of card on a twelve-column grid** — clock, world clocks,
-  search, pinned tabs, most-visited, recent, favourites, downloads, now playing,
-  a note, a to-do list, workspaces, the mark. Press Customise to drag, resize
-  and remove them.
+- **It greets you rather than briefing you.** The time, one search field, the
+  session you actually left, and the three sites you use. A new tab is opened
+  to go somewhere.
+- **Or a board of thirteen cards on a twelve-column grid** — clock, world
+  clocks, search, pinned tabs, most-visited, recent, favourites, downloads, now
+  playing, a note, a to-do list, workspaces, the mark. One press away, and
+  every card can be dragged, resized and taken off.
 - **Eight backdrops**, chosen from the page's own header: Plain, Gradient, Grid,
   Mesh, Aurora, Waves, Particles, or a photograph fetched from Wikimedia Commons
   or Openverse and credited as its licence asks.
@@ -94,6 +125,15 @@ so some sites will not work. See [Limitations](#limitations).
   shadow reach and how far glass frosts are decided in one place and reach the
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
+- **And every number in it is a setting.** Settings → Appearance has five
+  presets and one control per named field: the fill, the sheen, the blur, the
+  edge, the corner scale, the glow, the settle time, and how far the accent
+  reaches into the chrome. Save an arrangement under a name, or copy it out as
+  the Rust `const` you would otherwise have written by hand.
+- **The seam between the chrome and the page is one setting with four steps**,
+  and each step brings the page transition its own geometry implies: a card
+  recedes, a tint dissolves in place, a frame slides, a page under floating
+  glass travels up while the glass stays put.
 - **Frosted, over anything.** The chrome sits on real macOS vibrancy, and
   everything floating over a page frosts against a blurred copy of whatever that
   page is showing — so a menu over a website is the same glass as a card over a
