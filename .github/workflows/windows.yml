@@ -106,6 +106,20 @@ jobs:
           ninja --version
           clang --version
 
+      - name: Install NSIS
+        shell: pwsh
+        # windows-2025 does not ship it. windows-2022 and the arm64 image both
+        # do, which is where the assumption came from — and because a missing
+        # installer is fatal rather than skipped, the job died at the very end,
+        # after the engine had finished compiling. Installed explicitly now, so
+        # it does not depend on what an image happens to carry this month.
+        run: |
+          choco install nsis --no-progress -y
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS'
+          if (-not (Test-Path (Join-Path $nsis 'makensis.exe'))) { throw "NSIS did not install to $nsis" }
+          $nsis | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & (Join-Path $nsis 'makensis.exe') /VERSION
+
       - name: Fetch moztools
         # SpiderMonkey's build needs it, and expects it under the target
         # directory rather than anywhere on PATH.
