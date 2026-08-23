@@ -26,9 +26,9 @@ ICONSET="$WORK/Zervo.iconset"
 # that is not square comes out distorted — in a valid .icns, with exit code 0,
 # and nobody notices until the icon is on someone's dock.
 WIDTH="$(sips -g pixelWidth "$SOURCE" | awk '/pixelWidth/ { print $2 }')"
-HEIGHT="$(sips -g pixelHeight "$SOURCE" | awk '/pixelHeight/ { print $2 }')"
-[ "$WIDTH" = "1024" ] && [ "$HEIGHT" = "1024" ] \
-    || die "$SOURCE is ${WIDTH}x${HEIGHT}, expected 1024x1024"
+if [ "$WIDTH" != "1024" ] || [ "$HEIGHT" != "1024" ]; then
+    die "$SOURCE is ${WIDTH}x${HEIGHT}, expected 1024x1024"
+fi
 
 mkdir -p "$ICONSET"
 
