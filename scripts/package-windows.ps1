@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build and package Zervo for Windows.
 

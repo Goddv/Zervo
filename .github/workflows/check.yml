@@ -175,6 +175,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install a pinned linter for the run blocks
+        # actionlint runs shellcheck over every `run:` block using whatever is
+        # on PATH, and the runner image's copy is older than the pin the other
+        # job uses — so the two jobs, and a laptop, all disagreed about which
+        # findings exist. Same binary everywhere or the gate means nothing.
+        run: |
+          curl -fsSL --retry 3 \
+            "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz" \
+            | tar -xJ --strip-components=1 -C /usr/local/bin \
+              "shellcheck-v$SHELLCHECK_VERSION/shellcheck"
+          shellcheck --version
+
       - name: actionlint
         # Checks the YAML, the expression syntax, the runner labels and — via
         # shellcheck — every `run:` block. Runner labels newer than actionlint's
