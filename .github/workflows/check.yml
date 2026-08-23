@@ -27,6 +27,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned so that what passes on a laptop is what runs here. Match it locally
+  # with `brew install shellcheck` at the same version.
+  SHELLCHECK_VERSION: "0.11.0"
 
 jobs:
   fmt:
@@ -99,7 +102,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            shellcheck desktop-file-utils appstream
+            desktop-file-utils appstream
+
+          # Pinned from upstream rather than taken from apt: Ubuntu's build is
+          # several releases behind, and the two disagree about
+          # which findings exist — so a script could be clean on a developer's
+          # machine and fail here, which is precisely what this job exists to
+          # prevent and precisely what it did. (A comment may not begin with
+          # the tool's own name here: that is how it spells a directive.)
+          curl -fsSL --retry 3 \
+            "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz" \
+            | tar -xJ --strip-components=1 -C /usr/local/bin \
+              "shellcheck-v$SHELLCHECK_VERSION/shellcheck"
+          shellcheck --version
 
       - name: shellcheck
         # -x so the shared library in scripts/lib is followed rather than
@@ -118,7 +133,7 @@ jobs:
         run: |
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path scripts/package-windows.ps1), [ref]$null, [ref]$errors) | Out-Null
+            (Resolve-Path scripts/package-windows.ps1).Path, [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
           Write-Host "scripts/package-windows.ps1 parses"
 
