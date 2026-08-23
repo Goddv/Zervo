@@ -56,6 +56,15 @@ done
 need file
 [ "$(uname -s)" = "Linux" ] || die "AppImages are built on Linux"
 
+# Absolute, before anything is handed to a tool that might not stay in this
+# directory. linuxdeploy and its appimage plugin are packaged binaries that
+# unpack themselves into a temporary directory to run, and a relative
+# LDAI_OUTPUT or --runtime-file resolved from wherever they end up is either a
+# file written somewhere nobody looks or one that cannot be found at all.
+# makensis did exactly this on Windows and cost a release build to notice.
+mkdir -p "$OUTPUT"
+OUTPUT="$(CDPATH='' cd -- "$OUTPUT" && pwd)"
+
 VERSION="$(zervo_version)"
 ARCH="$(zervo_appimage_arch "${TRIPLE%%-*}")"
 SOURCE_DATE_EPOCH="$(zervo_source_date_epoch)"
@@ -76,6 +85,8 @@ export DISABLE_COPYRIGHT_FILES_DEPLOYMENT=1
 LINUXDEPLOY_TAG="${ZERVO_LINUXDEPLOY_TAG:-continuous}"
 RUNTIME_TAG="${ZERVO_APPIMAGE_RUNTIME_TAG:-continuous}"
 TOOLS="${ZERVO_APPIMAGE_TOOLS:-$(zervo_target_dir)/appimage-tools}"
+mkdir -p "$TOOLS"
+TOOLS="$(CDPATH='' cd -- "$TOOLS" && pwd)"
 
 fetch() {
     local url="$1" dest="$2"
@@ -93,7 +104,6 @@ fetch() {
 }
 
 say "tools"
-mkdir -p "$TOOLS"
 LINUXDEPLOY="$TOOLS/linuxdeploy-$ARCH.AppImage"
 PLUGIN="$TOOLS/linuxdeploy-plugin-appimage-$ARCH.AppImage"
 RUNTIME="$TOOLS/runtime-$ARCH"
@@ -151,7 +161,6 @@ done
 
 # ── The AppImage ──────────────────────────────────────────────────────────
 say "AppImage"
-mkdir -p "$OUTPUT"
 OUT="$OUTPUT/Zervo-$VERSION-$ARCH.AppImage"
 
 # zsync update information, so `AppImageUpdate` and appimaged can offer an

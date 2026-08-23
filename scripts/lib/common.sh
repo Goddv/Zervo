@@ -238,6 +238,15 @@ zervo_stage_tree() {
     local stage="$1" binary="$2" prefix="${3:-/usr}"
 
     install -Dm755 "$binary" "$stage$prefix/bin/zervo"
+    # Stripped, because that is what a distribution package is. rpmbuild does
+    # it already — brp-strip runs whenever __debug_package is undefined, which
+    # `%global debug_package %{nil}` leaves it — so without this the .deb and
+    # the .rpm built from one tree disagreed, and lintian said so. There is
+    # very little to remove either way: the release profile carries no debug
+    # info, so this is a symbol table, not symbols.
+    if command -v strip >/dev/null 2>&1; then
+        strip --strip-unneeded "$stage$prefix/bin/zervo" 2>/dev/null || true
+    fi
     install -Dm644 assets/linux/app.zervo.Zervo.desktop \
         "$stage$prefix/share/applications/app.zervo.Zervo.desktop"
     # Scalable, so there is nothing to resize and no image tooling to depend on.
@@ -265,6 +274,10 @@ zervo_stage_tree() {
     install -Dm644 LICENSE "$stage$prefix/share/doc/zervo/copyright"
     install -Dm644 README.md "$stage$prefix/share/doc/zervo/README.md"
     install -Dm644 CHANGELOG.md "$stage$prefix/share/doc/zervo/CHANGELOG.md"
+    # Debian requires a changelog at this exact name, gzipped, and reports its
+    # absence as an error. Same content, spelled the way policy asks.
+    install -Dm644 CHANGELOG.md "$stage$prefix/share/doc/zervo/changelog"
+    gzip -9n -f "$stage$prefix/share/doc/zervo/changelog"
 }
 
 # What Zervo shells out to at runtime on Linux, per packaging system.

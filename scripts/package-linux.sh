@@ -307,6 +307,7 @@ appstream-util validate-relax --nonet \\
 %dir %{_datadir}/doc/zervo
 %doc %{_datadir}/doc/zervo/README.md
 %doc %{_datadir}/doc/zervo/CHANGELOG.md
+%doc %{_datadir}/doc/zervo/changelog.gz
 # Debian's name for the licence, shipped for the .deb out of the same staging
 # tree. rpmbuild fails the build on any file it was handed and not told about,
 # so it is listed here even though %license below is the one Fedora reads.
