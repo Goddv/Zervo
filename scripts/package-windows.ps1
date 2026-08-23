@@ -165,25 +165,29 @@ if (-not $redistRoot) {
     if (Test-Path $vswhere) {
         $vs = & $vswhere -latest -products '*' -property installationPath
         if ($vs) {
+            # The whole redist tree, not a version directory picked out of it.
+            # Sorting those names descending chose `v145` over `14.44.35112` on
+            # the VS2026 image — 'v' sorts after a digit — and there is no
+            # x64 directory under it, so the search below found nothing and the
+            # package went out without a C runtime.
             $candidate = Join-Path $vs 'VC\Redist\MSVC'
-            if (Test-Path $candidate) {
-                # Select-Object rather than [0]: indexing an empty result is a
-                # terminating error under Set-StrictMode, which would take the
-                # whole build down over a missing redistributable.
-                $newest = Get-ChildItem $candidate -Directory |
-                    Sort-Object Name -Descending | Select-Object -First 1
-                if ($newest) { $redistRoot = $newest.FullName }
-            }
+            if (Test-Path $candidate) { $redistRoot = $candidate }
         }
     }
 }
 if ($redistRoot) {
-    $crt = Get-ChildItem (Join-Path $redistRoot $Arch) -Recurse -Include 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll' -ErrorAction SilentlyContinue |
+    # Recursed from the root and filtered by architecture, because the layout
+    # below it has changed with every Visual Studio and will change again. The
+    # 140 in these names is the ABI version, which has been stable since VS2015
+    # and is not the toolset version.
+    $crt = Get-ChildItem $redistRoot -Recurse -File -Include 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*\$Arch\*" } |
+        Sort-Object LastWriteTime -Descending |
         Group-Object Name | ForEach-Object { $_.Group[0] }
     $copied = 0
     foreach ($dll in $crt) { Copy-Item $dll.FullName $Stage -Force; Note "CRT $($dll.Name)"; $copied++ }
     if ($copied -eq 0) {
-        Write-Warning "no Visual C++ runtime DLLs under $redistRoot\$Arch; the package will need the redistributable installed"
+        Write-Warning "no $Arch Visual C++ runtime DLLs under $redistRoot; the package will need the redistributable installed"
     }
 } else {
     Write-Warning 'Visual C++ redistributable DLLs not found; the zip will need the redist installed on the target machine'
@@ -256,10 +260,26 @@ Note $Zip
 # ── Installer ─────────────────────────────────────────────────────────────
 if ($Installer) {
     Say 'installer'
-    $makensis = Get-Command makensis -ErrorAction SilentlyContinue
-    if (-not $makensis) {
-        Write-Warning 'makensis not on PATH; skipping the installer'
+    # NSIS ships on both Windows runner images and is not on PATH there, so
+    # "not found" meant the release quietly went out without the installer it
+    # had been asked for.
+    # Written out rather than chained: under Set-StrictMode a property read on
+    # a null Get-Command result, or a Join-Path with a null root, is a
+    # terminating error rather than an empty answer.
+    $makensisCmd = Get-Command makensis -ErrorAction SilentlyContinue
+    $makensisPath = if ($makensisCmd) { $makensisCmd.Source } else { $null }
+    if (-not $makensisPath) {
+        foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+            if (-not $root) { continue }
+            $guess = Join-Path $root 'NSIS\makensis.exe'
+            if (Test-Path $guess) { $makensisPath = $guess; break }
+        }
+    }
+    if (-not $makensisPath) {
+        # Asked for explicitly, so its absence is an error rather than a note.
+        Die 'makensis not found: install NSIS, or drop -Installer'
     } else {
+        Note "makensis at $makensisPath"
         $SetupName = "Zervo-$Version-windows-$Arch-setup.exe"
         # /NOCD first, and it must come before the script name: makensis
         # otherwise changes directory to the .nsi file's own, and both the
@@ -267,7 +287,7 @@ if ($Installer) {
         # the repository root. Without this the documented local invocation —
         # which does not pass -Output — fails inside NSIS with "no files
         # found", pointing at scripts\windows\target\windows.
-        & $makensis.Source `
+        & $makensisPath `
             '/NOCD' `
             "/DVERSION=$Version" `
             "/DARCH=$Arch" `
