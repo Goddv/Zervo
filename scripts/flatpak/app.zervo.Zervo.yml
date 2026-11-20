@@ -1,0 +1,31 @@
+id: app.zervo.Zervo
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: zervo
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=xdg-download
+  - --talk-name=org.freedesktop.secrets
+modules:
+  - name: zenity
+    buildsystem: meson
+    config-opts:
+      - -Dmanpage=false
+      - -Dwebkitgtk=false
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/zenity/4.2/zenity-4.2.2.tar.xz
+        sha256: 019186a996096ef4fc356e21577b5673f5baa3a29ac8e3d608b753371c18018d
+  - name: zervo
+    buildsystem: simple
+    build-commands:
+      - cp -a . /app/
+    sources:
+      - type: dir
+        path: app

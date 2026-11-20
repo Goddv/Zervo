@@ -734,12 +734,13 @@ fn file_path_url(title: &str) -> Option<String> {
 /// simply has no picture and the caller tries again — but it needs no random
 /// number generator and it never repeats within a session.
 fn random_day(salt: u32) -> (i32, u32, u32) {
-    let now = chrono::Local::now().date_naive();
+    let now = jiff::ZonedDateTime::now().date();
     let span = 365 * 10;
     let back = (random_u32(salt) % span) as i64;
-    let day = now - chrono::Duration::days(back + 1);
-    use chrono::Datelike as _;
-    (day.year(), day.month(), day.day())
+    let day = now
+        .checked_sub(jiff::Span::new().days(back + 1))
+        .unwrap_or(now);
+    (i32::from(day.year()), day.month() as u32, day.day() as u32)
 }
 
 /// Enough randomness to pick a picture with. Not enough for anything else.

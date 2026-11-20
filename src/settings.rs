@@ -488,12 +488,23 @@ pub fn load() -> Settings {
     settings
 }
 
-/// Carry across the one field that changed address.
-///
-/// Everything else in [`crate::theme::Appearance`] is new, so `serde(default)`
-/// is enough for it. This one already had a value somebody chose, and losing
-/// it would silently frost a window they had asked to be solid.
+/// Update built-in presets and carry forward older translucency settings.
 fn migrate(settings: &mut Settings) {
+    use crate::theme::{Preset, Translucency};
+
+    if settings.appearance.preset == Some(Preset::LiquidGlass)
+        && settings.appearance.translucency == Translucency::Frosted
+        && settings.appearance.blur == 0.0
+    {
+        settings.appearance = Preset::LiquidGlass.appearance();
+    }
+
+    // The engine has no extension commands. Accept older toolbar layouts
+    // without keeping a permanently disabled control among their actions.
+    for items in [&mut settings.navbar_left, &mut settings.navbar_right] {
+        items.retain(|item| *item != crate::ui::NavItem::Extensions);
+    }
+
     let Some(translucency) = settings.legacy_translucency.take() else {
         return;
     };
@@ -538,6 +549,30 @@ mod tests {
                 settings.appearance.preset.is_none(),
                 custom,
                 "{chose:?}: whether this counts as the reader's own arrangement"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_builtin_legacy_glass_preset_migrates() {
+        for (preset, expected) in [
+            (r#""LiquidGlass""#, Translucency::LiquidGlass),
+            ("null", Translucency::Frosted),
+        ] {
+            let old = format!(
+                r#"{{"appearance":{{"preset":{preset},"translucency":"Frosted","blur":0}}}}"#
+            );
+            let mut settings: Settings =
+                serde_json::from_str(&old).expect("legacy glass settings parse");
+            migrate(&mut settings);
+            assert_eq!(settings.appearance.translucency, expected);
+            assert_eq!(
+                settings.appearance.blur,
+                if expected == Translucency::LiquidGlass {
+                    Preset::LiquidGlass.appearance().blur
+                } else {
+                    0.0
+                }
             );
         }
     }

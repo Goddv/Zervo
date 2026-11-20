@@ -1,24 +1,7 @@
 name: Linux
 
-# Zervo compiles the Servo engine, so a build from cold is the better part of
-# an hour even with sccache warm. Linux runners are free on public repos, but
-# there is no reason to spend that on every push: this runs when release.yml
-# calls it, or by hand.
-#
-# Four package formats come out of here, all from one staging tree:
-#
-#   .deb       built on Ubuntu 26.04, and so requiring 26.04 or newer: glibc
-#              runs old binaries on new systems and never the reverse. Note
-#              that 26.04 runners are public preview and excluded from
-#              GitHub's SLA — this is the one release artefact that depends on
-#              one. The AppImage covers everything older.
-#   .rpm       built inside Fedora 44, because rpmbuild derives the package's
-#              requirements from the binary and those have to be Fedora's
-#              sonames
-#   AppImage   built inside Ubuntu 22.04, because glibc is backwards compatible
-#              and not forwards, so the oldest supported base reaches furthest
-#   PKGBUILD   for the AUR, validated in an Arch container but published by
-#              hand — the AUR is a git remote tied to one person's SSH key
+# The AppImage and Flatpak share a build against Ubuntu 22.04's glibc.
+# The Debian and Fedora packages use their distributions' library dependencies.
 on:
   workflow_call:
     inputs:
@@ -31,6 +14,10 @@ on:
       media:
         type: boolean
         default: true
+      release-assets:
+        description: Include AppImage update metadata for tagged releases
+        type: boolean
+        default: false
       appimage-base:
         description: Container the AppImage is built in. The oldest glibc reaches furthest.
         type: string
@@ -79,8 +66,8 @@ env:
 jobs:
   # ── .deb ───────────────────────────────────────────────────────────────
   deb:
-    name: Ubuntu 26.04 (.deb)
-    runs-on: ubuntu-26.04
+    name: Ubuntu 24.04 (.deb)
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
 
     steps:
@@ -97,24 +84,6 @@ jobs:
           df -h /
 
       - name: Install build dependencies
-        # Servo's own list, from python/servo/platform/linux_packages/apt,
-        # with four names modernised so that one list serves 22.04, 24.04 and
-        # 26.04: libfreetype6-dev is only a Provides alias for libfreetype-dev,
-        # and libgles2-mesa-dev / libegl1-mesa-dev are transitional stubs over
-        # libglvnd's libgles-dev / libegl-dev.
-        #
-        # libgstreamer-plugins-good1.0-dev was Ubuntu-only and is gone in 26.04
-        # — Ubuntu resynced onto Debian's packaging and the replacement,
-        # libgstreamer-plugins-extra1.0-dev, is pulled in by
-        # libgstreamer-plugins-bad1.0-dev. Asking for it by name fails the
-        # whole apt line on 26.04, so it is probed for rather than listed.
-        #
-        # Three guards on the apt step, because it once hung for three hours
-        # twice. The runner boots with unattended-upgrades holding the dpkg
-        # lock, and apt-get waits on it indefinitely by default; noninteractive
-        # alone does not help, since nothing is being asked. So: stop the
-        # upgrader, give the lock a bounded wait, and cap the step, which turns
-        # a silent multi-hour hang into a failure that says what happened.
         timeout-minutes: 20
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -183,10 +152,6 @@ jobs:
           # a caller could otherwise put shell in it and have it run in a job
           # holding the cargo and sccache credentials.
           PROFILE: ${{ inputs.profile }}
-          # 26.04 ships CMake 4, which removed every policy older than 3.5 and
-          # so refuses to configure a good many of the vendored C++ projects in
-          # this dependency graph. This is the documented escape hatch.
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
           set -o pipefail
           FEATURES=""
@@ -222,7 +187,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: zervo-deb
+          name: zervo-deb-x86_64
           path: |
             target/linux/*.deb
             target/linux/*.tar.gz
@@ -333,27 +298,12 @@ jobs:
           path: target/linux/*.rpm
           if-no-files-found: error
 
-  # ── AppImage ───────────────────────────────────────────────────────────
-  appimage:
-    name: AppImage ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    # Built against the oldest glibc still worth supporting, because glibc runs
-    # old binaries on new systems and never the reverse. A container rather
-    # than the ubuntu-22.04 runner label, which starts deprecation in September
-    # 2026 and disappears in April 2027 — the container outlives it.
+  portable:
+    name: Build portable Linux x86_64
+    runs-on: ubuntu-24.04
     container: ${{ inputs.appimage-base }}
     timeout-minutes: 300
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { runner: ubuntu-24.04, arch: x86_64 }
-
     env:
-      # appimagetool and linuxdeploy are themselves AppImages, and mounting an
-      # AppImage needs FUSE, which containers do not have. This makes them
-      # unpack and exec instead. Set at job level so it reaches every tool.
-      APPIMAGE_EXTRACT_AND_RUN: "1"
       DEBIAN_FRONTEND: noninteractive
 
     steps:
@@ -384,7 +334,7 @@ jobs:
             libvulkan1 libx11-dev libxcb-render0-dev libxcb-shape0-dev \
             libxcb-xfixes0-dev libxmu-dev libxmu6 llvm-dev m4 \
             xorg-dev libxkbcommon0 libxkbcommon-x11-0 \
-            mesa-vulkan-drivers file desktop-file-utils patchelf zsync $OPTIONAL
+            mesa-vulkan-drivers pkg-config python3 xz-utils $OPTIONAL
 
       - uses: actions/checkout@v7
         with:
@@ -416,49 +366,160 @@ jobs:
 
       - uses: ./.github/actions/setup-build
         with:
-          key: appimage
+          key: portable-${{ inputs.appimage-base }}
 
-      - name: Build
+      - name: Build for AppImage and Flatpak
         env:
           FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
           FEATURES_MEDIA: ${{ inputs.media }}
           PROFILE: ${{ inputs.profile }}
         run: |
-          set -o pipefail
+          source scripts/lib/common.sh
           FEATURES=""
           if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
           if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
-          ARGS=(--profile "$PROFILE")
-          if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
-          ./scripts/build-appimage.sh "${ARGS[@]}" 2>&1 | tee build.log
-          if grep -q "Failed to link pre-built archive" build.log; then
-            echo "::warning::mozjs could not fetch its prebuilt SpiderMonkey and built it from source"
-          fi
-
-      - name: What it links against
-        # The AppImage build script already refuses to ship the host-coupled
-        # libraries; this prints what actually remains, so a reviewer can see
-        # it rather than take the script's word for it.
-        env:
-          PROFILE: ${{ inputs.profile }}
-        run: |
-          # Cargo's own mapping: dev and test land in debug/, release and bench
-          # in release/, anything else in a directory of its own name.
-          case "$PROFILE" in
-            dev|test) DIR=debug ;;
-            release|bench) DIR=release ;;
-            *) DIR="$PROFILE" ;;
-          esac
-          ldd "target/$DIR/zervo"
-          ls -la target/linux/
+          zervo_cargo_build "$PROFILE" "$FEATURES" ""
+          mkdir -p target/portable
+          install -m755 "$(zervo_binary_path "$PROFILE" "")" target/portable/zervo
+          strip --strip-unneeded target/portable/zervo
+          ldd target/portable/zervo
 
       - uses: actions/upload-artifact@v7
         with:
-          name: zervo-appimage-${{ matrix.arch }}
+          name: zervo-portable-elf
+          path: target/portable/zervo
+          if-no-files-found: error
+          retention-days: 1
+
+  appimage:
+    name: AppImage x86_64
+    needs: portable
+    runs-on: ubuntu-24.04
+    container: ${{ inputs.appimage-base }}
+    timeout-minutes: 25
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Install packaging and runtime dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl file git desktop-file-utils patchelf zsync \
+            libegl1 libgl1 libgl1-mesa-dri libvulkan1 libfontconfig1 \
+            libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer-plugins-bad1.0-0 \
+            libxkbcommon-x11-0 libxkbcommon0 fonts-dejavu-core xauth xdotool xvfb
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: zervo-portable-elf
+          path: target/portable
+
+      - name: Package and launch without FUSE
+        env:
+          ZERVO_APPIMAGE_UPDATES: ${{ inputs.release-assets && '1' || '0' }}
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          chmod +x target/portable/zervo
+          ./scripts/build-appimage.sh --binary target/portable/zervo
+          ./scripts/smoke-linux-package.sh "$PWD"/target/linux/*.AppImage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-appimage-x86_64
           path: |
             target/linux/*.AppImage
             target/linux/*.zsync
           if-no-files-found: error
+
+  flatpak:
+    name: Flatpak x86_64
+    needs: portable
+    runs-on: ubuntu-24.04
+    # Bubblewrap needs namespaces to build and launch the sandbox in CI.
+    container:
+      image: ubuntu:24.04
+      options: --privileged
+    timeout-minutes: 35
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Install Flatpak tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            binutils ca-certificates dbus-daemon flatpak flatpak-builder git \
+            xauth xdotool xvfb
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: zervo-portable-elf
+          path: target/portable
+
+      - name: Build and install the single-file bundle
+        run: |
+          chmod +x target/portable/zervo
+          ./scripts/build-flatpak.sh --binary target/portable/zervo
+          flatpak install --user --noninteractive -y target/linux/*.flatpak
+
+      - name: Launch the installed sandbox
+        run: |
+          # The shell inside the smoke test resolves the fixture path.
+          # shellcheck disable=SC2016
+          dbus-run-session -- ./scripts/smoke-linux-package.sh bash -ec '
+            exec flatpak run --user --env=LIBGL_ALWAYS_SOFTWARE=1 \
+              --filesystem="$ZERVO_SMOKE_DIR:ro" app.zervo.Zervo "$@"
+          ' bash
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-flatpak-x86_64
+          path: target/linux/*.flatpak
+          if-no-files-found: error
+
+  debian-smoke:
+    name: Install and launch on Debian 13
+    needs: [deb, appimage]
+    runs-on: ubuntu-24.04
+    container: debian:13
+    timeout-minutes: 20
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: zervo-{deb,appimage}-x86_64
+          path: packages
+          merge-multiple: true
+
+      - name: Launch both packages using Debian libraries
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libgl1-mesa-dri libvulkan1 libxkbcommon-x11-0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            fonts-dejavu-core xauth xdotool xvfb ./packages/*.deb
+          chmod +x packages/*.AppImage
+          ./scripts/smoke-linux-package.sh zervo
+          ./scripts/smoke-linux-package.sh "$PWD"/packages/*.AppImage
 
   # ── PKGBUILD ───────────────────────────────────────────────────────────
   # Validation only. Building Zervo from source inside makepkg would be another

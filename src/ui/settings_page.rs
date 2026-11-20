@@ -839,7 +839,22 @@ pub(crate) fn settings_appearance(
         ) {
             actions.push(UiAction::SettingsChanged);
         }
-        note(ui, palette, chrome.settings.appearance.translucency.note());
+        let translucency = chrome.settings.appearance.translucency;
+        let material_note = match translucency {
+            theme::Translucency::LiquidGlass if chrome.native_glass.available => {
+                "The docked sidebar and toolbar use macOS Liquid Glass. Page overlays use Zervo’s frost."
+            },
+            _ if translucency.is_translucent()
+                && palette.translucency == theme::Translucency::Solid =>
+            {
+                "macOS Reduce Transparency is on. Surfaces are shown as solid."
+            },
+            theme::Translucency::LiquidGlass => {
+                "Zervo’s frosted material is used here. Native Liquid Glass requires macOS 26 or later."
+            },
+            _ => translucency.note(),
+        };
+        note(ui, palette, material_note);
         if chrome.settings.appearance.frost_is_capped() {
             note(
                 ui,
@@ -866,8 +881,7 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "What shipped is 10.8. Zero is translucent without blurring — glass that \
-             refracts nothing.",
+            "Controls the blur of Zervo’s frosted surfaces. macOS controls the blur of native glass.",
         );
 
         ui.add_space(10.0);

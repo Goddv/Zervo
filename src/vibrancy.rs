@@ -19,11 +19,11 @@
 #![cfg(target_os = "macos")]
 
 use objc2::rc::Retained;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass};
 use objc2_app_kit::{
-    NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
-    NSWindowOrderingMode,
+    NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSGlassEffectView,
+    NSGlassEffectViewStyle, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWorkspace,
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -119,4 +119,92 @@ pub fn force_layer_transparent(window: &impl HasWindowHandle) -> Option<()> {
         }
     }
     Some(())
+}
+
+/// AppKit owns the material. The window's OpenGL view above it owns the
+/// foreground, pointer routing and accessibility tree.
+pub struct LiquidGlass {
+    content: Retained<NSView>,
+    views: [Retained<NSGlassEffectView>; crate::ui::NativeGlass::SURFACES],
+}
+
+impl LiquidGlass {
+    pub fn install(window: &impl HasWindowHandle) -> Option<Self> {
+        let _mtm = MainThreadMarker::new()?;
+        let class = AnyClass::get(c"NSGlassEffectView")?;
+        let content = content_view(window)?;
+        // SAFETY: the content view is live and we're on AppKit's main thread.
+        let frame = unsafe { content.superview() }?;
+        let views = std::array::from_fn(|_| {
+            // SAFETY: this is AppKit's public NSGlassEffectView class. NSObject's
+            // new returns an owned instance, and this runs on the main thread.
+            let view: Retained<NSGlassEffectView> = unsafe { msg_send![class, new] };
+            view.setStyle(NSGlassEffectViewStyle::Regular);
+            view.setHidden(true);
+            frame.addSubview_positioned_relativeTo(
+                &view,
+                NSWindowOrderingMode::Below,
+                Some(&content),
+            );
+            view
+        });
+        Some(Self { content, views })
+    }
+
+    pub fn update(&self, glass: &crate::ui::NativeGlass, zoom: f32) {
+        // SAFETY: all views and this method are confined to the main thread.
+        let Some(parent) = (unsafe { self.content.superview() }) else {
+            return;
+        };
+        let bounds = self.content.bounds();
+        let zoom = f64::from(zoom);
+        for (view, surface) in self.views.iter().zip(glass.surfaces) {
+            let hidden = surface.is_none();
+            if let Some((rect, radius)) = surface {
+                // Egui measures down from the top, in zoomed points. Convert
+                // through the content view so fullscreen/titlebar changes use
+                // the same coordinate origin as the OpenGL foreground.
+                let x = bounds.min().x + f64::from(rect.left()) * zoom;
+                let y = if self.content.isFlipped() {
+                    bounds.min().y + f64::from(rect.top()) * zoom
+                } else {
+                    bounds.max().y - f64::from(rect.bottom()) * zoom
+                };
+                let local = objc2_foundation::NSRect::new(
+                    objc2_foundation::NSPoint::new(x, y),
+                    objc2_foundation::NSSize::new(
+                        f64::from(rect.width()) * zoom,
+                        f64::from(rect.height()) * zoom,
+                    ),
+                );
+                let frame = self.content.convertRect_toView(local, Some(&parent));
+                // SAFETY: reads the superview of a retained AppKit view on the main thread.
+                if unsafe { view.superview() }.as_deref() != Some(&*parent) {
+                    parent.addSubview_positioned_relativeTo(
+                        view,
+                        NSWindowOrderingMode::Below,
+                        Some(&self.content),
+                    );
+                }
+                if view.frame() != frame {
+                    view.setFrame(frame);
+                }
+                let radius = f64::from(radius) * zoom;
+                if view.cornerRadius() != radius {
+                    view.setCornerRadius(radius);
+                }
+            }
+            if view.isHidden() != hidden {
+                view.setHidden(hidden);
+            }
+        }
+    }
+}
+
+pub fn accessibility_preferences() -> (bool, bool) {
+    let workspace = NSWorkspace::sharedWorkspace();
+    (
+        workspace.accessibilityDisplayShouldReduceTransparency(),
+        workspace.accessibilityDisplayShouldReduceMotion(),
+    )
 }

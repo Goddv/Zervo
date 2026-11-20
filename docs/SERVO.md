@@ -1,127 +1,43 @@
 # Living with the Servo engine
 
-Zervo depends on the published `servo` crate:
+Zervo builds against [Servo v0.8.0](https://github.com/servo/servo/releases/tag/v0.8.0)
+with two downstream patches. `Cargo.toml` selects the release version and
+`.cargo/config.toml` pins the exact revision on
+[`Goddv/servo`](https://github.com/Goddv/servo/tree/codex/zervo-servo-0.8.0).
+Cargo resolves the Servo workspace from that fork, including the sibling
+crates changed by the patches. A fresh clone uses the pin automatically.
 
-```toml
-servo = { version = "0.5.0", default-features = false, features = [...] }
-```
+## Patch status in Servo v0.8.0
 
-Servo releases to crates.io roughly monthly, with every dependency versioned
-and no git sources. Using the registry release rather than a git dependency
-keeps clones small (the Servo monorepo is ~1.9 GB), keeps `Cargo.lock` stable,
-and makes CI caching work.
+- **File downloads.** Servo still lacks an embedder download API. Zervo's
+  [download patch](../patches/servo/0001-embedder-file-downloads.patch) offers
+  attachments, unrenderable responses, and links with a `download` attribute
+  to the embedder. The browser asks before saving, and Servo streams the
+  original response so cookies, authentication, and redirects still apply.
+  Build with `--features engine-downloads` to enable Zervo's save prompt.
+  [Upstream issue #40210](https://github.com/servo/servo/issues/40210).
+- **Text-only web notifications.** Servo v0.8.0 calls the show step when
+  its last image, icon or badge request completes. Notifications with no
+  resources never reach that callback.
+  [The notification patch](../patches/servo/0002-script-show-notification-without-resources.patch)
+  calls the show step directly for those notifications. All Zervo builds pick
+  up this fix.
 
-If you need something newer than the latest release, a git dependency pinned to
-an exact `rev` also works — never a bare branch, since Servo lands dozens of
-commits a day and the embedding API is not stable:
+## Updating Servo
 
-```toml
-servo = { git = "https://github.com/servo/servo", rev = "<40-char sha>", ... }
-```
+1. Compare the patch behavior against the upstream release tag. Remove a patch
+   once the release itself covers its behavior.
+2. Apply the remaining patches in order in a clean checkout of the upstream
+   tag. The download patch uses `git apply`; the notification patch uses
+   `git am`. Push the rebased commits to a versioned branch of the Zervo fork.
+3. Update both Servo declarations in `Cargo.toml` and the fork revision in
+   `.cargo/config.toml`. Compare the Rust toolchain and the macOS deployment
+   target with upstream's settings. Refresh `Cargo.lock` with `cargo update -p servo`.
+4. Check a default build and a build with downloads enabled. Run the
+   [smoke checklist](TESTING.md), including redirects, attachments and a
+   notification without an icon.
 
-## Updating to a newer Servo
-
-1. Bump the version (or `rev`) in `Cargo.toml`.
-3. Check `rust-toolchain.toml` against Servo's — they bump it every few months,
-   and the build fails confusingly if they disagree.
-4. `cargo build` and fix the fallout. The embedder API drifts; typical breakage
-   is renamed types, new trait methods, and changed enum variants. Recent
-   examples: `base::id` became `servo_base::id`; `FetchTaskTarget` lost
-   `process_request_eof` and gained `process_response_length_hint`.
-5. If you use `--features engine-downloads`, re-apply the patch (below).
-6. Run through the smoke checklist in [TESTING.md](TESTING.md).
-
-Keep the update as its own commit, with the Servo revision and date in the
-message, so a regression can be bisected to an engine bump rather than to
-chrome changes.
-
-## The downloads patch
-
-Servo has no download support: `Content-Disposition: attachment` is ignored,
-`<a download>` is an open TODO, and a response the parser cannot render becomes
-a page reading *"Unknown content type (application/zip)."*
-Tracking issue: [servo#40210](https://github.com/servo/servo/issues/40210).
-
-`patches/servo/0001-embedder-file-downloads.patch` adds:
-
-- `DownloadHandling::{WhenUnrenderable, Always}` and a suggested filename on
-  the navigation request.
-- Detection in `main_fetch` using `MimeClassifier::get_media_type` — the
-  parser's *own* notion of what it can render, so the two cannot drift — plus
-  `Content-Disposition: attachment`.
-- Three `WebViewDelegate` methods: `notify_unsupported_response`,
-  `notify_response_chunk`, `notify_response_eof`. The engine keeps performing
-  the transfer, so cookies, auth, redirects and cache all still apply; the
-  embedder only chooses where the bytes land.
-- `<a download>` support, including the spec's same-origin rule for the
-  suggested filename, and the `download` IDL attribute.
-
-The design follows what Servo's maintainers settled on in their Zulip
-discussion, and builds on a prototype branch by jdm
-(`jdm/servo:download-integration`).
-
-## The second patch: notifications with nothing to fetch
-
-`Notification`'s show steps wait for the image, icon and badge a notification
-may carry, and Servo calls `show` from the fetch completion handler once the
-last request lands. A notification carrying none of those queues no requests,
-so nothing ever completes and `show` is never reached — the notification is
-constructed, fires no `error`, and is simply never handed to the embedder.
-
-Since most pages raise a plain title-and-body notification, this made
-`show_notification` unreachable for the common case. Waiting for an empty set
-of fetches is over immediately, which is what the patch says.
-
-`patches/servo/0002-script-show-notification-without-resources.patch`.
-
-### Applying it
-
-Cargo cannot patch a dependency in place, so build against a patched checkout:
-
-```bash
-# once
-gh repo fork servo/servo --clone   # or fork in the web UI and clone
-cd servo
-git checkout -b goddv-patches bd220a152bc…
-git apply /path/to/zervo/patches/servo/0001-embedder-file-downloads.patch
-git commit -am "embedder: offer unrenderable responses to the embedder"
-git am  /path/to/zervo/patches/servo/0002-script-show-notification-without-resources.patch
-git push -u origin goddv-patches
-```
-
-The branch is called `goddv-patches` rather than something named after the one
-patch on it: it is the place engine patches live, and downloads is only the
-first. Anything else Zervo ever has to change in the engine goes on the same
-branch, so there is one thing to rebase when the engine moves.
-
-Zervo already points at the fork: `.cargo/config.toml` carries a
-`[patch.crates-io]` entry pinned to a revision of `goddv-patches`. Bumping the
-engine means editing that one line — it used to live in three workflow files as
-well, which is exactly the sort of thing that drifts.
-
-To work against a local checkout instead, replace the `git`/`rev` entry with a
-path:
-
-```toml
-[patch.crates-io]
-servo = { path = "/absolute/path/to/your/servo/components/servo" }
-```
-
-Note that patching `servo` alone is not always enough: because the patch
-touches `servo-net` and `servo-script` too, you may need to redirect those
-sibling crates to the same checkout.
-
-and build with `--features engine-downloads`.
-
-The patch is *not* optional at the moment, even without that feature. Servo
-renamed `MouseButton`'s variants to `Primary`/`Secondary`/`Auxiliary` on
-21 August 2026 and `src/main.rs` follows the new names, while the newest `servo`
-on crates.io is still 0.5.0 with the old ones. Until a release carries the
-rename, the registry crate does not compile Zervo at all.
-
-### Upstreaming
-
-Don't send this patch upstream. The work is already assigned on servo#40210
-and grant-funded, and Servo's contribution policy forbids AI-generated
-contributions. If you want to help, test their implementation and report what
-you find, in your own words.
+For local engine development, replace the fork entry in `.cargo/config.toml`
+with `servo = { path = "/absolute/path/to/servo/components/servo" }`
+temporarily. Keep downstream patches on the Zervo fork and follow Servo's
+contribution policy when reporting upstream issues.

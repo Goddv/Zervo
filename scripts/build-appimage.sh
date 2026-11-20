@@ -3,7 +3,7 @@
 #
 #   ./scripts/build-appimage.sh [--profile <name>] [--features <list>]
 #                               [--target <triple>] [--output <dir>]
-#                               [--no-build] [--validate-appstream]
+#                               [--no-build | --binary <path>] [--validate-appstream]
 #
 # An AppImage is a single executable file that runs on any distribution new
 # enough for the glibc it was built against, so build it on the OLDEST
@@ -37,6 +37,7 @@ PROFILE="release"
 FEATURES=""
 TRIPLE=""
 BUILD=1
+BUILT=""
 VALIDATE_APPSTREAM=0
 OUTPUT="$(zervo_target_dir)/linux"
 
@@ -47,6 +48,7 @@ while [ $# -gt 0 ]; do
         --target)   TRIPLE="${2:?--target needs a value}"; shift 2 ;;
         --output)   OUTPUT="${2:?--output needs a value}"; shift 2 ;;
         --no-build) BUILD=0; shift ;;
+        --binary)   BUILT="${2:?--binary needs a value}"; BUILD=0; shift 2 ;;
         --validate-appstream) VALIDATE_APPSTREAM=1; shift ;;
         -h|--help) zervo_usage; exit 0 ;;
         *) die "unknown option: $1" ;;
@@ -117,7 +119,7 @@ chmod +x "$LINUXDEPLOY" "$PLUGIN"
 if [ "$BUILD" = 1 ]; then
     zervo_cargo_build "$PROFILE" "$FEATURES" "$TRIPLE"
 fi
-BUILT="$(zervo_binary_path "$PROFILE" "$TRIPLE")"
+BUILT="${BUILT:-$(zervo_binary_path "$PROFILE" "$TRIPLE")}"
 [ -x "$BUILT" ] || die "no binary at $BUILT"
 
 # ── AppDir ────────────────────────────────────────────────────────────────
@@ -133,31 +135,35 @@ zervo_stage_tree "$APPDIR" "$BUILT"
 cp "$APPDIR/usr/share/metainfo/app.zervo.Zervo.metainfo.xml" \
    "$APPDIR/usr/share/metainfo/app.zervo.Zervo.appdata.xml"
 
+# Keep GStreamer and GLib on the same side of the bundle as the host plugins
+# and GStreamer scanner. linuxdeploy otherwise bundles their older core
+# libraries while the host's plugins still load dynamically.
+HOST_LIBRARIES=(
+    'libGL.so*' 'libEGL.so*' 'libGLdispatch.so*' 'libGLX.so*' 'libOpenGL.so*'
+    'libglapi.so*' 'libgbm.so*' 'libdrm.so*' 'libvulkan.so*'
+    'libX11.so*' 'libX11-xcb.so*' 'libxcb*.so*' 'libwayland-*.so*'
+    'libc.so.6' 'libstdc++.so*' 'libgcc_s.so*'
+    'libgst*.so*' 'libglib-2.0.so*' 'libgobject-2.0.so*' 'libgmodule-2.0.so*'
+    'libgio-2.0.so*' 'libgthread-2.0.so*' 'liborc-0.4.so*' 'libffi.so*'
+    'libpcre2-8.so*' 'libunwind.so*' 'libudev.so*' 'libgudev-1.0.so*'
+    'libmount.so*' 'libblkid.so*' 'libselinux.so*'
+)
+EXCLUDES=()
+for pattern in "${HOST_LIBRARIES[@]}"; do
+    EXCLUDES+=("--exclude-library=$pattern")
+done
+
 say "AppDir"
 "$LINUXDEPLOY" --appdir "$APPDIR" \
     --executable "$APPDIR/usr/bin/zervo" \
     --desktop-file "$APPDIR/usr/share/applications/app.zervo.Zervo.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/zervo.png" \
-    --icon-filename zervo
+    --icon-filename zervo "${EXCLUDES[@]}"
 
-# ── The bundled-library check ─────────────────────────────────────────────
-# linuxdeploy applies AppImage's excludelist, and this confirms it. The
-# libraries below are coupled to the host's video driver or display server;
-# shipping a copy of any of them produces a bundle that runs on the build
-# machine and fails on someone else's, which is the one failure this format is
-# supposed to prevent.
-say "checking what was bundled"
-FORBIDDEN="libGL.so libEGL.so libGLdispatch.so libGLX.so libOpenGL.so libglapi.so
-libgbm.so libdrm.so libX11.so libX11-xcb.so libxcb.so libwayland-client.so
-libc.so.6 libstdc++.so libgcc_s.so"
-BAD=0
-for lib in $FORBIDDEN; do
-    if find "$APPDIR" -name "$lib*" -print -quit | grep -q .; then
-        warn "bundled a library that must come from the host: $lib"
-        BAD=1
-    fi
+for pattern in "${HOST_LIBRARIES[@]}"; do
+    bundled="$(find "$APPDIR" -name "$pattern" -print -quit)"
+    [ -z "$bundled" ] || die "host library was bundled: $bundled"
 done
-[ "$BAD" = 0 ] || die "refusing to ship an AppImage carrying host-coupled libraries"
 
 # ── The AppImage ──────────────────────────────────────────────────────────
 say "AppImage"
@@ -167,9 +173,14 @@ OUT="$OUTPUT/Zervo-$VERSION-$ARCH.AppImage"
 # in-place delta update from the latest GitHub release. The glob has to match
 # the .zsync file this run produces, and the .zsync has to be uploaded to the
 # release beside the AppImage.
-export LDAI_UPDATE_INFORMATION="gh-releases-zsync|Goddv|Zervo|latest|Zervo-*-$ARCH.AppImage.zsync"
+if [ "${ZERVO_APPIMAGE_UPDATES:-1}" = 1 ]; then
+    export LDAI_UPDATE_INFORMATION="gh-releases-zsync|Goddv|Zervo|latest|Zervo-*-$ARCH.AppImage.zsync"
+else
+    unset LDAI_UPDATE_INFORMATION
+fi
 export LDAI_RUNTIME_FILE="$RUNTIME"
-export LDAI_OUTPUT="$OUT"
+LDAI_OUTPUT="$WORK/${OUT##*/}"
+export LDAI_OUTPUT
 export LDAI_VERBOSE=1
 export VERSION
 export ARCH
@@ -179,21 +190,17 @@ export ARCH
 # the engine.
 [ "$VALIDATE_APPSTREAM" = 1 ] || export LDAI_NO_APPSTREAM=1
 
-"$PLUGIN" --appdir "$APPDIR"
+# zsyncmake writes to the current directory. Use the temporary directory so
+# a repeated build cannot pick up an unrelated or stale file in the checkout.
+(cd "$WORK" && "$PLUGIN" --appdir "$APPDIR")
 
-[ -f "$OUT" ] || die "the appimage plugin produced no file at $OUT"
-
-# The plugin runs `zsyncmake -u <basename> <absolute path>` with no -o, and
-# zsyncmake writes its output to the *working directory* rather than beside its
-# input — so the .zsync was generated, reported as a success, and left at the
-# repository root while the upload looked for it in target/linux. Moved rather
-# than regenerated: it is correct, it was just written somewhere else.
-ZSYNC="$(basename -- "$OUT").zsync"
-if [ -f "$ZSYNC" ]; then
-    mv -f -- "$ZSYNC" "$OUTPUT/$ZSYNC"
+[ -s "$LDAI_OUTPUT" ] || die "the appimage plugin produced no file at $LDAI_OUTPUT"
+mv -f -- "$LDAI_OUTPUT" "$OUT"
+if [ "${ZERVO_APPIMAGE_UPDATES:-1}" = 1 ]; then
+    ZSYNC="$(basename -- "$OUT").zsync"
+    [ -s "$WORK/$ZSYNC" ] || die "the appimage plugin produced no $ZSYNC"
+    mv -f -- "$WORK/$ZSYNC" "$OUTPUT/$ZSYNC"
     note "$OUTPUT/$ZSYNC"
-elif [ ! -f "$OUTPUT/$ZSYNC" ]; then
-    warn "no $ZSYNC anywhere; AppImageUpdate will not be able to update this build"
 fi
 chmod +x "$OUT"
 zervo_sha256 "$OUT" >&2

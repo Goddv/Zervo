@@ -386,9 +386,8 @@ pub(crate) fn paint_card_shadow(
 /// window the destination-out pass takes the colour with it and leaves black.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Corners {
-    /// An internal page, drawn by egui with rounded corners of its own.
-    /// Masking here would lay a second tint over the first.
-    AlreadyRounded,
+    /// Internally rounded content, or a cut that directly reveals native chrome.
+    NoMask,
     /// Cut out of the framebuffer. Paint the chrome back at its own tint.
     Cut,
     /// Nothing could be cut, so the page's square corner is still there and
@@ -506,7 +505,7 @@ pub fn finish_content_frame(
     // meets the page is a hard, stair-stepped edge. Each arc is therefore
     // retraced afterwards with a stroked line — which epaint *does*
     // antialias — in the same colour, feathering the boundary.
-    if corners_style != Corners::AlreadyRounded {
+    if corners_style != Corners::NoMask {
         let mut mesh = Mesh::default();
         let mut arc_edges: Vec<(Vec<egui::Pos2>, Color32)> = Vec::new();
         for (radius, corner, center, start_angle, outward) in corners {
@@ -628,14 +627,17 @@ pub fn finish_content_frame(
         paint_card_shadow(&painter, content_rect, ring_radius, palette, amount);
     }
 
-    // Flat: a single accent-tinted edge all the way around the card — no
-    // white rim light, no highlights. It also antialiases the corner masks,
-    // whose mesh triangles have hard edges.
+    // The outline also antialiases the hard edges of the corner meshes.
     if border {
+        let stroke = if palette.translucency == theme::Translucency::LiquidGlass {
+            Stroke::new(1.0_f32, palette.border)
+        } else {
+            Stroke::new(1.2_f32, theme::mix(palette.border, palette.accent, 0.55))
+        };
         painter.rect_stroke(
             content_rect,
             theme::content_corners(palette),
-            Stroke::new(1.2_f32, theme::mix(palette.border, palette.accent, 0.55)),
+            stroke,
             StrokeKind::Middle,
         );
     }

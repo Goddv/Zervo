@@ -419,7 +419,7 @@ pub fn shapes(rect: Rect, palette: &Palette, glass: Glass) -> Vec<Shape> {
     // How much of this surface's own material survives, per the reader's
     // setting — unless the material has opted out of having one.
     // What is behind this surface, blurred, if anything is.
-    let backdrop = (material.frosts && palette.translucency == crate::theme::Translucency::Frosted)
+    let backdrop = (material.frosts && palette.translucency.is_translucent())
         .then(|| palette.backdrop_under(rect))
         .flatten();
     let sheer = if material.translucency {

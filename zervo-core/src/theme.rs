@@ -347,15 +347,22 @@ pub enum Translucency {
     /// What Zervo has always looked like, now applied to everything the
     /// material draws rather than to the window alone.
     Frosted,
+    /// AppKit glass for browser chrome, with frosted surfaces elsewhere.
+    LiquidGlass,
 }
 
 impl Translucency {
-    pub const ALL: [Translucency; 2] = [Translucency::Solid, Translucency::Frosted];
+    pub const ALL: [Translucency; 3] = [Self::Solid, Self::Frosted, Self::LiquidGlass];
+
+    pub fn is_translucent(self) -> bool {
+        self != Self::Solid
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             Translucency::Solid => "Solid",
             Translucency::Frosted => "Frosted",
+            Translucency::LiquidGlass => "Liquid Glass",
         }
     }
 
@@ -364,9 +371,8 @@ impl Translucency {
             Translucency::Solid => {
                 "Surfaces are their own colour. The most readable, and the least glass."
             },
-            Translucency::Frosted => {
-                "What is behind shows through — the page, the chrome, the wallpaper's blur."
-            },
+            Translucency::Frosted => "Softens the content and wallpaper behind surfaces.",
+            Translucency::LiquidGlass => "Uses Apple’s glass for docked chrome on supported Macs.",
         }
     }
 
@@ -381,7 +387,7 @@ impl Translucency {
     pub fn backdrop(self) -> SystemBackdrop {
         match self {
             Translucency::Solid => SystemBackdrop::Opaque,
-            Translucency::Frosted => SystemBackdrop::Frosted,
+            Translucency::Frosted | Translucency::LiquidGlass => SystemBackdrop::Frosted,
         }
     }
 
@@ -404,6 +410,7 @@ impl Translucency {
         match self {
             Translucency::Solid => 1.0,
             Translucency::Frosted => 0.08,
+            Translucency::LiquidGlass => 0.5,
         }
     }
 
@@ -924,8 +931,7 @@ impl Preset {
             Preset::Candy => "The accent is the light source, the seam is gone, everything glows.",
             Preset::Flat => "Solid, a small radius and no sheen — a flat desktop toolkit.",
             Preset::LiquidGlass => {
-                "Frosted with a blur of zero — a material may be translucent without \
-                 blurring. Sheen and lift carry it instead."
+                "Apple’s glass for docked controls on supported Macs, with frosted surfaces elsewhere."
             },
             Preset::Material => {
                 "A generous radius, a longer shadow, no sheen, and glow standing in for \
@@ -1024,24 +1030,24 @@ impl Preset {
             },
             Preset::LiquidGlass => Appearance {
                 preset: Some(self),
-                seam: Seam::OneSurface,
-                gap: 0.0,
-                translucency: Translucency::Frosted,
-                blur: 0.0,
-                fill: 0.34,
-                sheen: 44.0,
-                edge: Edge::Bevel,
-                corners: 1.6,
-                glow: 0.4,
-                motion: 0.22,
-                candy: 0.12,
+                seam: Seam::Card,
+                gap: 8.0,
+                translucency: Translucency::LiquidGlass,
+                blur: 14.0,
+                fill: 0.72,
+                sheen: 7.0,
+                edge: Edge::Hairline,
+                corners: 1.2,
+                glow: 0.0,
+                motion: 0.14,
+                candy: 0.045,
                 workspace_accent: false,
-                sweep: true,
+                sweep: false,
                 liquid: true,
                 pill_progress: true,
                 spine: Spine::TabTicks,
                 shelf: ShelfHome::Wherever,
-                align_nav: true,
+                align_nav: false,
             },
             Preset::Material => Appearance {
                 preset: Some(self),
@@ -1196,7 +1202,7 @@ impl Appearance {
     /// control on. Worth saying out loud on the settings page, because
     /// otherwise the Fill slider appears to stop responding near the top.
     pub fn frost_is_capped(&self) -> bool {
-        self.translucency == Translucency::Frosted && self.fill > THICKEST_TINT
+        self.translucency.is_translucent() && self.fill > THICKEST_TINT
     }
 
     /// This arrangement as JSON — the file format the settings page writes
@@ -1221,7 +1227,7 @@ impl Appearance {
         // already refuses to take a surface past this same ceiling, and for
         // the same reason: past it the blur has stopped showing through and it
         // is not glass any more.
-        let fill = if self.translucency == Translucency::Frosted {
+        let fill = if self.translucency.is_translucent() {
             asked.min(THICKEST_TINT)
         } else {
             asked
@@ -1241,7 +1247,7 @@ impl Appearance {
             // Translucent and blurred are two different things, and the panel
             // lets them come apart: a material may be see-through and refract
             // nothing at all. `frosts` is what asks for the expensive half.
-            frosts: self.translucency == Translucency::Frosted && blur > 0.0,
+            frosts: self.translucency.is_translucent() && blur > 0.0,
             blur,
             radius: Material::ZERVO.radius.scaled(self.corners.max(0.0)),
             animation: self.motion.max(0.0),
@@ -1549,7 +1555,7 @@ impl Palette {
     /// So the wash thickens exactly as far as it has to and no further. Over a
     /// page the theme already agrees with, nothing changes at all.
     pub fn tint_over(&self, rect: Rect, wanted: f32) -> f32 {
-        if self.translucency != Translucency::Frosted {
+        if !self.translucency.is_translucent() {
             return wanted;
         }
         let Some(behind) = self.page_brightness_under(rect) else {
@@ -2318,7 +2324,7 @@ pub fn apply(ctx: &Context, palette: &Palette) {
     visuals.hyperlink_color = palette.accent;
 
     visuals.selection.bg_fill = palette.active;
-    visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
+    visuals.selection.stroke = Stroke::new(1.0_f32, palette.ink_on(palette.active).0);
 
     // Tooltips and context menus are drawn by egui itself, from these fields
     // rather than from the palette — so left alone they keep egui's defaults:

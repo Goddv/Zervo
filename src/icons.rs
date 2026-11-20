@@ -5,7 +5,7 @@
 
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Painter, Rect, Response, Sense,
-    Ui, vec2,
+    Stroke, StrokeKind, Ui, vec2,
 };
 
 use crate::phosphor::glyph;
@@ -231,10 +231,7 @@ pub fn morph_button(
         cross,
         color,
     );
-    if enabled {
-        response.clone().on_hover_cursor(CursorIcon::PointingHand);
-    }
-    response
+    finish_button(ui, palette, response, enabled)
 }
 
 /// A ghost icon button: rounded hover fill, palette-derived glyph color,
@@ -292,8 +289,25 @@ pub fn icon_button(
         color,
     );
 
-    if enabled {
-        response.clone().on_hover_cursor(CursorIcon::PointingHand);
+    finish_button(ui, palette, response, enabled)
+}
+
+fn finish_button(ui: &Ui, palette: &Palette, response: Response, enabled: bool) -> Response {
+    if enabled && response.has_focus() {
+        paint_focus(ui, palette, response.rect, Tier::Row);
     }
-    response
+    if enabled {
+        response.on_hover_cursor(CursorIcon::PointingHand)
+    } else {
+        response
+    }
+}
+
+pub fn paint_focus(ui: &Ui, palette: &Palette, rect: Rect, tier: Tier) {
+    ui.painter().rect_stroke(
+        rect,
+        palette.corner(tier),
+        Stroke::new(1.5_f32, palette.accent),
+        StrokeKind::Inside,
+    );
 }

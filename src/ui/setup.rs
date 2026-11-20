@@ -301,7 +301,7 @@ fn preset_blurb(preset: Preset) -> &'static str {
         Preset::Zervo => "Quiet, settled, finished",
         Preset::Candy => "Frosted, lit, colourful",
         Preset::Flat => "No blur, no sheen, square",
-        Preset::LiquidGlass => "Translucent, unblurred",
+        Preset::LiquidGlass => "Native glass on supported Macs",
         Preset::Material => "Generous corners, no glass",
     }
 }

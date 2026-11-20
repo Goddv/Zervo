@@ -1,4 +1,5 @@
 name: Release
+run-name: ${{ github.event_name == 'workflow_dispatch' && !inputs.tag && format('Preview build of {0} at {1}', github.ref_name, github.sha) || format('Release {0}', inputs.tag || github.ref_name) }}
 
 # The one workflow that owns a release.
 #
@@ -18,9 +19,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: An existing tag to build and release
+        description: Existing release tag. Leave blank to build the selected commit as preview artifacts.
         type: string
-        required: true
+        required: false
       publish:
         description: Publish the draft at the end, rather than leaving it for review
         type: boolean
@@ -47,7 +48,7 @@ concurrency:
 
 jobs:
   draft:
-    name: Draft the release
+    name: Verify ref and prepare release
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -65,10 +66,16 @@ jobs:
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -z "$INPUT_TAG" ]; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null \
+          TAG_COMMIT="$(git rev-parse -q --verify "refs/tags/$TAG^{commit}")" \
             || { echo "no such tag: $TAG"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$TAG_COMMIT" ] \
+            || { echo "select $TAG as the workflow ref to build that release"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           # The tag and the version have to agree. The AUR PKGBUILDs build
           # their download URLs out of the version — `releases/download/v$pkgver/`
@@ -78,19 +85,12 @@ jobs:
           cargo_version() {
             sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' | head -1
           }
-          TAGGED="$(git show "$TAG:Cargo.toml" | cargo_version)"
+          TAGGED="$(cargo_version < Cargo.toml)"
           [ "$TAG" = "v$TAGGED" ] \
             || { echo "tag $TAG does not match the Cargo.toml version at that tag ($TAGGED)"; exit 1; }
 
-          # And the workflow itself has to be running from the tagged commit,
-          # because a reusable workflow always runs at the caller's ref: on a
-          # manual run from a branch, the build jobs would compile the branch
-          # head and attach it to the tag's release.
-          TREE="$(cargo_version < Cargo.toml)"
-          [ "$TREE" = "$TAGGED" ] \
-            || { echo "this run is building $TREE but releasing $TAG; run it from the tagged commit"; exit 1; }
-
       - name: Create the draft
+        if: steps.meta.outputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -115,24 +115,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The tag, not the branch head. On a tag push these are the same
-          # thing; on a manual run they are not, and `git archive "$TAG"` in a
-          # depth-1 checkout of a branch cannot resolve a tag it never fetched.
-          ref: ${{ inputs.tag || github.ref }}
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Archive
-        env:
-          INPUT_TAG: ${{ inputs.tag }}
         run: |
           VERSION="$(sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' Cargo.toml | head -1)"
-          TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
           mkdir -p dist
           git archive --format=tar.gz \
             --prefix="zervo-$VERSION/" \
             -o "dist/zervo-$VERSION-src.tar.gz" \
-            "$TAG"
+            HEAD
           sha256sum dist/*.tar.gz
 
       - uses: actions/upload-artifact@v7
@@ -144,6 +136,8 @@ jobs:
   linux:
     needs: draft
     uses: ./.github/workflows/linux.yml
+    with:
+      release-assets: ${{ needs.draft.outputs.tag != '' }}
 
   macos:
     needs: draft
@@ -169,7 +163,8 @@ jobs:
   # generates it correctly.
   aur:
     name: AUR packages
-    needs: [source, linux]
+    needs: [draft, source, linux]
+    if: needs.draft.outputs.tag != ''
     runs-on: ubuntu-24.04
     container: quay.io/archlinux/archlinux:base-devel
     steps:
@@ -181,7 +176,6 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -192,9 +186,8 @@ jobs:
       # finished, which is not a thing to build a checksum on.
       - uses: actions/download-artifact@v8
         with:
-          pattern: zervo-deb-*
+          name: zervo-deb-x86_64
           path: incoming
-          merge-multiple: true
 
       - uses: actions/download-artifact@v8
         with:
@@ -229,10 +222,7 @@ jobs:
   publish:
     name: Checksums, provenance and publish
     needs: [draft, source, linux, macos, windows, aur]
-    # A partial failure leaves the draft alone rather than publishing half a
-    # release. `!cancelled()` rather than `success()` so that a cancelled run
-    # is also not treated as a reason to publish.
-    if: ${{ !contains(needs.*.result, 'failure') && !cancelled() }}
+    if: needs.draft.outputs.tag != ''
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -255,13 +245,19 @@ jobs:
           # and tarred, because it is two packages of two files each.
           find incoming -type f \
                \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
-                  -o -name '*.zsync' -o -name '*.dmg' -o -name '*.zip' \
+                  -o -name '*.zsync' -o -name '*.flatpak' -o -name '*.dmg' -o -name '*.zip' \
                   -o -name '*setup.exe' -o -name '*.tar.gz' \) \
                -exec cp -n {} release/ \;
           if [ -d incoming/zervo-aur ]; then
             tar -czf release/zervo-aur-packages.tar.gz -C incoming/zervo-aur .
           fi
           ls -la release/
+
+      - name: Require both portable Linux formats
+        run: |
+          compgen -G 'release/*.AppImage'
+          compgen -G 'release/*.AppImage.zsync'
+          compgen -G 'release/*.flatpak'
 
       - name: Checksums
         # One file covering every platform, which is the thing three

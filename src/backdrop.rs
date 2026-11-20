@@ -150,7 +150,7 @@ impl PageBackdrop {
     pub fn take(&mut self, ground: egui::Color32) -> Option<egui::ColorImage> {
         let (mut pixels, size) = self.ready.take()?;
         let (red, green, blue) = (ground.r(), ground.g(), ground.b());
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             let missing = u32::from(255 - pixel[3]);
             let over = |channel: u8, base: u8| {
                 (u32::from(channel) + u32::from(base) * missing / 255).min(255) as u8

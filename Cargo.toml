@@ -5,7 +5,7 @@ members = ["zervo-core"]
 name = "zervo"
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.99"
 license = "MPL-2.0"
 description = "A calm, workspace-oriented browser built on the Servo engine"
 repository = "https://github.com/goddv/zervo"
@@ -65,30 +65,15 @@ workspace = true
 
 [dependencies]
 # ── The engine ────────────────────────────────────────────────────────────
-# Servo publishes to crates.io (roughly monthly). Using the registry release
-# rather than a git dependency keeps clones small and the lockfile stable;
-# updating Zervo to a newer engine is a one-line version bump here.
-# See docs/SERVO.md.
-servo = { version = "0.5.0", default-features = false, features = [
+# The version follows Servo's published release. .cargo/config.toml pins the
+# corresponding source with Zervo's patches. See docs/SERVO.md.
+servo = { version = "=0.8.0", default-features = false, features = [
     "background_hang_monitor",
     "baked-in-resources",
     "bundled_freetype",
     "clipboard",
     "js_jit",
-    # WebGL and WebCrypto are named because they stopped being free. In the
-    # published 0.5.0 crate `servo-webgl` was an ordinary dependency and the
-    # crypto stack came with `script`; upstream has since put both behind
-    # cargo features, so `default-features = false` — which this has always
-    # had — silently dropped them when the pin moved to the newer engine.
-    #
-    # It is not a subtle loss. `window.crypto` becomes undefined, so
-    # `crypto.randomUUID()` and `crypto.getRandomValues()` throw on a large
-    # slice of the web, and `canvas.getContext("webgl")` returns null. Neither
-    # produces an error that names the browser. Checked by diffing the
-    # lockfile across the bump: seventy-one crates left the graph, among them
-    # `servo-webgl`, `aes`, `rsa`, `ecdsa`, `ed25519-dalek`, `ml-kem` and
-    # `sha3`.
-    "webcrypto",
+    "subtlecrypto",
     "webgl",
     "webgpu",
 ] }
@@ -113,10 +98,8 @@ glow = "0.17.0"
 winit = "0.30.13"
 
 # ── Support ───────────────────────────────────────────────────────────────
-chrono = "0.4"
-# The IANA zone table, for the new tab page's world clocks. Fixed UTC offsets
-# would have been one fewer dependency and wrong twice a year.
-chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
+# Bundle the IANA database so world clocks work without system zone data.
+jiff = { version = "1.0", features = ["tzdb-bundle-always"] }
 dirs = "6.0"
 euclid = "0.22"
 # Decoding downloaded wallpapers. Already in the tree as one of Servo's own
@@ -147,14 +130,16 @@ webpki-roots = "1.0"
 # default-features = false has to be repeated: Cargo takes the union of the
 # two declarations, so leaving it off here would switch Servo's defaults back
 # on for this target alone.
-servo = { version = "0.5.0", default-features = false, features = ["no-wgl"] }
+servo = { version = "=0.8.0", default-features = false, features = ["no-wgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSAccessibility",
     "NSAnimationContext",
     "NSApplication",
     "NSColor",
+    "NSGlassEffectView",
     "NSGraphics",
     "NSImage",
     "NSOpenPanel",
@@ -164,6 +149,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSView",
     "NSVisualEffectView",
     "NSWindow",
+    "NSWorkspace",
     "objc2-quartz-core",
 ] }
 objc2-foundation = { version = "0.3.1", default-features = false, features = [

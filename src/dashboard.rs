@@ -1039,27 +1039,35 @@ fn draw_widget(
 
     match kind {
         WidgetKind::Clock => {
-            let now = chrono::Local::now();
+            let now = jiff::ZonedDateTime::now();
+            let show_date = rect.width() >= 64.0;
+            let size = ((rect.width() - 8.0) / 3.0).clamp(8.0, if roomy { 30.0 } else { 21.0 });
+            let offset = if !show_date {
+                0.0
+            } else if roomy {
+                12.0
+            } else {
+                7.0
+            };
             painter.text(
-                pos2(
-                    rect.center().x,
-                    rect.center().y - if roomy { 12.0 } else { 7.0 },
-                ),
+                pos2(rect.center().x, rect.center().y - offset),
                 Align2::CENTER_CENTER,
-                now.format("%H:%M").to_string(),
-                FontId::proportional(if roomy { 30.0 } else { 21.0 }),
+                now.strftime("%H:%M").to_string(),
+                FontId::proportional(size),
                 palette.text,
             );
-            painter.text(
-                pos2(
-                    rect.center().x,
-                    rect.center().y + if roomy { 16.0 } else { 12.0 },
-                ),
-                Align2::CENTER_CENTER,
-                now.format("%a %-d %b").to_string(),
-                FontId::proportional(11.5),
-                palette.text_muted,
-            );
+            if show_date {
+                painter.text(
+                    pos2(
+                        rect.center().x,
+                        rect.center().y + if roomy { 16.0 } else { 12.0 },
+                    ),
+                    Align2::CENTER_CENTER,
+                    now.strftime("%a %-d %b").to_string(),
+                    FontId::proportional(11.5),
+                    palette.text_muted,
+                );
+            }
             root.ctx()
                 .request_repaint_after(std::time::Duration::from_secs(20));
         },

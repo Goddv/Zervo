@@ -8,6 +8,7 @@
 #   --rpm        Fedora/RHEL package          (needs rpmbuild)
 #   --tarball    portable .tar.gz             (what the AUR -bin package eats)
 #   --appimage   single-file AppImage         (delegates to build-appimage.sh)
+#   --flatpak    single-file Flatpak          (needs flatpak-builder and Flathub)
 #   --pkgbuild   PKGBUILD + .SRCINFO for the AUR
 #   --all        everything the machine has the tools for
 #
@@ -40,7 +41,7 @@ TRIPLE=""
 BUILD=1
 VERSION_SUFFIX=""
 OUTPUT="$(zervo_target_dir)/linux"
-WANT_DEB=0 WANT_RPM=0 WANT_TARBALL=0 WANT_APPIMAGE=0 WANT_PKGBUILD=0
+WANT_DEB=0 WANT_RPM=0 WANT_TARBALL=0 WANT_APPIMAGE=0 WANT_FLATPAK=0 WANT_PKGBUILD=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -54,12 +55,14 @@ while [ $# -gt 0 ]; do
         --rpm)      WANT_RPM=1; shift ;;
         --tarball)  WANT_TARBALL=1; shift ;;
         --appimage) WANT_APPIMAGE=1; shift ;;
+        --flatpak)  WANT_FLATPAK=1; shift ;;
         --pkgbuild) WANT_PKGBUILD=1; shift ;;
         --all)
             WANT_TARBALL=1
             WANT_PKGBUILD=1
             command -v dpkg-deb >/dev/null 2>&1 && WANT_DEB=1
             command -v rpmbuild >/dev/null 2>&1 && WANT_RPM=1
+            command -v flatpak-builder >/dev/null 2>&1 && WANT_FLATPAK=1
             # The AppImage needs no local tool — build-appimage.sh downloads
             # linuxdeploy and the runtime — but it does need Linux and a
             # network, so it is in only when this is Linux.
@@ -70,14 +73,14 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ "$((WANT_DEB + WANT_RPM + WANT_TARBALL + WANT_APPIMAGE + WANT_PKGBUILD))" = 0 ]; then
-    die "nothing to do: pass at least one of --deb --rpm --tarball --appimage --pkgbuild --all"
+if [ "$((WANT_DEB + WANT_RPM + WANT_TARBALL + WANT_APPIMAGE + WANT_FLATPAK + WANT_PKGBUILD))" = 0 ]; then
+    die "nothing to do: pass at least one of --deb --rpm --tarball --appimage --flatpak --pkgbuild --all"
 fi
 
 # --pkgbuild renders two text files from templates. It reads no binary and no
 # staging tree, so on its own it needs neither — and demanding an hour of Servo
 # build to produce a PKGBUILD was absurd.
-NEEDS_BINARY=$((WANT_DEB + WANT_RPM + WANT_TARBALL + WANT_APPIMAGE))
+NEEDS_BINARY=$((WANT_DEB + WANT_RPM + WANT_TARBALL + WANT_APPIMAGE + WANT_FLATPAK))
 
 # Whether this build has media in it, which decides whether the packages ask
 # for the GStreamer plugins. Normalised, because cargo takes both
@@ -367,6 +370,12 @@ if [ "$WANT_APPIMAGE" = 1 ]; then
     [ -n "$FEATURES" ] && APPIMAGE_ARGS+=(--features "$FEATURES")
     [ -n "$TRIPLE" ] && APPIMAGE_ARGS+=(--target "$TRIPLE")
     ./scripts/build-appimage.sh "${APPIMAGE_ARGS[@]}"
+fi
+
+# ── Flatpak ───────────────────────────────────────────────────────────────
+if [ "$WANT_FLATPAK" = 1 ]; then
+    [ -z "$TRIPLE" ] || die "build the Flatpak natively without --target"
+    ./scripts/build-flatpak.sh --binary "$BUILT" --output "$OUTPUT"
 fi
 
 # ── PKGBUILD ──────────────────────────────────────────────────────────────

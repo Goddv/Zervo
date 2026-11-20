@@ -57,8 +57,7 @@ struct Offer {
 /// An offer the user accepted, waiting for the download manager to pick it up.
 #[cfg(feature = "engine-downloads")]
 pub struct Accepted {
-    pub request_id: servo::RequestId,
-    pub url: String,
+    pub response: servo::UnsupportedResponse,
     pub filename: String,
 }
 
@@ -138,10 +137,9 @@ impl Controls {
     /// Offer a download. Nothing is accepted and nothing is written until the
     /// user says so.
     #[cfg(feature = "engine-downloads")]
-    pub fn push_offer(&mut self, response: servo::UnsupportedResponse, filename: String) {
-        // One at a time; a second offer arriving while the first is on screen
-        // is dropped, and dropping declines.
+    pub fn push_offer(&mut self, mut response: servo::UnsupportedResponse, filename: String) {
         if self.offer.is_some() {
+            response.decline();
             return;
         }
         let host = response.url.host_str().unwrap_or("This page").to_owned();
@@ -382,18 +380,15 @@ impl Controls {
         let Some(offer) = self.offer.take() else {
             return;
         };
+        let mut response = offer.response;
         if !allow {
-            // Dropping the response declines it.
+            response.decline();
             return;
         }
-        let mut response = offer.response;
-        let record = Accepted {
-            request_id: response.request_id,
-            url: response.url.to_string(),
+        self.accepted.push(Accepted {
+            response,
             filename: offer.filename,
-        };
-        response.accept();
-        self.accepted.push(record);
+        });
     }
 
     /// The authentication prompt: who is asking, which login is on offer, and

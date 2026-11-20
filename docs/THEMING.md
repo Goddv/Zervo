@@ -89,13 +89,16 @@ corners are half its height.
 
 ## Translucency
 
-One reader-facing setting, `Translucency`, with two steps: **Solid** and
-**Frosted**. It drives three things at once, so they cannot drift apart:
+The `Translucency` setting offers **Solid**, **Frosted**, and **Liquid Glass**.
+It controls the window backdrop, chrome and overlay materials:
 
 - what the *window* asks the platform for (`SystemBackdrop::Opaque` or
   `Frosted`),
 - the tint over the window's own chrome,
-- the tint on everything the material draws over that chrome.
+- the tint on everything the material draws over that chrome,
+- the use of AppKit glass in the docked sidebar and toolbar with `LiquidGlass`
+  on macOS 26 and later. In-page overlays and other operating systems use
+  Zervo’s frosted material.
 
 A material can opt out (`translucency: false`) and then the setting does
 nothing, which is what a flat desktop toolkit wants.
@@ -187,7 +190,7 @@ would only be a way to get them wrong:
   had.
 - **The light theme's sheen** keeps its ratio to the dark one's. The same wash
   that reads as a sheen over near-black is invisible over near-white.
-- **`frosts`** is `translucency == Frosted && blur > 0`. Translucent and
+- **`frosts`** is `translucency.is_translucent() && blur > 0`. Translucent and
   blurred are two different things, and the panel lets them come apart: a
   material may be see-through and refract nothing at all.
 
@@ -201,7 +204,7 @@ prose. `Preset::appearance` is the whole definition of each.
 | `Zervo` | The one that is finished: the chrome laid on the page, favicons down the spine, the shelf wherever the chrome is, every motion on, and the accent taken from the space you are in. **The colours are still the ones that shipped** — `candy` is the only field the palette reads for them and it has not moved — and there is a test pinning them for all ten accents in both themes. |
 | `Candy` | The accent as a light source, no seam, everything glowing. The default. |
 | `Flat` | Solid, a small radius, no sheen — a flat desktop toolkit. |
-| `Liquid Glass` | Frosted with a blur of zero. Sheen and lift carry it instead. |
+| `Liquid Glass` | Native AppKit glass for docked chrome on macOS 26 and later, with restrained borders, a card seam and a frosted fallback. |
 | `Material` | A generous radius, a longer shadow, no sheen, and glow standing in for the ripple's resting state. |
 
 Beside them sit whatever the reader has kept: "Save as a preset…" names the
@@ -217,8 +220,8 @@ their own on the same page, `Auto` is a choice somebody made about their whole
 machine, and a material has no business overruling either. Picking one replaces
 the arrangement wholesale; moving any control afterwards relabels it `Custom`.
 
-**Every arrangement keeps the Solid/Frosted switch**, including the two that
-ship opaque. An arrangement whose card fill is 1.0 would otherwise offer a
+**Every arrangement offers the three translucency modes**, including the
+two with Solid as the default. An arrangement whose card fill is 1.0 would otherwise offer a
 control that changes nothing, so the moment Frosted is chosen the fill is held
 at `THICKEST_TINT` — the same ceiling `tint_over` already refuses to go past,
 for the same reason: beyond it the blur has stopped showing through and it is
@@ -277,13 +280,15 @@ same place, so nothing jumps when the kind of page changes.
 - **Some numbers are still literals.** `LIGHT_INK`/`DARK_INK`, the tint targets
   and the flip margin belong to the material and are constants in `theme.rs`.
 - **Platform backdrops are macOS only.** `SystemBackdrop::Frosted` maps to
-  `NSVisualEffectView`; on Linux and Windows it does nothing. The rest of the
-  material works everywhere, because it is all drawn by egui.
+  `NSVisualEffectView`. Linux and Windows use the portable surface renderer.
 
 ## macOS-specific pieces
 
-Two things in the pipeline are not portable and are worth knowing about before
-porting the rest.
+**Liquid Glass** uses `NSGlassEffectView` for the docked sidebar and grouped
+toolbar surfaces. The views sit below winit’s transparent, layer-hosting
+content view. Zervo still draws the text, icons and focus indicators and handles
+input through egui. Page overlays frost against the rendered page. With macOS
+Reduce Transparency enabled, Zervo renders solid surfaces.
 
 **The window's own backdrop** is an `NSVisualEffectView` behind a transparent
 framebuffer. The chrome paints a thin tint over it. That is why the chrome's
@@ -311,8 +316,8 @@ The window's own backdrop covers the whole frame view, not just the area below
 the toolbar, so a hole at the top shows the same frosted backdrop as a hole at
 the bottom.
 
-On a platform with no system backdrop, neither piece is needed — the chrome is
-opaque and a plain rounded rect does the job.
+On platforms without a system backdrop, plain rounded rectangles frame the
+content card.
 
 ## Where to look
 
