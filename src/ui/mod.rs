@@ -20,9 +20,12 @@ use crate::state::{BrowserState, TabId, TabKind};
 use crate::theme::{self, Palette, Surface, Tier};
 
 pub(crate) mod backdrops;
+mod command;
 mod frame;
+mod layout_editor;
 mod settings_page;
 mod setup;
+mod spaces;
 mod text;
 
 // The chrome stays one namespace, to itself and to everything outside it:
@@ -35,14 +38,14 @@ use settings_page::*;
 use text::*;
 
 pub use backdrops::{draw_zervo_mark, paint_newtab_background};
+pub use command::{CommandBar, CommandMode};
 pub use frame::{CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient};
-pub use text::{
-    DISPLAY_FAMILY, clamp_into, display_font, display_name, ellipsize, host_of, initial,
-    normalize_url,
-};
+pub use text::{clamp_into, display_name, ellipsize, host_of, initial, normalize_url};
 
 #[derive(Debug)]
 pub enum UiAction {
+    OpenCommand(CommandMode),
+    OpenAddress(String),
     Navigate(String),
     Back,
     Forward,
@@ -67,8 +70,10 @@ pub enum UiAction {
     },
     RenameWorkspace(usize, String),
     NewWorkspace,
+    RemoveWorkspace(usize),
     SelectWorkspace(usize),
     OpenSettings,
+    CustomizeChrome,
     /// Dismiss the notification with this id.
     DismissNotification(u64),
     /// Open or shut the notification tray behind the bell.
@@ -293,10 +298,16 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         };
     }
 
-    if chrome.controls.is_empty()
-        && root.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::L))
-    {
-        chrome.browser.focus_address = true;
+    if chrome.controls.is_empty() {
+        for (key, mode) in [
+            (Key::L, CommandMode::CurrentTab),
+            (Key::T, CommandMode::NewTab),
+        ] {
+            if root.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, key)) {
+                chrome.browser.command_bar =
+                    Some(CommandBar::new(mode, &chrome.browser.address_bar));
+            }
+        }
     }
 
     // Autohide reveal: decided before the sidebar is drawn, but painted last
@@ -566,22 +577,6 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         .then(|| draw_sidebar_peek(root, chrome, &mut actions, peek))
         .flatten();
 
-    // Full-page mode's address bar, for when nothing is revealed.
-    //
-    // Only then: the reveal in full-page mode is the whole chrome and carries a
-    // pill of its own, and two live `zervo_address_pill`s in one frame is one
-    // egui id used twice.
-    //
-    // Gated on whether the reveal is *drawing*, not on whether it is open. It
-    // keeps drawing while it slides away, so gating on `open` left both pills
-    // on screen for the length of the slide — in two different layers, which
-    // is the assert above rather than merely the wrong focus.
-    if layout == crate::settings::Layout::FullPage && revealed.is_none() {
-        draw_floating_pill(root, chrome, &mut actions);
-    }
-
-    // Whether it is showing no longer needs reporting: egui is asked directly
-    // which layer the pointer is over.
     let _ = revealed;
 
     // Page-initiated UI last, over everything else it might overlap.
@@ -610,7 +605,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         &chrome.notifications,
         &mut actions,
     );
-    let controls_open = !chrome.controls.is_empty();
+    let controls_open = !chrome.controls.is_empty() || command::draw(root, chrome, &mut actions);
 
     UiOutput {
         actions,
@@ -842,7 +837,7 @@ fn sidebar_body(
             ui.horizontal(|ui| {
                 // The docked sidebar and full-page reveal own their utilities.
                 // In the top-bar layout these controls stay in the toolbar.
-                if utilities {
+                if utilities && chrome.settings.show_sidebar_tools {
                     let active = chrome.downloads.active_count();
                     let mut tray = None;
                     for item in [NavItem::History, NavItem::Downloads, NavItem::Settings] {
@@ -872,26 +867,17 @@ fn sidebar_body(
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::icon_button(ui, Icon::Plus, 15.0, &palette, true)
-                        .on_hover_text(tr("chrome-new-workspace"))
+                    if icons::icon_button(ui, Icon::Sliders, 16.0, &palette, true)
+                        .on_hover_text(tr("layout-customize"))
                         .clicked()
                     {
-                        actions.push(UiAction::NewWorkspace);
-                    }
-                    // The way out of full-page mode. It is the one tile of
-                    // turn 4b's quick row that has somewhere real to go: the
-                    // others open a tab overview and a page-tools panel that
-                    // do not exist yet, and a button that does nothing is
-                    // worse than one that is not there.
-                    if chrome.settings.layout == crate::settings::Layout::FullPage
-                        && icons::icon_button(ui, Icon::Browser, 16.0, &palette, true)
-                            .on_hover_text(tr("chrome-leave-full-page-mode-s"))
-                            .clicked()
-                    {
-                        actions.push(UiAction::ToggleSidebar);
+                        actions.push(UiAction::CustomizeChrome);
                     }
                 });
             });
+            ui.add_space(4.0);
+            ui.separator();
+            spaces::switcher(ui, chrome, actions);
         });
 
     // ── The widget shelf, above the utility bar and below the tabs.
@@ -904,7 +890,10 @@ fn sidebar_body(
     // panel carrying the utilities is the only chrome there is, and "Bar only"
     // in a layout with no bar is not a placement, it is the shelf switched off
     // by a control that does not say so.
-    if !compact && (chrome.palette.appearance.shelf.in_sidebar() || utilities) {
+    if !compact
+        && chrome.settings.show_sidebar_widgets
+        && (chrome.palette.appearance.shelf.in_sidebar() || utilities)
+    {
         draw_sidebar_shelf(ui, chrome, actions);
     }
 
@@ -978,10 +967,6 @@ fn sidebar_body(
                 })
                 .unwrap_or_default();
 
-            // Drawn rather than lettered: the divider rotates in place, so
-            // the button shows the layout it is moving to and shows it
-            // moving. A glyph swap here is one frame with no continuity, and
-            // at seventeen points the reader mostly does not see it happen.
             if icons::morph_button(
                 ui,
                 17.0,
@@ -991,11 +976,7 @@ fn sidebar_body(
                 &crate::morphicons::BAR,
                 !chrome.settings.layout.is_sidebar(),
             )
-            .on_hover_text(if chrome.settings.layout.is_sidebar() {
-                tr("chrome-hide-sidebar-s")
-            } else {
-                tr("chrome-show-sidebar-s")
-            })
+            .on_hover_text(tr("command-toggle-compact"))
             .clicked()
             {
                 actions.push(UiAction::ToggleSidebar);
@@ -1038,310 +1019,7 @@ fn sidebar_body(
         ui.add_space(28.0);
     }
 
-    // ── Essentials: pinned tabs as a tile grid.
-    if chrome.settings.show_essentials {
-        draw_essentials_grid(ui, chrome, actions);
-    }
-
-    // ── Workspaces and tab rows.
-    //
-    // The tab being dragged lives in egui's temp memory, like the navigation
-    // bar's held item and the shelf's — it is scratch that lasts one gesture,
-    // not part of the browser model.
-    let ctx = ui.ctx().clone();
-    let drag_id = Id::new("zervo_tab_drag");
-    let dragging = ctx.data(|data| data.get_temp::<TabId>(drag_id));
-    let pointer = ctx.input(|input| input.pointer.latest_pos());
-    let editing = chrome.browser.workspace_edit.clone();
-
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let active_workspace = chrome.browser.active_workspace;
-            let active_tab = chrome.browser.active_tab;
-            let always_close = chrome.settings.always_show_tab_close;
-            // One highlight that travels and stretches between rows, rather
-            // than two rows half-lit for the settle time. Reserved here and
-            // filled in after the rows are laid out, because until they are
-            // nobody knows where it is going.
-            let liquid = chrome.palette.appearance.liquid;
-            let highlight = liquid.then(|| ui.painter().add(Shape::Noop));
-            let mut selected_rect: Option<Rect> = None;
-
-            // Both of these are resolved across every workspace rather than
-            // within one, and that is the whole trick. Where the tab lands is
-            // decided by the pointer, which may be over any workspace; the
-            // release is only ever seen by the row being dragged, which is in
-            // exactly one. Deciding them in the same pass means a tab dragged
-            // from one workspace to another finds its target in one iteration
-            // and its release in a different one, and the gesture silently
-            // does nothing.
-            let mut target: Option<(usize, usize, Option<TabId>)> = None;
-            let mut released = false;
-            let mut ghost: Option<(TabId, String)> = None;
-            let mut rename: Option<(usize, WorkspaceName)> = None;
-
-            for (workspace_index, workspace) in chrome.browser.workspaces.iter().enumerate() {
-                let header = workspace_header(
-                    ui,
-                    workspace_index,
-                    chrome.settings.space_colour,
-                    &workspace.name,
-                    workspace.tabs.iter().filter(|tab| !tab.pinned).count(),
-                    chrome.settings.show_tab_counts,
-                    workspace_index == active_workspace,
-                    editing
-                        .as_ref()
-                        .filter(|(index, _)| *index == workspace_index)
-                        .map(|(_, name)| name.as_str()),
-                    &palette,
-                    actions,
-                    &mut rename,
-                );
-                // A header takes the drop at the top of its list, which is the
-                // only way to aim at a workspace with no tabs in it.
-                if dragging.is_some() && pointer.is_some_and(|pos| header.contains(pos)) {
-                    target = Some((workspace_index, 0, None));
-                }
-
-                // Enumerated over the whole list, not the filtered one: the
-                // index is an insertion point into `workspace.tabs`, and
-                // pinned tabs are in there too even though they are drawn in
-                // the essentials grid instead.
-                for (tab_index, tab) in workspace.tabs.iter().enumerate() {
-                    if tab.pinned {
-                        continue;
-                    }
-                    if dragging == Some(tab.id) {
-                        ghost = Some((tab.id, tab.title.clone()));
-                    }
-                    let selected = active_tab == Some(tab.id);
-                    let out = tab_row(
-                        ui,
-                        TabRowStyle {
-                            tab_id: tab.id,
-                            title: &tab.title,
-                            url: &tab.url,
-                            selected,
-                            loading: tab.loading,
-                            is_settings: tab.kind == TabKind::Settings,
-                            glyph: internal_glyph(tab.kind),
-                            always_show_close: always_close,
-                            compact: chrome.settings.compact_sidebar,
-                            liquid,
-                            dragging,
-                        },
-                        &palette,
-                        chrome.favicons.get(&tab.id),
-                        actions,
-                    );
-                    if selected {
-                        selected_rect = Some(out.rect);
-                    }
-                    if out.drag_started {
-                        ctx.data_mut(|data| data.insert_temp(drag_id, tab.id));
-                    }
-                    released |= out.drag_stopped;
-                    match out.drop_at {
-                        Some(DropAt::Before) => target = Some((workspace_index, tab_index, None)),
-                        Some(DropAt::After) => {
-                            target = Some((workspace_index, tab_index + 1, None));
-                        },
-                        Some(DropAt::Onto) => {
-                            target = Some((workspace_index, tab_index, Some(tab.id)));
-                        },
-                        None => {},
-                    }
-                    if out.close_clicked {
-                        actions.push(UiAction::CloseTab(tab.id));
-                    } else if out.clicked {
-                        actions.push(UiAction::SelectTab(tab.id));
-                        if workspace_index != active_workspace {
-                            actions.push(UiAction::SelectWorkspace(workspace_index));
-                        }
-                    }
-                }
-
-                // Ghost "new tab" row with a plus icon, like the reference.
-                let desired = vec2(ui.available_width(), 32.0);
-                let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
-                let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                    ui.id().with(("new_tab_row", workspace_index)),
-                    response.hovered(),
-                    0.12,
-                ));
-                if hover_t > 0.0 {
-                    ui.painter().rect_filled(
-                        rect,
-                        palette.corner(Tier::Row),
-                        palette.surface_hover.gamma_multiply(hover_t * 0.8),
-                    );
-                }
-                let plus_rect = Rect::from_center_size(
-                    pos2(rect.min.x + 18.0, rect.center().y),
-                    vec2(12.0, 12.0),
-                );
-                icons::draw_icon(ui.painter(), plus_rect, Icon::Plus, palette.text_muted);
-                ui.painter().text(
-                    pos2(rect.min.x + 32.0, rect.center().y),
-                    Align2::LEFT_CENTER,
-                    tr("common-new-tab"),
-                    FontId::proportional(13.5),
-                    palette.text_muted,
-                );
-                if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                    actions.push(UiAction::NewTab {
-                        workspace: workspace_index,
-                    });
-                }
-                // A drop below the last row files at the end of that
-                // workspace, which is what aiming at the empty space under it
-                // obviously means.
-                if dragging.is_some() && pointer.is_some_and(|pos| rect.contains(pos)) {
-                    target = Some((workspace_index, workspace.tabs.len(), None));
-                }
-                ui.add_space(12.0);
-            }
-
-            if let (Some(held), Some(pos)) = (dragging, pointer) {
-                // Scroll when the pointer is pressed against either end of the
-                // list, so a tab can reach a workspace that is off screen.
-                let viewport = ui.clip_rect().intersect(ui.max_rect());
-                let edge = 28.0;
-                if pos.x > viewport.min.x && pos.x < viewport.max.x {
-                    if pos.y < viewport.min.y + edge {
-                        ui.scroll_with_delta(vec2(0.0, 6.0));
-                    } else if pos.y > viewport.max.y - edge {
-                        ui.scroll_with_delta(vec2(0.0, -6.0));
-                    }
-                }
-                if let Some((id, title)) = &ghost {
-                    let height = if chrome.settings.compact_sidebar {
-                        28.0
-                    } else {
-                        34.0
-                    };
-                    paint_tab_ghost(
-                        ui.painter(),
-                        Rect::from_min_size(
-                            pos2(viewport.min.x + 6.0, pos.y - height / 2.0),
-                            vec2(viewport.width() - 12.0, height),
-                        ),
-                        title,
-                        chrome.favicons.get(id),
-                        &palette,
-                    );
-                }
-                let _ = held;
-                ctx.request_repaint();
-            }
-
-            // ── The selection, as one thing that moves.
-            //
-            // Two rows cross-fading is two answers to "which tab am I on" for
-            // the length of the settle time. One highlight that travels from
-            // the old row to the new one is a single answer that happens to be
-            // in transit, which is both truer and easier to follow with the
-            // eye.
-            //
-            // Filled into the slot reserved before the rows were drawn, so it
-            // lands underneath them and their text stays on top of it.
-            if let (Some(slot), Some(to)) = (highlight, selected_rect) {
-                let id = Id::new("zervo_liquid_selection");
-                let now = ctx.input(|input| input.time);
-                let motion = f64::from(palette.material.animation);
-                let mut state = ctx
-                    .data(|data| data.get_temp::<Liquid>(id))
-                    .unwrap_or(Liquid {
-                        from: to,
-                        to,
-                        started: now - motion,
-                    });
-                let progress = if motion <= 0.0 {
-                    1.0
-                } else {
-                    ((now - state.started) / motion).clamp(0.0, 1.0) as f32
-                };
-                let at = lerp_rect(state.from, state.to, glass::ease_out(progress));
-                if state.to != to {
-                    // A new leg, starting from wherever it had got to — so
-                    // changing tabs twice quickly carries on from the middle
-                    // rather than snapping back to the row it left.
-                    state = Liquid {
-                        from: at,
-                        to,
-                        started: now,
-                    };
-                    ctx.data_mut(|data| data.insert_temp(id, state));
-                }
-                if progress < 1.0 {
-                    ctx.request_repaint();
-                } else if state.from != state.to {
-                    // Arrived. Collapse the leg so the next one starts from a
-                    // rectangle rather than from an interpolation of one.
-                    ctx.data_mut(|data| {
-                        data.insert_temp(id, Liquid { from: to, ..state });
-                    });
-                }
-                let mut shapes = selection_shapes(at, &palette, 1.0);
-                ui.painter().set(
-                    slot,
-                    if shapes.len() == 1 {
-                        shapes.remove(0)
-                    } else {
-                        Shape::Vec(shapes)
-                    },
-                );
-            }
-
-            // A drag can end without its row ever seeing the release: close
-            // the tab mid-drag with Cmd-W and the row that would have reported
-            // it is not built at all, which used to leave the sidebar showing
-            // drop carets for the rest of the session.
-            let orphaned = dragging.is_some_and(|id| chrome.browser.tab(id).is_none())
-                || (dragging.is_some() && !ctx.input(|input| input.pointer.any_down()));
-            if orphaned {
-                ctx.data_mut(|data| data.remove::<TabId>(drag_id));
-            }
-
-            if released {
-                ctx.data_mut(|data| data.remove::<TabId>(drag_id));
-                if let (Some(held), Some((workspace, index, onto))) = (dragging, target) {
-                    match onto {
-                        // Dropped on a tab rather than between two. Dropping a
-                        // tab on itself is the one case that means nothing.
-                        Some(onto) if onto != held => {
-                            actions.push(UiAction::GroupTabs {
-                                onto,
-                                dragged: held,
-                            });
-                        },
-                        _ => actions.push(UiAction::MoveTab {
-                            tab: held,
-                            workspace,
-                            index,
-                        }),
-                    }
-                }
-            }
-
-            if let Some((index, edit)) = rename {
-                match edit {
-                    WorkspaceName::Typing(name) => {
-                        chrome.browser.workspace_edit = Some((index, name));
-                    },
-                    WorkspaceName::Keep(name) => {
-                        chrome.browser.workspace_edit = None;
-                        ctx.data_mut(|data| data.remove::<usize>(Id::new("zervo_ws_focus")));
-                        actions.push(UiAction::RenameWorkspace(index, name));
-                    },
-                    WorkspaceName::Discard => {
-                        chrome.browser.workspace_edit = None;
-                        ctx.data_mut(|data| data.remove::<usize>(Id::new("zervo_ws_focus")));
-                    },
-                }
-            }
-        });
+    spaces::body(ui, chrome, actions);
 }
 
 /// zervo://history — everything visited, newest first, grouped by how long ago
@@ -3337,14 +3015,8 @@ fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
     // Never pull it away mid-gesture: a held button, a drag, or an open menu
     // keeps it up even if the pointer strays outside.
     let busy = state.open && (ctx.egui_is_using_pointer() || egui::Popup::is_any_open(ctx));
-    // The top bar has its own address field. In full-page mode the sidebar
-    // only owns the field while it is already revealed.
-    let owns_address = chrome.settings.layout == crate::settings::Layout::FullPage && visible;
-    let wanted = crate::shot::peek_forced(ctx.cumulative_pass_nr())
-        || in_trigger
-        || in_panel
-        || busy
-        || (owns_address && chrome.browser.editing_address);
+    let wanted =
+        crate::shot::peek_forced(ctx.cumulative_pass_nr()) || in_trigger || in_panel || busy;
 
     if wanted {
         state.linger_until = now + PEEK_LINGER;
@@ -3378,7 +3050,11 @@ fn draw_sidebar_peek(
         ctx.animate_bool_with_time(slide, false, 0.0);
         return None;
     };
-    let t = glass::ease_out(ctx.animate_bool_with_time(slide, open, PEEK_SLIDE));
+    let t = glass::ease_out(ctx.animate_bool_with_time(
+        slide,
+        open,
+        chrome.palette.material.animation.min(PEEK_SLIDE),
+    ));
     if t <= 0.0 {
         return None;
     }
@@ -3490,15 +3166,6 @@ fn widget_action(change: crate::dashboard::Change) -> UiAction {
     }
 }
 
-/// The floating address pill in full-page mode: how tall, and how far off the
-/// bottom edge it sits.
-///
-/// Public because a page drawn under it has to know: the pill floats, so
-/// nothing reserves the strip for it, and the new tab page's own bottom row
-/// was landing underneath it.
-pub const FLOATING_PILL_HEIGHT: f32 = 34.0;
-pub const FLOATING_PILL_FLOAT: f32 = 18.0;
-
 /// The room a page has to leave at the top for the window's own controls.
 ///
 /// The sidebar and the navigation bar each hold that strip themselves — the
@@ -3525,15 +3192,6 @@ pub fn window_controls_room(settings: &Settings) -> f32 {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = settings;
-        0.0
-    }
-}
-
-/// The room a page should leave at the bottom for chrome that floats over it.
-pub fn floating_chrome_room(settings: &Settings) -> f32 {
-    if settings.layout == crate::settings::Layout::FullPage {
-        FLOATING_PILL_HEIGHT + FLOATING_PILL_FLOAT * 2.0
-    } else {
         0.0
     }
 }
@@ -3619,46 +3277,6 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
             ) {
                 actions.push(widget_action(change));
             }
-        });
-}
-
-/// Full-page mode's one piece of permanent chrome: where you are.
-///
-/// Anchored to the bottom of the window rather than the top. The top is where
-/// the chrome that has just gone used to be, and a pill sitting up there would
-/// read as a bar that failed to leave; at the bottom it reads as the page's
-/// own, which is what it is.
-fn draw_floating_pill(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
-    const HEIGHT: f32 = FLOATING_PILL_HEIGHT;
-    const FLOAT: f32 = FLOATING_PILL_FLOAT;
-    let ctx = root.ctx().clone();
-    let window = ctx.content_rect();
-    let width = (window.width() * 0.3).clamp(ADDRESS_PILL_MIN_WIDTH, 520.0);
-    let rect = Rect::from_min_size(
-        pos2(
-            window.center().x - width * 0.5,
-            window.max.y - HEIGHT - FLOAT,
-        ),
-        vec2(width, HEIGHT),
-    );
-    egui::Area::new(Id::new("zervo_floating_pill"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(rect.min)
-        .constrain(false)
-        .show(&ctx, |ui| {
-            ui.set_clip_rect(window.expand(glass::room(chrome.palette.radius(Tier::Pill))));
-            let mut host = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(rect)
-                    .layout(egui::Layout::top_down(egui::Align::Min)),
-            );
-            // Over the page, like every other floating surface: its ink has to
-            // follow whatever it is sitting on rather than the theme.
-            let restore = chrome.palette;
-            chrome.palette = chrome.palette.reaching(PANEL_REACH).over(rect);
-            draw_address_pill(&mut host, chrome, actions, HEIGHT, false);
-            chrome.palette = restore;
-            ui.advance_cursor_after_rect(rect);
         });
 }
 
@@ -3755,13 +3373,7 @@ fn draw_address_pill(
         .map(|tab| tab.loading)
         .unwrap_or_default();
 
-    // Outgoing chrome can still be painted while the new layout is interactive.
     let pill_id = ui.id().with("zervo_address_pill");
-    let focus_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-        pill_id,
-        chrome.browser.editing_address,
-        palette.material.animation,
-    ));
 
     let (pill_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
 
@@ -3777,30 +3389,12 @@ fn draw_address_pill(
         f32::from(palette.radius(Tier::Panel)).min(height * 0.5) as u8
     };
     if !native {
-        let material = Glass::new(radius);
-        let material = if palette.translucency == theme::Translucency::LiquidGlass {
-            material.no_shadow()
-        } else {
-            material
-                // 5a's address pill is lit whether or not it is focused: `0 0 0 1px
-                // accent(.28), 0 0 20px accent(.3)`. Focus adds to that rather than
-                // being the only moment the accent appears — on an arrangement that
-                // lights nothing, both of these come out at nothing and the focus
-                // ring below is the whole of it, as it always was.
-                .ring(palette.accent_ring(0.28 + 0.5 * focus_t))
-                .glow(0.55 + 0.45 * focus_t)
-        };
-        glass::paint(ui.painter(), pill_rect, &palette, material);
-    }
-    if focus_t > 0.0 {
+        ui.painter().rect_filled(pill_rect, radius, palette.surface);
         ui.painter().rect_stroke(
             pill_rect,
-            CornerRadius::same(radius),
-            Stroke::new(
-                1.0 + 0.5 * focus_t,
-                palette.accent.gamma_multiply(0.85 * focus_t),
-            ),
-            StrokeKind::Outside,
+            radius,
+            Stroke::new(1.0_f32, palette.border),
+            StrokeKind::Inside,
         );
     }
 
@@ -3812,9 +3406,7 @@ fn draw_address_pill(
     // What the leading icon says about the connection. While typing it goes
     // back to a magnifying glass, since it is describing the box and not a
     // page any more.
-    let (icon, tint, hint) = if chrome.browser.editing_address
-        || chrome.browser.address_bar.is_empty()
-    {
+    let (icon, tint, hint) = if chrome.browser.address_bar.is_empty() {
         (Icon::Search, palette.text_muted, "")
     } else {
         let tab = chrome.browser.active_tab();
@@ -3936,56 +3528,31 @@ fn draw_address_pill(
         ctx.data_mut(|data| data.remove::<Rect>(Id::new(BELL_ANCHOR)));
     }
 
-    // Keep a slot for the spinner so the text stays put while a page loads.
-    let width = (inner.available_width()
-        - if chrome.settings.appearance.pill_progress {
-            0.0
-        } else {
-            24.0
-        })
-    .max(1.0);
-    let hint = if width >= 176.0 {
+    let right_inset = if loading && !chrome.settings.appearance.pill_progress {
+        24.0
+    } else {
+        0.0
+    };
+    let width = (inner.available_width() - right_inset).max(1.0);
+    let address = &chrome.browser.address_bar;
+    let label = if address.is_empty() {
+        tr("chrome-search-or-url")
+    } else {
+        address.as_str()
+    };
+    let result = inner.add_sized(
+        vec2(width, height - 4.0),
+        egui::Button::new(RichText::new(label).size(13.0).color(palette.text))
+            .truncate()
+            .frame(false),
+    );
+    let tooltip = if address.is_empty() {
         tr("chrome-search-or-enter-an-address")
     } else {
-        tr("chrome-search-or-url")
+        address
     };
-    inner.visuals_mut().weak_text_color = Some(palette.text_muted);
-    let editor = TextEdit::singleline(&mut chrome.browser.address_bar)
-        .id(pill_id.with("editor"))
-        .frame(Frame::NONE)
-        .font(FontId::proportional(14.0))
-        .text_color(palette.text)
-        .vertical_align(egui::Align::Center)
-        .hint_text(hint)
-        .desired_width(width);
-    let mut output = editor.show(&mut inner);
-    let response = output.response;
-    if chrome.browser.focus_address && inner.is_enabled() {
-        response.request_focus();
-        let end = egui::text::CCursor::new(chrome.browser.address_bar.chars().count());
-        output
-            .state
-            .cursor
-            .set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(0),
-                end,
-            )));
-        output.state.store(&ctx, response.id);
-        chrome.browser.focus_address = false;
-        ctx.request_repaint();
-    }
-    if inner.is_enabled() {
-        chrome.browser.editing_address = response.has_focus();
-    }
-    if inner.is_enabled() && response.lost_focus() {
-        let address = chrome.browser.address_bar.trim();
-        if !address.is_empty() && inner.input(|input| input.key_pressed(Key::Enter)) {
-            actions.push(UiAction::Navigate(normalize_url(
-                address,
-                chrome.settings.search_engine,
-            )));
-        }
-        ctx.request_repaint();
+    if result.on_hover_text(tooltip).clicked() {
+        actions.push(UiAction::OpenCommand(CommandMode::CurrentTab));
     }
     if loading {
         if chrome.settings.appearance.pill_progress {
@@ -4018,138 +3585,6 @@ fn draw_address_pill(
     }
 }
 
-/// Pinned tabs as a grid of large glass tiles.
-fn draw_essentials_grid(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
-    let palette = chrome.palette;
-    struct Essential {
-        tab_id: TabId,
-        workspace: usize,
-        title: String,
-        selected: bool,
-        loading: bool,
-        /// What stands in for the favicon an internal page will never have.
-        ///
-        /// The tab row grew one of these and this grid did not, so the same
-        /// pinned `zervo://certificate` showed a padlock in the list and a
-        /// globe in the grid two inches above it.
-        glyph: Option<Icon>,
-    }
-    let essentials: Vec<Essential> = chrome
-        .browser
-        .workspaces
-        .iter()
-        .enumerate()
-        .flat_map(|(workspace_index, workspace)| {
-            workspace
-                .tabs
-                .iter()
-                .filter(|tab| tab.pinned)
-                .map(move |tab| Essential {
-                    tab_id: tab.id,
-                    workspace: workspace_index,
-                    title: tab.title.clone(),
-                    selected: false,
-                    loading: tab.loading,
-                    glyph: internal_glyph(tab.kind),
-                })
-        })
-        .collect();
-    if essentials.is_empty() {
-        return;
-    }
-    let active_tab = chrome.browser.active_tab;
-
-    let columns = 3;
-    let gap = 8.0;
-    let tile_width = (ui.available_width() - gap * (columns as f32 - 1.0)) / columns as f32;
-    let tile_height = 44.0;
-
-    for chunk in essentials.chunks(columns) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for essential in chunk {
-                let selected = active_tab == Some(essential.tab_id) || essential.selected;
-                let (rect, response) =
-                    ui.allocate_exact_size(vec2(tile_width, tile_height), Sense::click());
-                let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                    ui.id().with(("essential_hover", essential.tab_id)),
-                    response.hovered(),
-                    0.12,
-                ));
-                let sel_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                    ui.id().with(("essential_sel", essential.tab_id)),
-                    selected,
-                    0.18,
-                ));
-                glass::paint(
-                    ui.painter(),
-                    rect,
-                    &palette,
-                    Glass::tier(Tier::Card)
-                        .strength(0.55 + 0.45 * hover_t.max(sel_t))
-                        .glow(0.5 * sel_t)
-                        .no_shadow(),
-                );
-                // Favicon (or spinner) centered in the tile.
-                let icon_center = rect.center();
-                if essential.loading {
-                    let time = ui.input(|input| input.time) as f32;
-                    let points: Vec<egui::Pos2> = (0..=12)
-                        .map(|step| {
-                            let angle = time * 5.0 + step as f32 * 0.35;
-                            pos2(
-                                icon_center.x + 6.0 * angle.cos(),
-                                icon_center.y + 6.0 * angle.sin(),
-                            )
-                        })
-                        .collect();
-                    ui.painter()
-                        .add(Shape::line(points, Stroke::new(1.8_f32, palette.accent)));
-                    ui.ctx()
-                        .request_repaint_after(std::time::Duration::from_millis(33));
-                } else if let Some(texture) = chrome.favicons.get(&essential.tab_id) {
-                    let icon_rect = Rect::from_center_size(icon_center, vec2(20.0, 20.0));
-                    ui.painter().image(
-                        texture.id(),
-                        icon_rect,
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
-                } else {
-                    let icon_rect = Rect::from_center_size(icon_center, vec2(17.0, 17.0));
-                    icons::draw_icon(
-                        ui.painter(),
-                        icon_rect,
-                        essential.glyph.unwrap_or(Icon::Globe),
-                        palette.text_muted,
-                    );
-                }
-
-                let response = response
-                    .on_hover_cursor(CursorIcon::PointingHand)
-                    .on_hover_text(&essential.title);
-                response.clone().context_menu(|ui| {
-                    if ui.button(tr("chrome-unpin")).clicked() {
-                        actions.push(UiAction::TogglePin(essential.tab_id));
-                        ui.close();
-                    }
-                    if ui.button(tr("common-close")).clicked() {
-                        actions.push(UiAction::CloseTab(essential.tab_id));
-                        ui.close();
-                    }
-                });
-                if response.clicked() {
-                    actions.push(UiAction::SelectTab(essential.tab_id));
-                    actions.push(UiAction::SelectWorkspace(essential.workspace));
-                }
-            }
-        });
-        ui.add_space(gap);
-    }
-    ui.add_space(4.0);
-}
-
-/// What the user did to a workspace's name this frame.
 enum WorkspaceName {
     Typing(String),
     Keep(String),
@@ -4169,19 +3604,18 @@ fn workspace_header(
     active: bool,
     editing: Option<&str>,
     palette: &Palette,
-    actions: &mut Vec<UiAction>,
     rename: &mut Option<(usize, WorkspaceName)>,
 ) -> Rect {
-    let desired = vec2(ui.available_width(), 28.0);
+    let desired = vec2(ui.available_width(), 34.0);
     let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
-    if response.clicked() && editing.is_none() {
-        actions.push(UiAction::SelectWorkspace(index));
+    if response.double_clicked() && editing.is_none() {
+        *rename = Some((index, WorkspaceName::Typing(name.to_owned())));
     }
 
     let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
         ui.id().with(("ws_header", index)),
         response.hovered(),
-        0.12,
+        palette.material.animation,
     ));
     if hover_t > 0.0 {
         ui.painter().rect_filled(
@@ -4191,31 +3625,16 @@ fn workspace_header(
         );
     }
     let colour = theme::workspace_color_from(index, first);
-    let glass_chrome = palette.translucency == theme::Translucency::LiquidGlass;
-    if active && !glass_chrome {
-        glass::paint(
-            ui.painter(),
+    if active {
+        ui.painter().rect_filled(rect, 8, palette.surface);
+        ui.painter().rect_stroke(
             rect,
-            palette,
-            Glass::tier(Tier::Row)
-                .tint(colour)
-                .strength(0.55)
-                .glow(0.6)
-                .no_shadow(),
+            8,
+            Stroke::new(1.0_f32, palette.border),
+            StrokeKind::Inside,
         );
     }
     let dot = pos2(rect.min.x + 12.0, rect.center().y);
-    // `0 0 10px rgba(w,.9)`, as two soft rings rather than a blur — the dot is
-    // seven points across and a real blur of it would cost a texture.
-    if active && let Some(halo) = palette.accent_ring(1.0) {
-        for (radius, alpha) in [(9.0_f32, 0.10_f32), (6.5, 0.16)] {
-            ui.painter().circle_filled(
-                dot,
-                radius,
-                colour.gamma_multiply(alpha * halo.a() as f32 / 255.0),
-            );
-        }
-    }
     ui.painter().circle_filled(dot, 4.0, colour);
 
     // Named inline rather than in a dialog. A workspace made by dropping one
@@ -4330,17 +3749,15 @@ struct TabRowStyle<'a> {
     url: &'a str,
     selected: bool,
     loading: bool,
-    is_settings: bool,
+    pinnable: bool,
+    pinned: bool,
+    workspace: usize,
+    spaces: &'a [crate::state::Workspace],
     /// What to draw in the favicon's place on an internal page, which has no
     /// favicon and never will. `None` falls back to the globe.
     glyph: Option<Icon>,
     always_show_close: bool,
     compact: bool,
-    /// Whether the caller is painting the selection itself, as one highlight
-    /// travelling between rows. When it is, the row must not also paint its
-    /// own, or there are two of them again — which is the thing that was
-    /// being fixed.
-    liquid: bool,
     /// The tab being dragged, if any — including possibly this one.
     dragging: Option<TabId>,
 }
@@ -4363,9 +3780,6 @@ struct TabRowOut {
     close_clicked: bool,
     drag_started: bool,
     drag_stopped: bool,
-    /// Where the row was drawn, so a caller painting the selection itself
-    /// knows where the selection has to end up.
-    rect: Rect,
     /// Set while a drag is in flight and the pointer is over this row.
     drop_at: Option<DropAt>,
 }
@@ -4480,14 +3894,6 @@ fn row_ink(palette: &Palette, select_t: f32) -> (Color32, Color32) {
     )
 }
 
-/// Where the travelling selection is, and where it is going.
-#[derive(Clone, Copy)]
-struct Liquid {
-    from: Rect,
-    to: Rect,
-    started: f64,
-}
-
 /// The dragged row, following the pointer.
 ///
 /// Deliberately less than a real row — no close button, no hover state, no
@@ -4571,7 +3977,6 @@ fn tab_row(
             close_clicked: false,
             drag_started: false,
             drag_stopped: response.drag_stopped(),
-            rect,
             drop_at: None,
         };
     }
@@ -4613,7 +4018,14 @@ fn tab_row(
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
             close_response.enabled(),
-            crate::l10n::message("chrome-close-tab", [("title", style.title.into())]),
+            crate::l10n::message(
+                if style.pinned {
+                    "sidebar-unload-pin-title"
+                } else {
+                    "chrome-close-tab"
+                },
+                [("title", style.title.into())],
+            ),
         )
     });
 
@@ -4623,12 +4035,12 @@ fn tab_row(
     let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
         ui.id().with(("tab_hover", style.tab_id)),
         hovered && !style.selected,
-        0.12,
+        palette.material.animation,
     ));
     let select_t = glass::ease_out(ui.ctx().animate_bool_with_time(
         ui.id().with(("tab_sel", style.tab_id)),
         style.selected,
-        0.18,
+        palette.material.animation,
     ));
     // The row's own ink, before anything is drawn with it: at full candy the
     // selected row is half its accent, and the theme's ink is not guaranteed to
@@ -4644,8 +4056,13 @@ fn tab_row(
             palette.surface_hover.gamma_multiply(hover_t),
         );
     }
-    if select_t > 0.0 && !style.liquid {
+    if select_t > 0.0 {
         painter.extend(selection_shapes(rect, palette, select_t));
+        painter.rect_filled(
+            Rect::from_center_size(pos2(rect.left() + 2.0, rect.center().y), vec2(3.0, 16.0)),
+            1,
+            palette.accent.gamma_multiply(select_t),
+        );
     }
     if response.has_focus() {
         icons::paint_focus(ui, palette, rect, Tier::Row);
@@ -4733,18 +4150,48 @@ fn tab_row(
         }
     }
 
-    if !style.is_settings {
-        response.clone().context_menu(|ui| {
-            if ui.button(tr("chrome-pin-as-essential")).clicked() {
-                actions.push(UiAction::TogglePin(style.tab_id));
-                ui.close();
-            }
-            if ui.button(tr("common-close")).clicked() {
-                actions.push(UiAction::CloseTab(style.tab_id));
-                ui.close();
-            }
-        });
-    }
+    response.context_menu(|ui| {
+        if style.pinnable
+            && ui
+                .button(if style.pinned {
+                    tr("chrome-unpin")
+                } else {
+                    tr("sidebar-pin-tab")
+                })
+                .clicked()
+        {
+            actions.push(UiAction::TogglePin(style.tab_id));
+            ui.close();
+        }
+        if style.spaces.len() > 1 {
+            ui.menu_button(tr("sidebar-move-to-space"), |ui| {
+                for (index, space) in style
+                    .spaces
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != style.workspace)
+                {
+                    if ui.button(&space.name).clicked() {
+                        actions.push(UiAction::MoveTab {
+                            tab: style.tab_id,
+                            workspace: index,
+                            index: space.tabs.len(),
+                        });
+                        ui.close();
+                    }
+                }
+            });
+        }
+        let close_label = if style.pinned {
+            tr("sidebar-unload-pin")
+        } else {
+            tr("common-close")
+        };
+        if ui.button(close_label).clicked() {
+            actions.push(UiAction::CloseTab(style.tab_id));
+            ui.close();
+        }
+    });
 
     // The drop affordance, over everything else the row drew.
     match drop_at {
@@ -4792,7 +4239,6 @@ fn tab_row(
         close_clicked,
         drag_started,
         drag_stopped,
-        rect,
         drop_at,
     }
 }

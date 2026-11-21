@@ -481,3 +481,45 @@ dialog-http-auth = { $host } wants a password
 dialog-http-saved-password = Send your saved password for { $username }?
 dialog-http-saved-origin = Send the password saved for { $username } at { $host }?
 dialog-site-says = { $origin } says
+
+## Sidebar and command bar
+
+command-current-tab = Current tab
+command-search-placeholder = Search, enter an address, or type > for actions
+command-open-or-search = Open or search
+command-switch-tab = Switch to tab
+command-open-new-tab = Open a blank tab
+command-open-settings = Open Settings
+command-toggle-compact = Toggle compact mode
+command-no-matches = No matching actions
+sidebar-spaces = Spaces
+sidebar-open-tabs = Open tabs
+sidebar-pinned-tabs = Pinned tabs
+sidebar-pin-tab = Pin to this space
+sidebar-move-to-space = Move to space
+sidebar-delete-space = Remove empty space
+sidebar-shortcut-new-tab = New tab or search
+sidebar-new-space-name = Space { $number }
+sidebar-new-tab-options = A search launcher and recent sites. Open the board to use widgets.
+sidebar-unload-pin = Unload pinned tab
+sidebar-unload-pin-title = Unload { $title }
+
+## Layout editor
+
+layout-customize = Customize layout
+layout-sidebar-sections = Sidebar sections
+layout-reorder-sections = Drag sections or use the arrows to change their order.
+layout-sidebar-tools = Sidebar tools
+layout-widget-shelf = Widget shelf
+layout-reset-sidebar = Restore sidebar defaults
+layout-top-bar-tools = Top bar tools
+layout-before-address = Before the address field
+layout-after-address = After the address field
+layout-add-tool = Add a tool
+layout-all-tools-visible = All tools are already on the top bar.
+layout-reset-top-bar = Restore top bar defaults
+layout-empty-tools = No tools on this side
+layout-tool-options = Options
+layout-hide-tool = Remove from top bar
+layout-move-up = Move { $name } up
+layout-move-down = Move { $name } down

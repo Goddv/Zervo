@@ -1564,6 +1564,7 @@ pub(crate) fn settings_layout(
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
+    super::layout_editor::draw(ui, chrome.settings, palette, actions);
     settings_section(ui, palette, tr("settings-toolbar"), |ui| {
         for (value, label) in [
             (
@@ -1583,10 +1584,6 @@ pub(crate) fn settings_layout(
 
     settings_section(ui, palette, tr("common-sidebar"), |ui| {
         for (value, label) in [
-            (
-                &mut chrome.settings.show_essentials,
-                tr("settings-show-pinned-essentials-grid"),
-            ),
             (
                 &mut chrome.settings.show_tab_counts,
                 tr("settings-show-workspace-tab-counts"),

@@ -529,6 +529,7 @@ impl ApplicationHandler<WakerEvent> for App {
             .as_ref()
             .filter(|url| url.scheme() == "zervo")
             .cloned();
+        let explicit_url = asked_for.is_some();
         let start_url = asked_for
             .filter(|url| url.scheme() != "zervo")
             .or_else(|| Url::parse(&settings.homepage).ok())
@@ -539,20 +540,11 @@ impl ApplicationHandler<WakerEvent> for App {
             servo,
             window_rendering_context,
             rendering_context,
-            browser: RefCell::new({
-                let mut browser = BrowserState::new(start_url.as_str());
-                // Workspaces are session state — nothing writes them out — so
-                // the name somebody gave their first space at setup lives in
-                // `Settings` and is put back here. Asking for a name and then
-                // forgetting it on the next launch would be worse than not
-                // asking.
-                if !settings.first_space.trim().is_empty()
-                    && let Some(first) = browser.workspaces.first_mut()
-                {
-                    first.name = settings.first_space.trim().to_owned();
-                }
-                browser
-            }),
+            browser: RefCell::new(BrowserState::restore(
+                start_url.as_str(),
+                &settings.first_space,
+                explicit_url,
+            )),
             pending_popups: RefCell::new(Vec::new()),
             pending_closes: RefCell::new(Vec::new()),
             pending_keyboard_events: RefCell::new(HashMap::new()),
@@ -579,12 +571,13 @@ impl ApplicationHandler<WakerEvent> for App {
         #[cfg(target_os = "macos")]
         set_dock_icon(settings.app_icon);
 
-        let initial_tab = state
-            .browser
-            .borrow()
-            .active_tab
-            .expect("initial tab exists");
-        state.open_tab(initial_tab, start_url);
+        let (initial_tab, initial_url) = {
+            let browser = state.browser.borrow();
+            let tab = browser.active_tab().expect("initial tab exists");
+            let url = Url::parse(&tab.url).unwrap_or(start_url);
+            (tab.id, url)
+        };
+        state.open_tab(initial_tab, initial_url);
 
         // Everything is in place: the GL context, the accessibility adapter, the
         // theme and the first tab. Now it can be looked at.
@@ -1046,10 +1039,7 @@ impl RunningApp {
         let mut handled = true;
         ShortcutMatcher::from_event(key_event.event.clone())
             .shortcut(CMD_OR_CONTROL, 'T', || {
-                // Hoisted: the Ref guard must drop before apply_action
-                // takes a mutable borrow of the same RefCell.
-                let workspace = state.browser.borrow().active_workspace;
-                self.apply_action(UiAction::NewTab { workspace });
+                self.apply_action(UiAction::OpenCommand(ui::CommandMode::NewTab));
             })
             .shortcut(CMD_OR_CONTROL, 'W', || {
                 let active_tab = state.browser.borrow().active_tab;
@@ -1065,6 +1055,16 @@ impl RunningApp {
                 state.quit_requested.set(true);
                 state.window.request_redraw();
             })
+            .shortcut(
+                CMD_OR_CONTROL.union(keyboard_types::Modifiers::ALT),
+                Key::Named(NamedKey::ArrowUp),
+                || self.apply_gesture(gestures::GestureAction::PreviousWorkspace),
+            )
+            .shortcut(
+                CMD_OR_CONTROL.union(keyboard_types::Modifiers::ALT),
+                Key::Named(NamedKey::ArrowDown),
+                || self.apply_gesture(gestures::GestureAction::NextWorkspace),
+            )
             .shortcut(CMD_OR_CONTROL, ',', || {
                 self.apply_action(UiAction::OpenSettings);
             })
@@ -1077,11 +1077,13 @@ impl RunningApp {
                 self.apply_action(UiAction::Reload);
             })
             .shortcut(CMD_OR_CONTROL, 'S', || {
+                self.apply_action(UiAction::ToggleSidebar);
+            })
+            .shortcut(CMD_OR_CONTROL_SHIFT, 'S', || {
                 self.apply_action(UiAction::CycleLayout);
             })
             .shortcut(CMD_OR_CONTROL, 'L', || {
-                state.browser.borrow_mut().focus_address = true;
-                state.window.request_redraw();
+                self.apply_action(UiAction::OpenCommand(ui::CommandMode::CurrentTab));
             })
             .shortcut(CMD_OR_CONTROL_SHIFT, 'L', || {
                 self.apply_action(UiAction::FillSavedLogin);
@@ -1779,13 +1781,35 @@ impl RunningApp {
                 let kind = state.browser.borrow().active_tab().map(|tab| tab.kind);
                 (kind != Some(TabKind::Trouble(*trouble))).then_some(transition::Way::On)
             },
-            UiAction::Navigate(_) | UiAction::NewTab { .. } => Some(transition::Way::On),
+            UiAction::Navigate(_) | UiAction::OpenAddress(_) | UiAction::NewTab { .. } => {
+                Some(transition::Way::On)
+            },
             _ => None,
         };
         if let Some(way) = going {
             self.want_crossing(way);
         }
         match action {
+            UiAction::OpenCommand(mode) => {
+                if self.settings.seen_setup && state.controls.borrow().is_empty() {
+                    let mut browser = state.browser.borrow_mut();
+                    browser.command_bar = Some(ui::CommandBar::new(mode, &browser.address_bar));
+                    state.window.request_redraw();
+                }
+            },
+            UiAction::OpenAddress(address) => {
+                if let Ok(url) = Url::parse(&address) {
+                    if url.scheme() == "zervo" {
+                        self.apply_action(UiAction::Navigate(address));
+                    } else {
+                        let mut browser = state.browser.borrow_mut();
+                        let workspace = browser.active_workspace;
+                        let tab = browser.add_tab(workspace, address);
+                        drop(browser);
+                        state.open_tab(tab, url);
+                    }
+                }
+            },
             UiAction::Navigate(address) => {
                 let Ok(url) = Url::parse(&address) else {
                     return;
@@ -2131,6 +2155,7 @@ impl RunningApp {
                 settings.navbar_left = ui::NavItem::default_left();
                 settings.navbar_right = ui::NavItem::default_right();
                 settings.navbar_widgets = dashboard::Placed::defaults();
+                settings.reset_sidebar_sections();
                 settings.newtab_tiles = newtab::Tile::defaults();
                 settings.newtab_world_clocks = newtab::Zone::defaults();
                 settings.navbar_height = ui::NAVBAR_DEFAULT_HEIGHT;
@@ -2164,6 +2189,10 @@ impl RunningApp {
                 self.downloads.clear_finished();
                 state.window.request_redraw();
             },
+            UiAction::CustomizeChrome => {
+                state.browser.borrow_mut().settings_section = crate::state::SettingsSection::Layout;
+                self.apply_action(UiAction::OpenSettings);
+            },
             UiAction::OpenSettings => {
                 let tab_id = state.browser.borrow_mut().find_or_create_settings_tab();
                 state.activate_tab(tab_id);
@@ -2192,8 +2221,17 @@ impl RunningApp {
             },
             UiAction::CloseTab(tab_id) => state.close_tab(tab_id),
             UiAction::TogglePin(tab_id) => {
-                if let Some(tab) = state.browser.borrow_mut().tab_mut(tab_id) {
+                let mut browser = state.browser.borrow_mut();
+                if let Some(tab) = browser
+                    .tab_mut(tab_id)
+                    .filter(|tab| tab.kind == TabKind::Web)
+                {
                     tab.pinned = !tab.pinned;
+                    tab.pin_anchor = tab.pinned.then(|| library::Favourite {
+                        url: tab.url.clone(),
+                        title: tab.title.clone(),
+                    });
+                    browser.save_spaces();
                 }
                 state.window.request_redraw();
             },
@@ -2202,38 +2240,24 @@ impl RunningApp {
                 workspace,
                 index,
             } => {
-                let moved = {
-                    let mut browser = state.browser.borrow_mut();
-                    let moved = browser.move_tab(tab, workspace, index);
-                    if moved {
-                        browser.active_workspace = workspace;
-                    }
-                    moved
-                };
+                let moved = state.browser.borrow_mut().move_tab(tab, workspace, index);
                 if moved {
-                    // Through SelectTab, not by assigning active_tab: that
-                    // field is the model's opinion, and the engine only shows,
-                    // focuses and unthrottles a webview when activate_tab says
-                    // so. Setting it directly leaves the page you were on
-                    // displayed and focused while the sidebar claims otherwise.
-                    // Following the tab is what the gesture means — dropping it
-                    // somewhere you are not looking reads as having lost it.
-                    self.apply_action(ui::UiAction::SelectTab(tab));
+                    self.apply_action(UiAction::SelectTab(tab));
+                    state.browser.borrow().save_spaces();
                 }
-                state.window.request_redraw();
             },
             UiAction::GroupTabs { onto, dragged } => {
                 {
                     let mut browser = state.browser.borrow_mut();
                     let name = Self::group_name(&browser, onto, dragged);
                     let index = browser.group_tabs(name, onto, dragged);
-                    browser.active_workspace = index;
                     // Opened for editing straight away: the group is the answer
                     // to a question the user has not been asked yet.
                     browser.workspace_edit = Some((index, browser.workspaces[index].name.clone()));
                 }
                 // See MoveTab — the engine has to be told, not just the model.
                 self.apply_action(ui::UiAction::SelectTab(dragged));
+                state.browser.borrow().save_spaces();
                 state.window.request_redraw();
             },
             UiAction::RenameWorkspace(index, name) => {
@@ -2244,17 +2268,52 @@ impl RunningApp {
                         workspace.name = name.to_owned();
                     }
                 }
-                drop(browser);
+                browser.save_spaces();
                 state.window.request_redraw();
             },
             UiAction::NewWorkspace => {
-                let mut browser = state.browser.borrow_mut();
-                let name = format!("Workspace {}", browser.workspaces.len() + 1);
-                let index = browser.add_workspace(name);
-                browser.active_workspace = index;
+                let index = {
+                    let mut browser = state.browser.borrow_mut();
+                    let name = l10n::message(
+                        "sidebar-new-space-name",
+                        [("number", (browser.workspaces.len() + 1).into())],
+                    );
+                    let index = browser.add_workspace(&name);
+                    browser.workspace_edit = Some((index, name));
+                    index
+                };
+                self.apply_action(UiAction::SelectWorkspace(index));
+            },
+            UiAction::RemoveWorkspace(index) => {
+                let selection = {
+                    let mut browser = state.browser.borrow_mut();
+                    browser
+                        .remove_workspace(index)
+                        .then_some(browser.active_workspace)
+                };
+                if let Some(index) = selection {
+                    self.apply_action(UiAction::SelectWorkspace(index));
+                }
             },
             UiAction::SelectWorkspace(index) => {
-                state.browser.borrow_mut().active_workspace = index;
+                let tab = {
+                    let mut browser = state.browser.borrow_mut();
+                    if index >= browser.workspaces.len() {
+                        return;
+                    }
+                    if browser
+                        .workspace_edit
+                        .as_ref()
+                        .is_some_and(|(editing, _)| *editing != index)
+                    {
+                        browser.workspace_edit = None;
+                    }
+                    browser
+                        .tab_for_workspace(index)
+                        .unwrap_or_else(|| browser.add_zervo_page(index))
+                };
+                self.apply_action(UiAction::SelectTab(tab));
+                state.browser.borrow().save_spaces();
             },
             UiAction::DragWindow => {
                 let _ = state.window.drag_window();
@@ -2322,15 +2381,18 @@ impl RunningApp {
                 self.apply_action(ui::UiAction::NewTab { workspace });
             },
             Action::NextWorkspace | Action::PreviousWorkspace => {
-                let mut browser = state.browser.borrow_mut();
-                let count = browser.workspaces.len();
-                if count > 1 {
+                let next = {
+                    let browser = state.browser.borrow();
+                    let count = browser.workspaces.len();
                     let step = if matches!(action, Action::NextWorkspace) {
                         1
                     } else {
                         count - 1
                     };
-                    browser.active_workspace = (browser.active_workspace + step) % count;
+                    (count > 1).then_some((browser.active_workspace + step) % count)
+                };
+                if let Some(index) = next {
+                    self.apply_action(UiAction::SelectWorkspace(index));
                 }
             },
             Action::ToggleShelf => {
@@ -2601,40 +2663,6 @@ fn install_fonts(ctx: &egui::Context) {
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts.families.entry(family).or_default().push(noto.clone());
     }
-
-    // The display family: one real light face, for the handful of runs set
-    // large enough that Regular is the wrong typeface rather than a missing
-    // nuance. See `ui::DISPLAY_FAMILY` for why this cannot simply be SF Pro at
-    // another weight.
-    //
-    // Helvetica Neue Thin is face 12 of a fourteen-face collection every macOS
-    // has shipped for twenty years, and `FontData::index` is how a collection
-    // is addressed. Elsewhere the family is left to fall through to the
-    // proportional stack, which on egui's own bundled fonts is Ubuntu-Light
-    // and already lighter than its UI weight.
-    let mut display: Vec<String> = Vec::new();
-    #[cfg(target_os = "macos")]
-    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/HelveticaNeue.ttc") {
-        fonts.font_data.insert(
-            "display".to_owned(),
-            Arc::new(egui::FontData {
-                font: bytes.into(),
-                index: 12,
-                tweak: egui::FontTweak::default(),
-            }),
-        );
-        display.push("display".to_owned());
-    }
-    display.extend(
-        fonts
-            .families
-            .get(&egui::FontFamily::Proportional)
-            .cloned()
-            .unwrap_or_default(),
-    );
-    fonts
-        .families
-        .insert(egui::FontFamily::Name(ui::DISPLAY_FAMILY.into()), display);
 
     ctx.set_fonts(fonts);
 }

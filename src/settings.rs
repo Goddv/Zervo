@@ -94,7 +94,7 @@ impl AppIcon {
 
 /// Where the chrome lives.
 ///
-/// Three, not two. All three are always reachable — ⌘S walks them — so what
+/// Three, not two. All three are always reachable — ⇧⌘S walks them — so what
 /// first run asks for, and what this setting holds, is only where somebody
 /// starts rather than what they are stuck with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,12 +141,47 @@ impl Layout {
         }
     }
 
-    /// The other docked one, for the sidebar glyph — which has always been a
-    /// two-way switch and should stay one.
+    /// Toggle between the workspace sidebar and the compact page view.
     pub fn toggled(self) -> Layout {
         match self {
-            Layout::Sidebar => Layout::Bar,
+            Layout::Sidebar => Layout::FullPage,
             Layout::Bar | Layout::FullPage => Layout::Sidebar,
+        }
+    }
+}
+
+/// Sections in the scrollable part of the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SidebarSection {
+    Favourites,
+    Pinned,
+    Tabs,
+}
+
+impl SidebarSection {
+    pub const ALL: [Self; 3] = [Self::Favourites, Self::Pinned, Self::Tabs];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Favourites => tr("common-favourites"),
+            Self::Pinned => tr("sidebar-pinned-tabs"),
+            Self::Tabs => tr("sidebar-open-tabs"),
+        }
+    }
+
+    pub fn visible(self, settings: &Settings) -> bool {
+        match self {
+            Self::Favourites => settings.show_essentials,
+            Self::Pinned => settings.show_pinned_section,
+            Self::Tabs => settings.show_open_tabs,
+        }
+    }
+
+    pub fn set_visible(self, settings: &mut Settings, visible: bool) {
+        match self {
+            Self::Favourites => settings.show_essentials = visible,
+            Self::Pinned => settings.show_pinned_section = visible,
+            Self::Tabs => settings.show_open_tabs = visible,
         }
     }
 }
@@ -189,7 +224,7 @@ impl NewTabHome {
 
     pub fn note(self) -> &'static str {
         match self {
-            NewTabHome::Composed => tr("options-the-clock-the-field-and-where-you"),
+            NewTabHome::Composed => tr("sidebar-new-tab-options"),
             NewTabHome::Board => tr("options-every-card-on-the-grid-to-arrange"),
         }
     }
@@ -277,8 +312,13 @@ pub struct Settings {
     pub always_show_tab_close: bool,
     pub show_forward_button: bool,
     pub show_reload_button: bool,
-    /// Show the pinned-tab essentials grid.
+    /// Show global favourites in the sidebar.
     pub show_essentials: bool,
+    pub sidebar_sections: [SidebarSection; 3],
+    pub show_pinned_section: bool,
+    pub show_open_tabs: bool,
+    pub show_sidebar_tools: bool,
+    pub show_sidebar_widgets: bool,
     /// Show tab counts next to workspace names.
     pub show_tab_counts: bool,
     /// Denser sidebar rows.
@@ -405,6 +445,23 @@ pub struct Settings {
     pub app_icon: AppIcon,
 }
 
+fn sidebar_default_appearance() -> crate::theme::Appearance {
+    use crate::theme::{Appearance, Preset, Seam, Spine, Translucency};
+
+    Appearance {
+        preset: None,
+        seam: Seam::Card,
+        translucency: Translucency::Solid,
+        gap: 9.0,
+        corners: 0.8,
+        liquid: false,
+        candy: 0.025,
+        workspace_accent: true,
+        spine: Spine::Nothing,
+        ..Preset::Flat.appearance()
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -414,12 +471,17 @@ impl Default for Settings {
             homepage: "https://servo.org".to_owned(),
             search_engine: SearchEngine::DuckDuckGo,
             new_tab_page: NewTabPage::ZervoPage,
-            new_tab_background: NewTabBackground::Aurora,
+            new_tab_background: NewTabBackground::Grid,
             newtab_home: NewTabHome::Composed,
             always_show_tab_close: false,
             show_forward_button: true,
             show_reload_button: true,
             show_essentials: true,
+            sidebar_sections: SidebarSection::ALL,
+            show_pinned_section: true,
+            show_open_tabs: true,
+            show_sidebar_tools: true,
+            show_sidebar_widgets: true,
             show_tab_counts: true,
             compact_sidebar: false,
             layout: Layout::Sidebar,
@@ -438,14 +500,14 @@ impl Default for Settings {
             navbar_widgets: crate::dashboard::Placed::defaults(),
             user_agent_compat: true,
             downloads_auto: true,
-            top_glow: 1.0,
+            top_glow: 0.20,
             content_border: true,
             content_shadow: false,
             content_halo: false,
             content_halo_tint: HaloTint::Accent,
             content_shadow_amount: 1.0,
             content_halo_amount: 1.0,
-            appearance: crate::theme::Appearance::default(),
+            appearance: sidebar_default_appearance(),
             legacy_translucency: None,
             gestures: crate::gestures::Gestures::default(),
             newtab_tiles: crate::newtab::Tile::defaults(),
@@ -456,6 +518,17 @@ impl Default for Settings {
             wallpaper_dim: 0.55,
             app_icon: AppIcon::Default,
         }
+    }
+}
+
+impl Settings {
+    pub fn reset_sidebar_sections(&mut self) {
+        self.sidebar_sections = SidebarSection::ALL;
+        for section in SidebarSection::ALL {
+            section.set_visible(self, true);
+        }
+        self.show_sidebar_tools = true;
+        self.show_sidebar_widgets = true;
     }
 }
 
@@ -494,6 +567,13 @@ pub fn load() -> Settings {
 fn migrate(settings: &mut Settings) {
     use crate::theme::{Preset, Translucency};
 
+    if !SidebarSection::ALL
+        .iter()
+        .all(|section| settings.sidebar_sections.contains(section))
+    {
+        settings.sidebar_sections = SidebarSection::ALL;
+    }
+
     if settings.appearance.preset == Some(Preset::LiquidGlass)
         && settings.appearance.translucency == Translucency::Frosted
         && settings.appearance.blur == 0.0
@@ -510,6 +590,11 @@ fn migrate(settings: &mut Settings) {
     let Some(translucency) = settings.legacy_translucency.take() else {
         return;
     };
+    // Profiles with the legacy top-level field predate this branch's
+    // material. Interpret it against the preset those profiles started with.
+    if settings.appearance == sidebar_default_appearance() {
+        settings.appearance = Preset::Zervo.appearance();
+    }
     if translucency != settings.appearance.translucency {
         settings.appearance.translucency = translucency;
         settings.appearance.customised();
@@ -594,22 +679,26 @@ mod tests {
         assert!(top["appearance"]["translucency"].is_string());
     }
 
-    /// A fresh profile opens on Zervo's own material, and the arrangement the
-    /// study argues for is one press away.
-    ///
-    /// The default was `Candy` for a while and that was wrong twice over: the
-    /// artboards the rest of this design is drawn against use the shipped
-    /// configuration, so nothing could be compared against them; and a browser
-    /// should not open on an argument.
     #[test]
-    fn the_default_is_zervos_own_material() {
-        assert_eq!(Settings::default().appearance.preset, Some(Preset::Zervo));
-        assert_eq!(
-            crate::theme::Appearance::classic(),
-            Settings::default().appearance,
-            "the fallback and the default have to be the same arrangement"
-        );
-        assert!(Preset::ALL.contains(&Preset::Candy));
+    fn the_sidebar_uses_a_solid_workspace_tinted_card_by_default() {
+        let appearance = Settings::default().appearance;
+        assert_eq!(appearance.seam, crate::theme::Seam::Card);
+        assert_eq!(appearance.translucency, Translucency::Solid);
+        assert!(appearance.workspace_accent);
+        assert!(Preset::ALL.contains(&Preset::Zervo));
+    }
+
+    #[test]
+    fn sidebar_layout_repairs_duplicate_sections_and_keeps_legacy_visibility() {
+        let mut settings: Settings = serde_json::from_str(
+            r#"{"show_essentials":false,"sidebar_sections":["Pinned","Pinned","Tabs"]}"#,
+        )
+        .unwrap();
+        migrate(&mut settings);
+        assert_eq!(settings.sidebar_sections, SidebarSection::ALL);
+        assert!(!SidebarSection::Favourites.visible(&settings));
+        settings.reset_sidebar_sections();
+        assert!(SidebarSection::Favourites.visible(&settings));
     }
 }
 

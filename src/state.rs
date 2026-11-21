@@ -3,7 +3,9 @@
 //! Engine state (the `WebView` for each tab) is attached by `main.rs`.
 
 use crate::l10n::text as tr;
+use serde::{Deserialize, Serialize};
 use servo::WebView;
+use url::Url;
 
 pub type TabId = u64;
 
@@ -46,8 +48,9 @@ impl TabKind {
 pub struct Tab {
     pub id: TabId,
     pub kind: TabKind,
-    /// Pinned tabs render as essential tiles in the sidebar grid.
+    /// Pinned tabs stay above the open tabs in their space.
     pub pinned: bool,
+    pub pin_anchor: Option<crate::library::Favourite>,
     pub title: String,
     pub url: String,
     /// The engine view backing this tab. `None` until the tab is first activated
@@ -65,6 +68,7 @@ impl Tab {
             id,
             kind: TabKind::Web,
             pinned: false,
+            pin_anchor: None,
             title: url.clone(),
             url,
             webview: None,
@@ -79,6 +83,7 @@ impl Tab {
             id,
             kind: TabKind::Settings,
             pinned: false,
+            pin_anchor: None,
             title: TabKind::Settings
                 .internal_title()
                 .unwrap_or_default()
@@ -96,6 +101,7 @@ impl Tab {
             id,
             kind: TabKind::History,
             pinned: false,
+            pin_anchor: None,
             title: TabKind::History
                 .internal_title()
                 .unwrap_or_default()
@@ -113,6 +119,7 @@ impl Tab {
             id,
             kind: TabKind::Downloads,
             pinned: false,
+            pin_anchor: None,
             title: TabKind::Downloads
                 .internal_title()
                 .unwrap_or_default()
@@ -133,6 +140,7 @@ impl Tab {
             id,
             kind: TabKind::Trouble(trouble),
             pinned: false,
+            pin_anchor: None,
             title: trouble.title().to_owned(),
             url,
             webview: None,
@@ -147,6 +155,7 @@ impl Tab {
             id,
             kind: TabKind::NewTab,
             pinned: false,
+            pin_anchor: None,
             title: TabKind::NewTab
                 .internal_title()
                 .unwrap_or_default()
@@ -193,6 +202,7 @@ impl SettingsSection {
 pub struct Workspace {
     pub name: String,
     pub tabs: Vec<Tab>,
+    last_active: Option<TabId>,
 }
 
 pub struct BrowserState {
@@ -200,9 +210,6 @@ pub struct BrowserState {
     pub active_workspace: usize,
     pub active_tab: Option<TabId>,
     pub address_bar: String,
-    /// True while the address bar has focus and the user is editing it, so we
-    /// don't clobber their typing with engine-driven URL updates.
-    pub editing_address: bool,
     /// The favourite being renamed, and the name so far.
     pub favourite_edit: Option<(String, String)>,
     /// The workspace being named, and the name so far. Set the moment one tab
@@ -214,8 +221,7 @@ pub struct BrowserState {
     pub password_draft: (String, String, String),
     /// What the passwords page last did, shown under the form.
     pub password_notice: String,
-    /// One-shot request for the address bar to grab keyboard focus (⌘L).
-    pub focus_address: bool,
+    pub command_bar: Option<crate::ui::CommandBar>,
     /// Text in the zervo://newtab page's search box.
     pub newtab_query: String,
     /// The half-typed line on the new tab page's to-do card.
@@ -247,17 +253,17 @@ impl BrowserState {
             workspaces: vec![Workspace {
                 name: tr("common-home").to_owned(),
                 tabs: Vec::new(),
+                last_active: None,
             }],
             active_workspace: 0,
             active_tab: None,
             address_bar: initial_url.to_owned(),
-            editing_address: false,
             favourite_edit: None,
             workspace_edit: None,
             history_query: String::new(),
             password_draft: (String::new(), String::new(), String::new()),
             password_notice: String::new(),
-            focus_address: false,
+            command_bar: None,
             newtab_query: String::new(),
             newtab_task_draft: String::new(),
             newtab_editing: false,
@@ -265,8 +271,121 @@ impl BrowserState {
             next_tab_id: 0,
         };
         let id = state.add_tab(0, initial_url);
-        state.active_tab = Some(id);
+        state.select_tab(id);
         state
+    }
+
+    pub fn restore(homepage: &str, first_name: &str, explicit_url: bool) -> Self {
+        let saved: SavedSpaces = crate::store::load_or_default(spaces_path());
+        Self::from_saved(saved, homepage, first_name, explicit_url)
+    }
+
+    fn from_saved(
+        saved: SavedSpaces,
+        homepage: &str,
+        first_name: &str,
+        explicit_url: bool,
+    ) -> Self {
+        let mut state = Self::new(homepage);
+        if saved.spaces.is_empty() {
+            if !first_name.trim().is_empty() {
+                state.workspaces[0].name = first_name.trim().to_owned();
+            }
+            return state;
+        }
+
+        state.workspaces.clear();
+        for space in saved.spaces {
+            let index = state.add_workspace(space.name);
+            for pin in space.pins {
+                if Url::parse(&pin.url).is_ok_and(|url| url.scheme() != "zervo") {
+                    let tab = state.add_tab(index, &pin.url);
+                    if let Some(tab) = state.tab_mut(tab) {
+                        tab.title = pin.title.clone();
+                        tab.pinned = true;
+                        tab.pin_anchor = Some(pin);
+                    }
+                }
+            }
+        }
+        state.active_workspace = saved.active.min(state.workspaces.len() - 1);
+        let index = state.active_workspace;
+        let tab = match (explicit_url, state.tab_for_workspace(index)) {
+            (false, Some(tab)) => tab,
+            _ => state.add_tab(index, homepage),
+        };
+        state.select_tab(tab);
+        if let Some(tab) = state.tab(tab) {
+            state.address_bar = tab.url.clone();
+        }
+        state
+    }
+
+    fn saved_spaces(&self) -> SavedSpaces {
+        SavedSpaces {
+            active: self.active_workspace,
+            spaces: self
+                .workspaces
+                .iter()
+                .map(|space| SavedSpace {
+                    name: space.name.clone(),
+                    pins: space
+                        .tabs
+                        .iter()
+                        .filter_map(|tab| tab.pin_anchor.clone())
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn save_spaces(&self) {
+        let _ = crate::store::save(spaces_path(), &self.saved_spaces());
+    }
+
+    pub fn tab_for_workspace(&self, index: usize) -> Option<TabId> {
+        let workspace = self.workspaces.get(index)?;
+        workspace
+            .last_active
+            .filter(|id| workspace.tabs.iter().any(|tab| tab.id == *id))
+            .or_else(|| workspace.tabs.last().map(|tab| tab.id))
+    }
+
+    pub fn select_tab(&mut self, id: TabId) -> bool {
+        let Some(index) = self
+            .workspaces
+            .iter()
+            .position(|space| space.tabs.iter().any(|tab| tab.id == id))
+        else {
+            return false;
+        };
+        self.active_workspace = index;
+        self.active_tab = Some(id);
+        self.workspaces[index].last_active = Some(id);
+        true
+    }
+
+    pub fn can_remove_workspace(&self, index: usize) -> bool {
+        self.workspaces.len() > 1
+            && self.workspaces.get(index).is_some_and(|space| {
+                space.tabs.is_empty()
+                    || matches!(space.tabs.as_slice(), [tab] if tab.kind == TabKind::NewTab)
+            })
+    }
+
+    pub fn remove_workspace(&mut self, index: usize) -> bool {
+        if !self.can_remove_workspace(index) {
+            return false;
+        }
+        self.workspaces.remove(index);
+        if self.active_workspace == index {
+            self.active_tab = None;
+        } else if self.active_workspace > index {
+            self.active_workspace -= 1;
+        }
+        self.active_workspace = self.active_workspace.min(self.workspaces.len() - 1);
+        self.workspace_edit = None;
+        true
     }
 
     pub fn add_tab(&mut self, workspace: usize, url: impl Into<String>) -> TabId {
@@ -341,6 +460,7 @@ impl BrowserState {
         self.workspaces.push(Workspace {
             name: name.into(),
             tabs: Vec::new(),
+            last_active: None,
         });
         self.workspaces.len() - 1
     }
@@ -439,5 +559,84 @@ impl BrowserState {
             }
         }
         None
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default)]
+struct SavedSpaces {
+    active: usize,
+    spaces: Vec<SavedSpace>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedSpace {
+    name: String,
+    pins: Vec<crate::library::Favourite>,
+}
+
+fn spaces_path() -> Option<std::path::PathBuf> {
+    Some(crate::settings::data_dir()?.join("spaces.json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restores_spaces_and_pins_without_discarding_an_explicit_url() {
+        let mut state = BrowserState::new("https://example.com");
+        let first = state.active_tab.unwrap();
+        let second = state.add_workspace("Research");
+        let pinned = state.add_tab(second, "https://example.org/visited");
+        let tab = state.tab_mut(pinned).unwrap();
+        tab.pinned = true;
+        tab.pin_anchor = Some(crate::library::Favourite {
+            title: "Notes".to_owned(),
+            url: "https://example.org/notes".to_owned(),
+        });
+        assert!(state.select_tab(pinned));
+        assert_eq!(state.active_workspace, second);
+        assert_eq!(state.tab_for_workspace(0), Some(first));
+
+        let saved = serde_json::to_string(&state.saved_spaces()).unwrap();
+        let restored = BrowserState::from_saved(
+            serde_json::from_str(&saved).unwrap(),
+            "https://example.com",
+            "",
+            false,
+        );
+        assert_eq!(restored.active_workspace, second);
+        let tab = restored.active_tab().unwrap();
+        assert!(tab.pinned);
+        assert_eq!(tab.title, "Notes");
+        assert_eq!(tab.url, "https://example.org/notes");
+
+        let opened = BrowserState::from_saved(
+            serde_json::from_str(&saved).unwrap(),
+            "https://example.net",
+            "",
+            true,
+        );
+        assert_eq!(opened.active_workspace, second);
+        let tab = opened.active_tab().unwrap();
+        assert!(!tab.pinned);
+        assert_eq!(tab.url, "https://example.net");
+        assert_eq!(opened.workspaces[second].tabs.len(), 2);
+    }
+
+    #[test]
+    fn moving_a_tab_updates_the_space_and_invalidates_the_old_selection() {
+        let mut state = BrowserState::new("https://example.com");
+        let initial = state.active_tab.unwrap();
+        let replacement = state.add_zervo_page(0);
+        let second = state.add_workspace("Work");
+        assert!(state.move_tab(initial, second, 0));
+        assert!(state.select_tab(initial));
+        assert_eq!(state.active_workspace, second);
+        assert_eq!(state.tab_for_workspace(0), Some(replacement));
+        assert!(state.remove_workspace(0));
+        assert_eq!(state.active_workspace, 0);
+        assert_eq!(state.active_tab, Some(initial));
     }
 }

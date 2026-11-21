@@ -11,7 +11,9 @@
 [![Engine](https://img.shields.io/badge/engine-Servo-informational)](https://servo.org)
 ![Rust](https://img.shields.io/badge/rust-1.97-orange)
 
-**macOS today — Linux and Windows build from the same tag and are untested.**
+**Sidebar Spaces preview**
+
+<sub>The screenshots below show the original Zervo layout.</sub>
 
 <table>
 <tr>
@@ -103,14 +105,20 @@ so some sites will not work. See [Limitations](#limitations).
 
 ### The window
 
-- **Sidebar-first, or bar-first.** Everything lives in one collapsible sidebar:
-  navigation, the address bar, pinned "essentials", workspaces and tabs. Collapse
-  it and navigation moves into a bar across the top, with the address pill
-  centred on the window and the sidebar left holding only tabs.
-- **A bar you arrange.** Drag its buttons between the two sides, take them off,
-  put them back. Drag the bar itself taller and it uncovers a shelf of widgets —
-  a clock, now playing and transport controls — laid out on a grid, dropped
-  where you like and resized by the corner.
+- **Spaces.** The sidebar shows the current space’s pinned and open tabs.
+  Switch or create a space at the bottom. Right-click a tab to pin it or move it
+  to another space. Space names and pins survive restarts. Favourites are
+  accessible from every space.
+- **Command bar.** Use ⌘T on macOS or Ctrl+T elsewhere to open a new tab.
+  Use ⌘L or Ctrl+L to edit the current address. Search open tabs, favourites,
+  and recent history, or start with `>` to filter browser actions.
+- **Compact mode.** Use ⌘S or Ctrl+S to hide or show the sidebar. Move the
+  pointer to the left edge to reveal it temporarily. The top-bar layout is
+  available under Settings → Layout.
+- **Customizable chrome.** Open Settings → Layout or click the sliders in the
+  sidebar. Show or hide sections and reorder them by dragging or using the
+  arrow buttons. Choose which tools appear before and after the top bar’s
+  address field. Restore defaults independently for the sidebar and top bar.
 - **Workspaces.** Tabs are grouped into named spaces, each with its own colour.
 - **Favourites and history.** The star saves a page and hovering it opens the
   list; history is searchable and grouped by how long ago.

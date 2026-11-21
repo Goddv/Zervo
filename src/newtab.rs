@@ -378,12 +378,7 @@ pub fn draw(
 
     // ── The page's own margins, and a ceiling on how wide the grid gets.
     //
-    // Full-page mode's address pill floats over the page rather than taking
-    // space off it, so nothing else will leave room for it and the page's own
-    // bottom row was landing underneath it.
-    let inner = content_rect
-        .shrink2(vec2(PAGE_PAD, PAGE_PAD * 0.8))
-        .with_max_y(content_rect.max.y - crate::ui::floating_chrome_room(chrome.settings));
+    let inner = content_rect.shrink2(vec2(PAGE_PAD, PAGE_PAD * 0.8));
     let width = inner.width().min(CANVAS_MAX);
     let canvas = Rect::from_center_size(
         pos2(inner.center().x, inner.center().y),
@@ -1664,11 +1659,9 @@ fn draw_composed(
     ink: &Ink,
     actions: &mut Vec<UiAction>,
 ) -> bool {
-    let now = jiff::ZonedDateTime::now();
-
     // Reserve enough room for the clock, greeting and search before showing
     // recent sites. The shelf can leave this page only a few rows high.
-    const MIN_HERO_HEIGHT: f32 = 124.0;
+    const MIN_HERO_HEIGHT: f32 = 148.0;
     let resume: Vec<Resume> = Resume::recent(chrome, 3);
     let strip = resume_height(&resume);
     let strip = if canvas.height() >= strip + MIN_HERO_HEIGHT {
@@ -1686,28 +1679,20 @@ fn draw_composed(
     let hero_ink = ink.over(&chrome.palette, hero, false);
     let centre = hero.center();
     let field_height = (hero.height() * 0.28).clamp(44.0, HERO_HEIGHT);
-    let size = (hero.height() * 0.30)
-        .clamp(40.0, 92.0)
-        .min(hero.height() - field_height - 36.0);
-    let top = centre.y - (size + 36.0 + field_height) / 2.0;
-    hero_ink.write(
+    let size = 42.0;
+    let top = centre.y - (size + 46.0 + field_height) / 2.0;
+    crate::ui::draw_zervo_mark(
         root.painter(),
         pos2(centre.x, top + size / 2.0),
-        Align2::CENTER_CENTER,
-        now.strftime("%H:%M").to_string(),
-        crate::ui::display_font(size),
+        size,
         hero_ink.text,
     );
     hero_ink.write(
         root.painter(),
-        pos2(centre.x, top + size + 10.0),
+        pos2(centre.x, top + size + 12.0),
         Align2::CENTER_CENTER,
-        format!(
-            "{} · {}",
-            now.strftime("%A, %-d %B"),
-            greeting(chrome.settings)
-        ),
-        FontId::proportional(14.0),
+        tr("common-new-tab"),
+        FontId::proportional(15.5),
         hero_ink.muted,
     );
     let field = Rect::from_center_size(
@@ -1724,9 +1709,6 @@ fn draw_composed(
         actions,
         Search::Hero,
     );
-    root.ctx()
-        .request_repaint_after(std::time::Duration::from_secs(20));
-
     // ── Pick up where you left off.
     if strip <= 0.0 {
         return false;
@@ -2154,12 +2136,67 @@ fn draw_search(
     look: Search,
 ) {
     let palette = chrome.palette;
-    let hero = look == Search::Hero;
-    let height = if hero {
-        rect.height()
-    } else {
-        rect.height().clamp(38.0, 52.0)
-    };
+    if look == Search::Hero {
+        let response = area.interact(rect, id, Sense::click());
+        let fill = if response.hovered() {
+            palette.surface_hover
+        } else {
+            palette.surface
+        };
+        area.painter().rect_filled(rect, 12, fill);
+        area.painter().rect_stroke(
+            rect,
+            12,
+            Stroke::new(1.0_f32, palette.border),
+            StrokeKind::Inside,
+        );
+        if response.has_focus() {
+            icons::paint_focus(area, &palette, rect, Tier::Control);
+        }
+        let label = tr("chrome-search-or-enter-an-address");
+        icons::draw_icon(
+            area.painter(),
+            Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), vec2(17.0, 17.0)),
+            Icon::Search,
+            palette.text_muted,
+        );
+        let key = if cfg!(target_os = "macos") {
+            "⌘L"
+        } else {
+            "Ctrl+L"
+        };
+        if rect.width() >= 260.0 {
+            area.painter().text(
+                pos2(rect.right() - 16.0, rect.center().y),
+                Align2::RIGHT_CENTER,
+                key,
+                FontId::proportional(12.0),
+                palette.text_muted,
+            );
+        }
+        let mut text = egui::text::LayoutJob::simple_singleline(
+            label.to_owned(),
+            FontId::proportional(15.0),
+            palette.text,
+        );
+        text.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 106.0).max(48.0));
+        let text = area.painter().layout_job(text);
+        area.painter().galley(
+            pos2(rect.left() + 46.0, rect.center().y - text.size().y / 2.0),
+            text,
+            palette.text,
+        );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, live, label));
+        if live
+            && response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+        {
+            actions.push(UiAction::OpenCommand(crate::ui::CommandMode::CurrentTab));
+        }
+        return;
+    }
+    let height = rect.height().clamp(38.0, 52.0);
     let pill = Rect::from_center_size(rect.center(), vec2(rect.width(), height));
 
     // Focus is read from what last frame recorded. A frame's lag on a
@@ -2176,31 +2213,24 @@ fn draw_search(
     // Over a photograph there is, and the material frosts against that instead
     // — this is what the pill falls back to on a plain or generated backdrop.
     let backing = palette.bg;
-    let material = if hero {
-        // A capsule, per 7a — the one surface in the design whose corner is
-        // half its own height rather than a tier.
-        Glass::new((height * 0.5) as u8)
-    } else {
-        Glass::tier(Tier::Pill)
-    };
     glass::paint(
         area.painter(),
         pill,
         &palette,
-        material
+        Glass::tier(Tier::Pill)
             .strength(1.0)
             // `0 0 0 1px accent(.24)` on 5a's search field and .28 on 7a's
             // hero, and lit before it is focused — focus deepens the ring
             // rather than introducing it.
-            .ring(palette.accent_ring(if hero { 0.28 } else { 0.24 } + 0.4 * focus))
+            .ring(palette.accent_ring(0.24 + 0.4 * focus))
             .glow((0.5 + 0.5 * focus).min(1.0))
             // No `fades()`: it is a text field, not a card, and a text field
             // nobody can find is not one. The history search field is solid
             // for exactly this reason.
             .opaque(backing),
     );
-    let glyph = if hero { 19.0 } else { 16.0 };
-    let lead = if hero { 26.0 } else { 20.0 };
+    let glyph = 16.0;
+    let lead = 20.0;
     icons::draw_icon(
         area.painter(),
         Rect::from_center_size(pos2(pill.min.x + lead, pill.center().y), vec2(glyph, glyph)),
@@ -2209,27 +2239,11 @@ fn draw_search(
     );
 
     let hint = crate::l10n::message(
-        if hero {
-            "newtab-search-hero"
-        } else {
-            "newtab-search-compact"
-        },
+        "newtab-search-compact",
         [("engine", chrome.settings.search_engine.label().into())],
     );
-    // The shortcut, on the end of the hero. ⌘L already focuses the address
-    // pill from anywhere; saying so on the one field the page is built around
-    // costs a line of type and answers the question it raises.
-    let tail = if hero { 46.0 } else { 14.0 };
-    if hero {
-        area.painter().text(
-            pos2(pill.max.x - 20.0, pill.center().y),
-            Align2::RIGHT_CENTER,
-            "\u{2318}L",
-            FontId::monospace(11.0),
-            palette.text_muted.gamma_multiply(0.75),
-        );
-    }
-    let font = if hero { 15.0_f32 } else { 14.5 };
+    let tail = 14.0;
+    let font = 14.5;
     let field = Rect::from_min_max(
         pos2(pill.min.x + lead + glyph * 0.5 + 12.0, pill.min.y),
         pos2(pill.max.x - tail, pill.max.y),
@@ -2290,7 +2304,7 @@ fn draw_search(
                 field.width(),
             ),
             FontId::proportional(font),
-            theme::mix(over.muted, over.text, if hero { 0.25 } else { 0.0 }),
+            over.muted,
         );
     }
     let editor = TextEdit::singleline(&mut chrome.browser.newtab_query)
