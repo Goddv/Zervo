@@ -136,11 +136,13 @@ pub enum UiAction {
     PersistSettings,
 }
 
-/// Window-space sidebar surface requested from AppKit for this frame.
+/// AppKit surfaces positioned beneath the browser chrome.
 #[derive(Default)]
 pub struct NativeGlass {
-    pub available: bool,
-    pub sidebar: Option<(Rect, f32)>,
+    pub sidebar_available: bool,
+    pub glass_available: bool,
+    pub sidebar: Option<Rect>,
+    pub address: Option<(Rect, f32)>,
 }
 
 pub struct UiOutput {
@@ -180,6 +182,7 @@ pub struct ChromeContext<'a> {
     pub media: &'a crate::dashboard::Media,
     pub settings: &'a mut Settings,
     pub palette: Palette,
+    pub window_controls: Option<Rect>,
     pub native_glass: NativeGlass,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
     pub downloads: &'a crate::downloads::DownloadManager,
@@ -200,11 +203,19 @@ pub struct ChromeContext<'a> {
 }
 
 impl ChromeContext<'_> {
-    pub(crate) fn uses_native_glass(&self) -> bool {
-        self.native_glass.available
-            && self.palette.translucency == theme::Translucency::LiquidGlass
-            && self.settings.seen_setup
-            && self.settings.layout != crate::settings::Layout::FullPage
+    fn uses_native_sidebar(&self) -> bool {
+        self.native_glass.sidebar_available
+            && self.palette.translucency.is_translucent()
+            && self.settings.layout.is_sidebar()
+    }
+
+    pub(crate) fn window_controls_room(&self) -> f32 {
+        if self.settings.layout.is_sidebar() {
+            0.0
+        } else {
+            self.window_controls
+                .map_or(0.0, |controls| controls.bottom() + 8.0)
+        }
     }
 }
 
@@ -248,18 +259,6 @@ fn language_picker(ui: &mut Ui, settings: &mut Settings, actions: &mut Vec<UiAct
 
 pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     let mut actions = Vec::new();
-
-    // One continuous chrome base for the whole window, painted before the
-    // panels so the top gradient runs unbroken from the sidebar across to
-    // the right edge instead of stopping at the sidebar boundary.
-    if !chrome.uses_native_glass() {
-        paint_chrome_base(
-            root,
-            &chrome.palette,
-            chrome.settings.top_glow,
-            chrome.palette.chrome_tint(),
-        );
-    }
 
     // First run takes the whole frame, chrome and page both. There is nothing
     // behind it worth clicking on by accident, and a half-configured browser
@@ -307,9 +306,19 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     ));
     let active_kind = chrome.browser.active_tab().map(|tab| tab.kind);
     let will_float = layout.is_sidebar()
-        && !chrome.uses_native_glass()
+        && !chrome.uses_native_sidebar()
         && chrome.palette.appearance.seam.chrome_floats()
         && matches!(active_kind, Some(TabKind::NewTab));
+    let native_sidebar = chrome.uses_native_sidebar() && present >= 1.0;
+    if !native_sidebar {
+        paint_chrome_base(
+            root,
+            &chrome.palette,
+            chrome.settings.top_glow,
+            chrome.palette.chrome_tint(),
+            None,
+        );
+    }
     // The docked and revealed sidebar share widget IDs. Draw only one per frame.
     let sidebar_docked = present > 0.0;
     let floating_sidebar = if sidebar_docked {
@@ -319,6 +328,15 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     };
 
     let outer = root.available_rect_before_wrap();
+    if native_sidebar {
+        paint_chrome_base(
+            root,
+            &chrome.palette,
+            chrome.settings.top_glow,
+            chrome.palette.chrome_tint(),
+            chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
+        );
+    }
     let top_margin = if layout.is_sidebar() {
         theme::content_margin(&chrome.palette)
     } else {
@@ -541,18 +559,6 @@ const SIDEBAR_MARGIN: Margin = Margin {
     bottom: 8,
 };
 
-/// Where the sidebar's nav row has to start for its centre to land on the
-/// macOS traffic lights'.
-///
-/// The lights are 12pt tall at 14pt in, so their centre is at 20.
-/// `icons::icon_button` is `size + 8` tall, which for a 17pt glyph is 25, so
-/// the row has to start at 7.5 for the two centres to meet. The frame's own
-/// top margin is 8 — half a point out, which is a near-miss, and a near-miss
-/// reads worse than an obvious offset does.
-///
-/// The half point is taken off the top and given straight back to the gap
-/// below, so the address pill does not move when this is turned on.
-const NAV_ROW_TOP: f32 = 7.5;
 /// The gap between the nav row and the address pill under it.
 const NAV_ROW_GAP: f32 = 10.0;
 
@@ -594,8 +600,7 @@ fn draw_sidebar(
             .exact_size(stored * reveal.max(0.0))
     };
     panel
-        // Transparent: the window-wide chrome base paints behind it, so the
-        // top gradient continues across the sidebar boundary unbroken.
+        // The window chrome or AppKit paints the background beneath the panel.
         .frame(Frame::NONE.inner_margin(SIDEBAR_MARGIN))
         .show_separator_line(false)
         .show_inside(root, |ui| {
@@ -627,13 +632,16 @@ fn draw_sidebar(
                 return;
             }
             if settled {
-                if chrome.uses_native_glass() {
+                if chrome.uses_native_sidebar() {
                     let bounds = ui.ctx().content_rect();
-                    let panel = Rect::from_min_max(
-                        bounds.min + vec2(5.0, 5.0),
-                        pos2(ui.max_rect().right() + 5.0, bounds.bottom() - 5.0),
-                    );
-                    chrome.native_glass.sidebar = Some((panel, 20.0));
+                    chrome.native_glass.sidebar = Some(Rect::from_min_max(
+                        bounds.min,
+                        pos2(
+                            (ui.max_rect().right() + f32::from(SIDEBAR_MARGIN.right))
+                                .min(bounds.right()),
+                            bounds.bottom(),
+                        ),
+                    ));
                 }
                 sidebar_body(ui, chrome, actions);
                 return;
@@ -720,20 +728,23 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
 
     // Navigation sits clear of the macOS window controls.
     {
-        // Half a point up, and the same half point back into the gap under the
-        // row — see `NAV_ROW_TOP`. Only where there are window controls to
-        // line up with.
-        let align = cfg!(target_os = "macos")
-            && chrome.settings.appearance.align_nav
-            && ui.max_rect().width() >= 58.0 + 5.0 * (SIDEBAR_ICON + 12.0);
-        let nudge = if align {
-            NAV_ROW_TOP - f32::from(SIDEBAR_MARGIN.top)
-        } else if cfg!(target_os = "macos") {
-            32.0 - f32::from(SIDEBAR_MARGIN.top)
-        } else {
-            0.0
-        };
-        ui.add_space(nudge);
+        let nav_height = SIDEBAR_ICON + 8.0;
+        let row_left = ui.max_rect().left();
+        let row_top = ui.cursor().top();
+        let (top, inset) = chrome.window_controls.map_or((row_top, 0.0), |controls| {
+            let after_controls = (controls.right() + 8.0 - row_left).max(0.0);
+            if chrome.settings.appearance.align_nav
+                && after_controls + 5.0 * (SIDEBAR_ICON + 12.0) <= ui.max_rect().width()
+            {
+                (
+                    (controls.center().y - nav_height * 0.5).max(row_top),
+                    after_controls,
+                )
+            } else {
+                ((controls.bottom() + 8.0).max(row_top), 0.0)
+            }
+        });
+        ui.add_space((top - row_top).max(0.0));
         let star;
         // The nav row gets a rect of its own rather than a `horizontal`.
         //
@@ -763,8 +774,8 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
         nav.spacing_mut().item_spacing.x = 0.0;
         {
             let ui = &mut nav;
-            if align {
-                ui.add_space(58.0);
+            if inset > 0.0 {
+                ui.add_space(inset);
             }
 
             let (can_go_back, can_go_forward, is_settings) = chrome
@@ -846,7 +857,7 @@ fn draw_history_page(
             .max_rect(
                 content_rect
                     .shrink(28.0)
-                    .with_min_y(content_rect.min.y + 28.0 + window_controls_room(chrome.settings)),
+                    .with_min_y(content_rect.min.y + 28.0 + chrome.window_controls_room()),
             )
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
@@ -2180,25 +2191,6 @@ fn widget_action(change: crate::dashboard::Change) -> UiAction {
     }
 }
 
-/// Keep internal pages clear of macOS window controls in Full Page mode.
-pub fn window_controls_room(settings: &Settings) -> f32 {
-    #[cfg(target_os = "macos")]
-    {
-        if settings.layout == crate::settings::Layout::FullPage {
-            // The lights are 12pt tall at 14pt in, so their bottom edge is at
-            // 26. The sidebar reserves 28 for the same reason.
-            28.0
-        } else {
-            0.0
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = settings;
-        0.0
-    }
-}
-
 /// How much room the sidebar's shelf grip takes when the shelf is shut.
 const SIDEBAR_GRIP: f32 = 10.0;
 
@@ -2377,14 +2369,22 @@ fn draw_address_pill(
 
     let (pill_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
 
-    let radius = f32::from(palette.radius(Tier::Panel)).min(height * 0.5) as u8;
-    ui.painter().rect_filled(pill_rect, radius, palette.surface);
-    ui.painter().rect_stroke(
-        pill_rect,
-        radius,
-        Stroke::new(1.0_f32, palette.border),
-        StrokeKind::Inside,
-    );
+    let radius = f32::from(palette.radius(Tier::Panel)).min(height * 0.5);
+    if chrome.native_glass.sidebar.is_some()
+        && chrome.native_glass.glass_available
+        && palette.translucency == theme::Translucency::LiquidGlass
+    {
+        chrome.native_glass.address = Some((pill_rect, radius));
+    } else {
+        ui.painter().rect_filled(pill_rect, radius, palette.surface);
+        ui.painter().rect_stroke(
+            pill_rect,
+            radius,
+            Stroke::new(1.0_f32, palette.border),
+            StrokeKind::Inside,
+        );
+    }
+    let radius = radius as u8;
 
     let mut inner = ui.new_child(
         egui::UiBuilder::new()
@@ -3256,7 +3256,7 @@ fn draw_downloads_page(
             .max_rect(
                 content_rect
                     .shrink2(vec2(6.0, 10.0))
-                    .with_min_y(content_rect.min.y + 10.0 + window_controls_room(chrome.settings)),
+                    .with_min_y(content_rect.min.y + 10.0 + chrome.window_controls_room()),
             )
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );

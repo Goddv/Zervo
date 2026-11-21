@@ -137,9 +137,20 @@ pub(crate) fn chrome_color_at(root: &Ui, y: f32, palette: &Palette, top_glow: f3
 
 /// Flat chrome fill plus the window-wide top gradient, painted under
 /// everything else.
-pub(crate) fn paint_chrome_base(root: &Ui, palette: &Palette, top_glow: f32, opacity: f32) {
-    let painter = root.ctx().layer_painter(egui::LayerId::background());
+pub(crate) fn paint_chrome_base(
+    root: &Ui,
+    palette: &Palette,
+    top_glow: f32,
+    opacity: f32,
+    sidebar_right: Option<f32>,
+) {
     let window = root.ctx().content_rect();
+    let mut painter = root.ctx().layer_painter(egui::LayerId::background());
+    if let Some(right) = sidebar_right {
+        // Leave the framebuffer clear over the AppKit sidebar material.
+        let clip = Rect::from_min_max(pos2(right, window.top()), window.max);
+        painter = painter.with_clip_rect(clip);
+    }
     paint_chrome_fill(&painter, window, window.top(), palette, top_glow, opacity);
     paint_chrome_aurora(root, &painter, window, palette);
 }

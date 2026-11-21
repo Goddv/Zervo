@@ -415,7 +415,11 @@ fn sidebar_default_appearance() -> crate::theme::Appearance {
     Appearance {
         preset: None,
         seam: Seam::Card,
-        translucency: Translucency::Solid,
+        translucency: if cfg!(target_os = "macos") {
+            Translucency::Frosted
+        } else {
+            Translucency::Solid
+        },
         gap: 9.0,
         corners: 0.8,
         candy: 0.025,
@@ -634,10 +638,17 @@ mod tests {
     }
 
     #[test]
-    fn the_sidebar_uses_a_solid_workspace_tinted_card_by_default() {
+    fn the_sidebar_uses_the_platform_material_by_default() {
         let appearance = Settings::default().appearance;
         assert_eq!(appearance.seam, crate::theme::Seam::Card);
-        assert_eq!(appearance.translucency, Translucency::Solid);
+        assert_eq!(
+            appearance.translucency,
+            if cfg!(target_os = "macos") {
+                Translucency::Frosted
+            } else {
+                Translucency::Solid
+            }
+        );
         assert!(appearance.workspace_accent);
         assert!(Preset::ALL.contains(&Preset::Zervo));
     }

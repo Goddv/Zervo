@@ -346,6 +346,9 @@ impl ApplicationHandler<WakerEvent> for App {
             .create_window(attributes)
             .expect("Failed to create winit Window");
 
+        #[cfg(target_os = "macos")]
+        vibrancy::configure_titlebar(&window);
+
         // Frosted-glass backdrop behind the (translucent) chrome.
         #[cfg(target_os = "macos")]
         let vibrancy = vibrancy::install(&window, objc2_app_kit::NSVisualEffectMaterial::Sidebar);
@@ -1211,7 +1214,7 @@ impl RunningApp {
 
         let palette = self.palette();
         #[cfg(target_os = "macos")]
-        let (palette, native_available) = {
+        let (palette, native_available, glass_available) = {
             let (reduce_transparency, reduce_motion) = vibrancy::accessibility_preferences();
             let mut palette = if reduce_transparency {
                 palette.with_translucency(theme::Translucency::Solid)
@@ -1221,10 +1224,19 @@ impl RunningApp {
             if reduce_motion {
                 palette.material.animation = 0.0;
             }
-            (palette, self.liquid_glass.is_some() && !reduce_transparency)
+            (
+                palette,
+                self._vibrancy.is_some() && !reduce_transparency,
+                self.liquid_glass.is_some() && !reduce_transparency,
+            )
         };
         #[cfg(not(target_os = "macos"))]
-        let native_available = false;
+        let (native_available, glass_available) = (false, false);
+        #[cfg(target_os = "macos")]
+        let window_controls =
+            vibrancy::window_controls(&state.window, self.egui_glow.egui_ctx.zoom_factor());
+        #[cfg(not(target_os = "macos"))]
+        let window_controls = None;
         if self.theme_fade.is_some() {
             // egui's own style has to follow the crossfade frame by frame:
             // stock widgets take their colors from there rather than from the
@@ -1343,8 +1355,10 @@ impl RunningApp {
                 media: &media,
                 settings: &mut settings,
                 palette,
+                window_controls,
                 native_glass: ui::NativeGlass {
-                    available: native_available,
+                    sidebar_available: native_available,
+                    glass_available,
                     ..Default::default()
                 },
                 favicons: &favicons,
@@ -1360,7 +1374,6 @@ impl RunningApp {
                 },
             };
             let output = ui::draw(root, &mut chrome);
-            let native_chrome = chrome.uses_native_glass();
             drop(browser);
             drop(controls);
             drop(library);
@@ -1453,9 +1466,7 @@ impl RunningApp {
                 root,
                 content_rect,
                 &palette,
-                if !blitted || (translucent_window && native_chrome) {
-                    // Internal pages round themselves. Native chrome can show
-                    // directly through the already-cut webview corners.
+                if !blitted {
                     ui::Corners::NoMask
                 } else if translucent_window {
                     ui::Corners::Cut
@@ -1504,8 +1515,14 @@ impl RunningApp {
         let mut ambient = false;
         if let Some(output) = ui_output {
             #[cfg(target_os = "macos")]
-            if let Some(glass) = &self.liquid_glass {
-                glass.update(&output.native_glass, self.egui_glow.egui_ctx.zoom_factor());
+            {
+                let zoom = self.egui_glow.egui_ctx.zoom_factor();
+                if let Some(backdrop) = &self._vibrancy {
+                    backdrop.update_sidebar(output.native_glass.sidebar, zoom);
+                }
+                if let Some(glass) = &self.liquid_glass {
+                    glass.update(output.native_glass.address, zoom);
+                }
             }
             self.content_rect_points = output.content_rect;
             self.page_rect_points = output.page_rect;

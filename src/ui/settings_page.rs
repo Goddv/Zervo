@@ -41,7 +41,7 @@ pub(crate) fn draw_settings_page(
     let laid_out = Rect::from_min_max(
         pos2(
             content_rect.min.x,
-            content_rect.min.y + crate::ui::window_controls_room(chrome.settings),
+            content_rect.min.y + chrome.window_controls_room(),
         ),
         content_rect.max,
     );
@@ -853,13 +853,24 @@ pub(crate) fn settings_appearance(
         }
         let translucency = chrome.settings.appearance.translucency;
         let material_note = match translucency {
-            theme::Translucency::LiquidGlass if chrome.native_glass.available => {
-                tr("settings-the-docked-sidebar-and-toolbar-use-macos")
-            },
             _ if translucency.is_translucent()
                 && palette.translucency == theme::Translucency::Solid =>
             {
                 tr("settings-macos-reduce-transparency")
+            },
+            theme::Translucency::Frosted
+                if chrome.native_glass.sidebar_available && chrome.settings.layout.is_sidebar() =>
+            {
+                tr("settings-native-docked-sidebar")
+            },
+            theme::Translucency::LiquidGlass
+                if chrome.native_glass.sidebar_available && chrome.native_glass.glass_available =>
+            {
+                if chrome.settings.layout.is_sidebar() {
+                    tr("settings-native-docked-sidebar-and-address-field")
+                } else {
+                    tr("settings-dock-sidebar-for-liquid-glass")
+                }
             },
             theme::Translucency::LiquidGlass => {
                 tr("settings-zervo-s-frosted-material-is-used-here")
@@ -1060,7 +1071,7 @@ pub(crate) fn settings_appearance(
             ) {
                 actions.push(UiAction::SettingsChanged);
             }
-            note(ui, palette, tr("settings-the-lights-are-12pt-at-14pt-in"));
+            note(ui, palette, tr("settings-native-window-control-alignment"));
         }
     });
 

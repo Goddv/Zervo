@@ -22,17 +22,26 @@ use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass};
 use objc2_app_kit::{
     NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSGlassEffectView,
-    NSGlassEffectViewStyle, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWorkspace,
+    NSGlassEffectViewStyle, NSTitlebarSeparatorStyle, NSToolbar, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowButton, NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle,
+    NSWorkspace,
 };
+use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// Keeps the backdrop alive and lets you retune it at runtime.
 pub struct Vibrancy {
     view: Retained<NSVisualEffectView>,
+    content: Retained<NSView>,
+    sidebar: Retained<NSVisualEffectView>,
 }
 
 impl Vibrancy {
+    pub fn update_sidebar(&self, rect: Option<egui::Rect>, zoom: f32) {
+        update_surface(&self.content, &self.sidebar, rect, zoom);
+    }
+
     /// Swap material, crossfading over `duration` seconds.
     ///
     /// A bare `setMaterial` snaps, and the WindowServer composites this view a
@@ -60,6 +69,97 @@ fn content_view(window: &impl HasWindowHandle) -> Option<Retained<NSView>> {
             unsafe { Retained::retain(ptr) }
         },
         _ => None,
+    }
+}
+
+/// Ask AppKit for the unified titlebar's native window-control layout.
+pub fn configure_titlebar(window: &impl HasWindowHandle) -> Option<()> {
+    let mtm = MainThreadMarker::new()?;
+    let window = content_view(window)?.window()?;
+    let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("ZervoTitlebar"));
+    // A hidden toolbar selects the unified titlebar geometry without
+    // reserving a toolbar row or introducing any browser controls.
+    toolbar.setVisible(false);
+    window.setToolbar(Some(&toolbar));
+    window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+    window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    Some(())
+}
+
+pub fn window_controls(window: &impl HasWindowHandle, zoom: f32) -> Option<egui::Rect> {
+    let _mtm = MainThreadMarker::new()?;
+    let content = content_view(window)?;
+    let window = content.window()?;
+    if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+        return None;
+    }
+    let bounds = content.bounds();
+    [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ]
+    .into_iter()
+    .filter_map(|kind| {
+        let button = window.standardWindowButton(kind)?;
+        if button.isHiddenOrHasHiddenAncestor() {
+            return None;
+        }
+        let rect = button.convertRect_toView(button.bounds(), Some(&content));
+        let x = rect.min().x - bounds.min().x;
+        let y = if content.isFlipped() {
+            rect.min().y - bounds.min().y
+        } else {
+            bounds.max().y - rect.max().y
+        };
+        Some(egui::Rect::from_min_size(
+            egui::pos2(x as f32, y as f32) / zoom,
+            egui::vec2(rect.size.width as f32, rect.size.height as f32) / zoom,
+        ))
+    })
+    .reduce(egui::Rect::union)
+}
+
+fn update_surface(content: &NSView, surface: &NSView, rect: Option<egui::Rect>, zoom: f32) {
+    let Some(rect) = rect else {
+        if !surface.isHidden() {
+            surface.setHidden(true);
+        }
+        return;
+    };
+    // SAFETY: the retained AppKit views are main-thread objects.
+    let Some(parent) = (unsafe { content.superview() }) else {
+        return;
+    };
+    let bounds = content.bounds();
+    let zoom = f64::from(zoom);
+    let x = bounds.min().x + f64::from(rect.left()) * zoom;
+    let y = if content.isFlipped() {
+        bounds.min().y + f64::from(rect.top()) * zoom
+    } else {
+        bounds.max().y - f64::from(rect.bottom()) * zoom
+    };
+    let local = NSRect::new(
+        NSPoint::new(x, y),
+        NSSize::new(
+            f64::from(rect.width()) * zoom,
+            f64::from(rect.height()) * zoom,
+        ),
+    );
+    let frame = content.convertRect_toView(local, Some(&parent));
+    // SAFETY: reads the superview of a live main-thread AppKit view.
+    if unsafe { surface.superview() }.as_deref() != Some(&*parent) {
+        parent.addSubview_positioned_relativeTo(
+            surface,
+            NSWindowOrderingMode::Below,
+            Some(content),
+        );
+    }
+    if surface.frame() != frame {
+        surface.setFrame(frame);
+    }
+    if surface.isHidden() {
+        surface.setHidden(false);
     }
 }
 
@@ -99,7 +199,22 @@ pub fn install(
         Some(&content),
     );
 
-    Some(Vibrancy { view: effect })
+    let sidebar = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), NSRect::ZERO);
+    sidebar.setMaterial(NSVisualEffectMaterial::Sidebar);
+    sidebar.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    sidebar.setState(NSVisualEffectState::FollowsWindowActiveState);
+    sidebar.setHidden(true);
+    frame_view.addSubview_positioned_relativeTo(
+        &sidebar,
+        NSWindowOrderingMode::Below,
+        Some(&content),
+    );
+
+    Some(Vibrancy {
+        view: effect,
+        content,
+        sidebar,
+    })
 }
 
 /// Belt-and-braces: force the GL view's layer tree to composite with alpha.
@@ -143,53 +258,19 @@ impl LiquidGlass {
         Some(Self { content, view })
     }
 
-    pub fn update(&self, glass: &crate::ui::NativeGlass, zoom: f32) {
-        // SAFETY: all views and this method are confined to the main thread.
-        let Some(parent) = (unsafe { self.content.superview() }) else {
-            return;
-        };
-        let view = &self.view;
-        let Some((rect, radius)) = glass.sidebar else {
-            if !view.isHidden() {
-                view.setHidden(true);
+    pub fn update(&self, surface: Option<(egui::Rect, f32)>, zoom: f32) {
+        if let Some((_, radius)) = surface {
+            let radius = f64::from(radius) * f64::from(zoom);
+            if self.view.cornerRadius() != radius {
+                self.view.setCornerRadius(radius);
             }
-            return;
-        };
-        let bounds = self.content.bounds();
-        let zoom = f64::from(zoom);
-        // Egui measures down from the top in zoomed points.
-        let x = bounds.min().x + f64::from(rect.left()) * zoom;
-        let y = if self.content.isFlipped() {
-            bounds.min().y + f64::from(rect.top()) * zoom
-        } else {
-            bounds.max().y - f64::from(rect.bottom()) * zoom
-        };
-        let local = objc2_foundation::NSRect::new(
-            objc2_foundation::NSPoint::new(x, y),
-            objc2_foundation::NSSize::new(
-                f64::from(rect.width()) * zoom,
-                f64::from(rect.height()) * zoom,
-            ),
+        }
+        update_surface(
+            &self.content,
+            &self.view,
+            surface.map(|(rect, _)| rect),
+            zoom,
         );
-        let frame = self.content.convertRect_toView(local, Some(&parent));
-        // SAFETY: reads the superview of a retained AppKit view on the main thread.
-        if unsafe { view.superview() }.as_deref() != Some(&*parent) {
-            parent.addSubview_positioned_relativeTo(
-                view,
-                NSWindowOrderingMode::Below,
-                Some(&self.content),
-            );
-        }
-        if view.frame() != frame {
-            view.setFrame(frame);
-        }
-        let radius = f64::from(radius) * zoom;
-        if view.cornerRadius() != radius {
-            view.setCornerRadius(radius);
-        }
-        if view.isHidden() {
-            view.setHidden(false);
-        }
     }
 }
 

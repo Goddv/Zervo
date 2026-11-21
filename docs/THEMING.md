@@ -96,7 +96,7 @@ It controls the window backdrop, chrome and overlay materials:
   `Frosted`),
 - the tint over the window's own chrome,
 - the tint on everything the material draws over that chrome,
-- the use of AppKit glass in the docked sidebar with `LiquidGlass`
+- the use of AppKit glass in the address field with `LiquidGlass`
   on macOS 26 and later. In-page overlays and other operating systems use
   Zervo’s frosted material.
 
@@ -282,10 +282,11 @@ same place, so nothing jumps when the kind of page changes.
 
 ## macOS-specific pieces
 
-**Liquid Glass** uses `NSGlassEffectView` for the docked sidebar. The view sits
-below winit’s transparent, layer-hosting content view. Zervo still draws the text, icons and focus indicators and handles
-input through egui. Page overlays frost against the rendered page. With macOS
-Reduce Transparency enabled, Zervo renders solid surfaces.
+The docked sidebar uses AppKit’s `NSVisualEffectView.Material.sidebar` for
+translucency and its active-window tint. The **Liquid Glass** preset adds
+`NSGlassEffectView` behind the address field on supported Macs. Both views sit
+behind winit’s layer-hosting content view. Zervo draws and handles the sidebar
+items in egui. Reduce Transparency and the Solid setting use opaque surfaces.
 
 **The window's own backdrop** is an `NSVisualEffectView` behind a transparent
 framebuffer. The chrome paints a thin tint over it. That is why the chrome's

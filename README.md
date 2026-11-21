@@ -84,6 +84,9 @@ so some sites will not work. See [Limitations](#limitations).
   and recent history, or start with `>` to filter browser actions.
 - **Compact mode.** Use ⌘S or Ctrl+S to hide or show the sidebar. Move the
   pointer to the left edge to reveal it temporarily in Full Page mode.
+- **Native macOS chrome.** AppKit lays out the window buttons and supplies
+  the blur and tint for the docked sidebar. The Solid setting and Reduce
+  Transparency use opaque surfaces.
 - **Customizable chrome.** Open Settings → Layout or click the sliders in the
   sidebar. Show or hide sections and reorder them by dragging or using the
   arrow buttons. Toggle sidebar tools and the widget shelf, or restore the
