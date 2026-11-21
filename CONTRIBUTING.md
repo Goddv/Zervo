@@ -13,6 +13,12 @@ chrome-only changes rebuild in seconds. Read
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first — the GL-context sharing is
 the one genuinely surprising thing in the codebase.
 
+## Translate the interface
+
+[The translation guide](docs/TRANSLATING.md) explains how to edit a catalogue,
+preview it in a built copy of Zervo, and open a pull request. Partial
+translations work because missing messages fall back to English.
+
 ## Ground rules
 
 - **`cargo fmt` and `cargo clippy` clean.** CI enforces both — `cargo fmt

@@ -41,7 +41,7 @@ mod downloads;
 // and the tests can run on a pull request without compiling Servo first.
 // Re-exported at the root rather than referred to by its own name, so every
 // `crate::theme::…` in the tree carries on resolving and nothing had to move.
-pub use zervo_core::{gestures, glass, grid, net, store, theme};
+pub use zervo_core::{gestures, glass, grid, l10n, net, store, theme};
 // Stays here rather than in the core crate: it reads the window's live GL
 // context, which is the half of the browser the core crate exists to avoid.
 mod gpu;
@@ -412,6 +412,7 @@ impl ApplicationHandler<WakerEvent> for App {
         }
 
         let settings = settings::load();
+        l10n::select(&settings.language);
         let system_dark = matches!(window.theme(), Some(winit::window::Theme::Dark));
         theme::apply(
             &egui_glow.egui_ctx,
@@ -2261,6 +2262,12 @@ impl RunningApp {
             UiAction::PersistSettings => {
                 self.settings.save();
             },
+            UiAction::ChangeLanguage => {
+                l10n::select(&self.settings.language);
+                state.browser.borrow_mut().refresh_internal_titles();
+                self.settings.save();
+                self.state.window.request_redraw();
+            },
             UiAction::SettingsChanged => {
                 self.settings.save();
                 // Only redo the parts whose input actually changed — see the
@@ -2580,6 +2587,19 @@ fn install_fonts(ctx: &egui::Context) {
         if let Some(proportional) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
             proportional.insert(0, "SF Pro".to_owned());
         }
+    }
+
+    // Egui supplies no CJK glyphs in its default fonts. Register a fallback
+    // for Japanese translations and page titles on all three platforms.
+    let noto = "Noto Sans JP".to_owned();
+    fonts.font_data.insert(
+        noto.clone(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansJP.ttf"
+        ))),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push(noto.clone());
     }
 
     // The display family: one real light face, for the handful of runs set

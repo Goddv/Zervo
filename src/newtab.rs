@@ -17,6 +17,7 @@
 //! library beside the favourites, not in the settings, because it is the
 //! reader's writing rather than their preferences.
 
+use crate::l10n::text as tr;
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Key, Rect, RichText, Sense,
     Stroke, StrokeKind, TextEdit, Ui, pos2, vec2,
@@ -95,19 +96,19 @@ impl Card {
 
     pub fn label(self) -> &'static str {
         match self {
-            Card::Search => "Search",
-            Card::Clock => "Clock",
-            Card::WorldClocks => "World clocks",
-            Card::QuickLinks => "Quick links",
-            Card::TopSites => "Most visited",
-            Card::Recent => "Recent",
-            Card::Favourites => "Favourites",
-            Card::Downloads => "Downloads",
-            Card::NowPlaying => "Now playing",
-            Card::Notes => "Note",
-            Card::Tasks => "To-do",
-            Card::Workspaces => "Workspaces",
-            Card::Mark => "Zervo mark",
+            Card::Search => tr("common-search"),
+            Card::Clock => tr("newtab-clock"),
+            Card::WorldClocks => tr("common-world-clocks"),
+            Card::QuickLinks => tr("newtab-quick-links"),
+            Card::TopSites => tr("common-most-visited"),
+            Card::Recent => tr("newtab-recent"),
+            Card::Favourites => tr("common-favourites"),
+            Card::Downloads => tr("common-downloads"),
+            Card::NowPlaying => tr("common-now-playing"),
+            Card::Notes => tr("newtab-note"),
+            Card::Tasks => tr("newtab-to-do"),
+            Card::Workspaces => tr("newtab-workspaces"),
+            Card::Mark => tr("newtab-zervo-mark"),
         }
     }
 
@@ -682,10 +683,10 @@ fn greeting(settings: &crate::settings::Settings) -> String {
         return settings.newtab_message.trim().to_owned();
     }
     match jiff::ZonedDateTime::now().hour() {
-        5..=11 => "Good morning",
-        12..=17 => "Good afternoon",
-        18..=21 => "Good evening",
-        _ => "Good night",
+        5..=11 => tr("newtab-good-morning"),
+        12..=17 => tr("newtab-good-afternoon"),
+        18..=21 => tr("newtab-good-evening"),
+        _ => tr("newtab-good-night"),
     }
     .to_owned()
 }
@@ -728,7 +729,11 @@ fn draw_header(
         &mut cursor,
         header,
         if composed { Icon::Sliders } else { Icon::Home },
-        if composed { "Customise" } else { "Home" },
+        if composed {
+            tr("newtab-customise")
+        } else {
+            tr("common-home")
+        },
         false,
     );
     if switch.clicked() {
@@ -747,7 +752,7 @@ fn draw_header(
             &mut cursor,
             header,
             Icon::Mountains,
-            "Backdrop",
+            tr("newtab-backdrop"),
             false,
         );
         let anchor = wallpaper.rect;
@@ -760,7 +765,11 @@ fn draw_header(
         &mut cursor,
         header,
         if editing { Icon::Check } else { Icon::Sliders },
-        if editing { "Done" } else { "Customise" },
+        if editing {
+            tr("common-done")
+        } else {
+            tr("newtab-customise")
+        },
         editing,
     );
     if done.clicked() {
@@ -773,7 +782,7 @@ fn draw_header(
         &mut cursor,
         header,
         Icon::Plus,
-        "Add card",
+        tr("newtab-add-card"),
         false,
     );
     let add_anchor = add.rect;
@@ -828,7 +837,7 @@ fn draw_header(
         Icon::Mountains,
         // Never lit. It opens a menu; it is not a state. Tinting it because a
         // photograph happens to be up made it read as a button stuck down.
-        "Backdrop",
+        tr("newtab-backdrop"),
         false,
     );
     let backdrop_anchor = wallpaper.rect;
@@ -841,7 +850,7 @@ fn draw_header(
             &mut cursor,
             header,
             Icon::Reset,
-            "Reset",
+            tr("newtab-reset"),
             false,
         );
         if reset.clicked() {
@@ -984,23 +993,23 @@ fn draw_backdrop_menu(
     // Grouped off the variants themselves rather than off a list written out
     // here, so a backdrop added later turns up in the right group without
     // anyone remembering to add it to two places.
-    let mut rows: Vec<Row<Pick>> = vec![Row::Heading("Static")];
+    let mut rows: Vec<Row<Pick>> = vec![Row::Heading(tr("newtab-static"))];
     rows.extend(
         NewTabBackground::ALL
             .into_iter()
             .filter(|kind| !kind.animated() && *kind != NewTabBackground::Photo)
             .map(generated),
     );
-    rows.push(Row::Heading("Animated"));
+    rows.push(Row::Heading(tr("newtab-animated")));
     rows.extend(
         NewTabBackground::ALL
             .into_iter()
             .filter(super::settings::NewTabBackground::animated)
             .map(generated),
     );
-    rows.push(Row::Heading("Wallpaper provider"));
+    rows.push(Row::Heading(tr("newtab-wallpaper-provider")));
     rows.push(Row::Item(
-        "Commons picture of the day".to_owned(),
+        tr("newtab-commons-picture-of-the-day").to_owned(),
         Pick::Commons,
         photo && *source == Source::Commons,
     ));
@@ -1012,14 +1021,14 @@ fn draw_backdrop_menu(
         )
     }));
     rows.push(Row::Item(
-        "Choose a file…".to_owned(),
+        tr("common-choose-file").to_owned(),
         Pick::File,
         photo && matches!(source, Source::File(_)),
     ));
     if photo {
-        rows.push(Row::Heading("Now"));
+        rows.push(Row::Heading(tr("newtab-now")));
         rows.push(Row::Item(
-            "Another picture".to_owned(),
+            tr("common-another-picture").to_owned(),
             Pick::Shuffle,
             false,
         ));
@@ -1390,7 +1399,7 @@ fn draw_handles(
             Sense::click(),
         )
         .on_hover_cursor(CursorIcon::PointingHand)
-        .on_hover_text("Take this card off")
+        .on_hover_text(tr("newtab-take-this-card-off"))
         .clicked()
     {
         changes.push(Change::Remove(index));
@@ -1729,7 +1738,7 @@ fn draw_composed(
         root.painter(),
         pos2(strip_rect.min.x, label),
         Align2::LEFT_TOP,
-        "PICK UP WHERE YOU LEFT OFF",
+        tr("newtab-pick-up-where-you-left-off"),
         FontId::proportional(10.5),
         strip_ink.muted,
     );
@@ -1781,7 +1790,7 @@ fn draw_composed(
         root.painter(),
         pos2(cursor, chips.center().y),
         Align2::LEFT_CENTER,
-        "Most visited",
+        tr("common-most-visited"),
         FontId::proportional(11.5),
         strip_ink.muted.gamma_multiply(0.8),
     );
@@ -1803,7 +1812,14 @@ fn draw_composed(
     // The last chip is the one that is not a site. Pinning is the same
     // favourite the star in the sidebar keeps, so a site pinned here appears
     // there and on the board's Favourites card — one list, three ways in.
-    if let Some(response) = draw_site_chip(root, chrome, &mut cursor, chips, "Pin a site", true) {
+    if let Some(response) = draw_site_chip(
+        root,
+        chrome,
+        &mut cursor,
+        chips,
+        tr("newtab-pin-a-site"),
+        true,
+    ) {
         let menu_id = Id::new("zervo_newtab_pin_open");
         if response.clicked() {
             let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
@@ -2192,17 +2208,14 @@ fn draw_search(
         theme::mix(palette.text_muted, palette.accent, focus),
     );
 
-    let hint = if hero {
-        format!(
-            "Search with {}, or say where to go",
-            chrome.settings.search_engine.label()
-        )
-    } else {
-        format!(
-            "Search with {} or enter an address…",
-            chrome.settings.search_engine.label()
-        )
-    };
+    let hint = crate::l10n::message(
+        if hero {
+            "newtab-search-hero"
+        } else {
+            "newtab-search-compact"
+        },
+        [("engine", chrome.settings.search_engine.label().into())],
+    );
     // The shortcut, on the end of the hero. ⌘L already focuses the address
     // pill from anywhere; saying so on the one field the page is built around
     // costs a line of type and answers the question it raises.
@@ -2333,7 +2346,12 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
     let palette = chrome.palette;
     let zones = &chrome.settings.newtab_world_clocks;
     if zones.is_empty() {
-        empty(area, &palette, body, "Add a city in Settings › Layout.");
+        empty(
+            area,
+            &palette,
+            body,
+            tr("newtab-add-a-city-in-settings-layout"),
+        );
         return false;
     }
     let now = jiff::Timestamp::now();
@@ -2429,7 +2447,7 @@ fn draw_quick_links(
         .take(24)
         .collect();
     if links.is_empty() {
-        empty(area, &palette, body, "Pin a tab and it turns up here.");
+        empty(area, &palette, body, tr("newtab-pin-a-tab-and-it-turns-up"));
         return;
     }
 
@@ -2528,7 +2546,7 @@ fn draw_top_sites(
             area,
             &palette,
             body,
-            "Nowhere yet — this fills as you browse.",
+            tr("newtab-nowhere-yet-this-fills-as-you-browse"),
         );
         return;
     }
@@ -2576,7 +2594,7 @@ fn draw_recent(
         })
         .collect();
     if visits.is_empty() {
-        empty(area, &palette, body, "Nothing visited yet.");
+        empty(area, &palette, body, tr("newtab-nothing-visited-yet"));
         return;
     }
     for (index, (title, url)) in visits.iter().enumerate() {
@@ -2617,7 +2635,7 @@ fn draw_favourites(
             area,
             &palette,
             body,
-            "Nothing saved yet — the star adds a page.",
+            tr("newtab-nothing-saved-yet-the-star-adds-a"),
         );
         return;
     }
@@ -2662,7 +2680,7 @@ fn draw_downloads(
         })
         .collect();
     if items.is_empty() {
-        empty(area, &palette, body, "Nothing downloaded yet.");
+        empty(area, &palette, body, tr("common-no-downloads"));
         return;
     }
     for (index, (download_id, name, fraction, running)) in items.iter().enumerate() {
@@ -2751,7 +2769,7 @@ fn draw_now_playing(
     let palette = chrome.palette;
     let media = chrome.media;
     if media.is_idle() {
-        empty(area, &palette, body, "Nothing playing.");
+        empty(area, &palette, body, tr("newtab-nothing-playing"));
         return;
     }
     let controls = 108.0_f32.min(body.width() * 0.5);
@@ -2848,7 +2866,7 @@ fn draw_notes(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
     if !live {
         let note = chrome.library.note_mut().clone();
         let shown = if note.trim().is_empty() {
-            "A place to put something down.".to_owned()
+            tr("newtab-a-place-to-put-something-down").to_owned()
         } else {
             note
         };
@@ -2866,7 +2884,9 @@ fn draw_notes(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
         .frame(Frame::NONE)
         .font(FontId::proportional(12.5))
         .text_color(palette.text)
-        .hint_text(RichText::new("A place to put something down.").color(palette.text_muted))
+        .hint_text(
+            RichText::new(tr("newtab-a-place-to-put-something-down")).color(palette.text_muted),
+        )
         .desired_width(body.width())
         .desired_rows(((body.height() / 16.0) as usize).max(1));
     if inner.add(editor).changed() {
@@ -2895,7 +2915,7 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
         area.painter().text(
             pos2(list.min.x, list.min.y + 10.0),
             Align2::LEFT_CENTER,
-            "Nothing to do. Enviable.",
+            tr("newtab-nothing-to-do-enviable"),
             FontId::proportional(11.5),
             palette.text_muted,
         );
@@ -3024,7 +3044,7 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
             .font(FontId::proportional(12.5))
             .text_color(palette.text)
             .vertical_align(egui::Align::Center)
-            .hint_text(RichText::new("Add something…").color(palette.text_muted))
+            .hint_text(RichText::new(tr("newtab-add-something")).color(palette.text_muted))
             .desired_width(entry.width());
         let response = inner.add(editor);
         area.painter().line_segment(

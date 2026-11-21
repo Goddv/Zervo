@@ -3,6 +3,7 @@
 //! is set to Auto). Icon and text colors always derive from the active
 //! palette, so glyphs compose correctly on both light and dark chrome.
 
+use crate::l10n::text as tr;
 use egui::{Color32, Context, CornerRadius, Margin, Rect, Shadow, Stroke, TextureId, Vec2, pos2};
 use serde::{Deserialize, Serialize};
 
@@ -56,17 +57,17 @@ impl AccentColor {
 
     pub fn label(&self) -> &'static str {
         match self {
-            AccentColor::Custom(..) => "Custom",
-            AccentColor::Lavender => "Lavender",
-            AccentColor::Sky => "Sky",
-            AccentColor::Mint => "Mint",
-            AccentColor::Amber => "Amber",
-            AccentColor::Rose => "Rose",
-            AccentColor::Coral => "Coral",
-            AccentColor::Teal => "Teal",
-            AccentColor::Violet => "Violet",
-            AccentColor::Lime => "Lime",
-            AccentColor::Graphite => "Graphite",
+            AccentColor::Custom(..) => tr("common-custom"),
+            AccentColor::Lavender => tr("theme-lavender"),
+            AccentColor::Sky => tr("theme-sky"),
+            AccentColor::Mint => tr("theme-mint"),
+            AccentColor::Amber => tr("theme-amber"),
+            AccentColor::Rose => tr("theme-rose"),
+            AccentColor::Coral => tr("theme-coral"),
+            AccentColor::Teal => tr("theme-teal"),
+            AccentColor::Violet => tr("theme-violet"),
+            AccentColor::Lime => tr("theme-lime"),
+            AccentColor::Graphite => tr("theme-graphite"),
         }
     }
 
@@ -360,19 +361,17 @@ impl Translucency {
 
     pub fn label(self) -> &'static str {
         match self {
-            Translucency::Solid => "Solid",
-            Translucency::Frosted => "Frosted",
-            Translucency::LiquidGlass => "Liquid Glass",
+            Translucency::Solid => tr("theme-solid"),
+            Translucency::Frosted => tr("theme-frosted"),
+            Translucency::LiquidGlass => tr("common-liquid-glass"),
         }
     }
 
     pub fn note(self) -> &'static str {
         match self {
-            Translucency::Solid => {
-                "Surfaces are their own colour. The most readable, and the least glass."
-            },
-            Translucency::Frosted => "Softens the content and wallpaper behind surfaces.",
-            Translucency::LiquidGlass => "Uses Apple’s glass for docked chrome on supported Macs.",
+            Translucency::Solid => tr("theme-surfaces-are-their-own-colour-the-most"),
+            Translucency::Frosted => tr("theme-softens-the-content-and-wallpaper-behind-surfaces"),
+            Translucency::LiquidGlass => tr("theme-uses-apple-s-glass-for-docked-chrome"),
         }
     }
 
@@ -557,23 +556,17 @@ impl Edge {
 
     pub fn label(self) -> &'static str {
         match self {
-            Edge::Hairline => "Hairline",
-            Edge::Bevel => "Bevel",
-            Edge::None => "None",
+            Edge::Hairline => tr("theme-hairline"),
+            Edge::Bevel => tr("theme-bevel"),
+            Edge::None => tr("theme-none"),
         }
     }
 
     pub fn note(self) -> &'static str {
         match self {
-            Edge::Hairline => "A flat 1pt hairline, the same all the way round.",
-            Edge::Bevel => {
-                "Light along the top, dark along the bottom. Same one value, spent so it \
-                 reads as thickness rather than as a border."
-            },
-            Edge::None => {
-                "No edge at all. Only workable when fill and shadow are carrying the \
-                 separation on their own."
-            },
+            Edge::Hairline => tr("theme-a-flat-1pt-hairline-the-same-all"),
+            Edge::Bevel => tr("theme-light-along-the-top-dark-along-the"),
+            Edge::None => tr("theme-no-edge-at-all-only-workable-when"),
         }
     }
 }
@@ -613,31 +606,19 @@ impl Seam {
 
     pub fn label(self) -> &'static str {
         match self {
-            Seam::Card => "Card",
-            Seam::Frosted => "Frosted",
-            Seam::EdgeToEdge => "Edge to edge",
-            Seam::OneSurface => "One surface",
+            Seam::Card => tr("theme-card"),
+            Seam::Frosted => tr("theme-frosted"),
+            Seam::EdgeToEdge => tr("theme-edge-to-edge"),
+            Seam::OneSurface => tr("theme-one-surface"),
         }
     }
 
     pub fn note(self) -> &'static str {
         match self {
-            Seam::Card => {
-                "An 8pt gap, a 12pt radius and an opaque page base. Two backgrounds that \
-                 never agree."
-            },
-            Seam::Frosted => {
-                "The page stops painting its own base and shows the window's backdrop \
-                 through it. Layout unchanged."
-            },
-            Seam::EdgeToEdge => {
-                "The gap goes to zero; only the window's own corners stay round. One \
-                 hairline holds the join."
-            },
-            Seam::OneSurface => {
-                "The chrome becomes a tint on the page. The sidebar floats, the page \
-                 scrolls under it, one backdrop for everything."
-            },
+            Seam::Card => tr("theme-an-8pt-gap-a-12pt-radius-and"),
+            Seam::Frosted => tr("theme-the-page-stops-painting-its-own-base"),
+            Seam::EdgeToEdge => tr("theme-the-gap-goes-to-zero-only-the"),
+            Seam::OneSurface => tr("theme-the-chrome-becomes-a-tint-on-the"),
         }
     }
 
@@ -678,26 +659,17 @@ impl Spine {
 
     pub fn label(self) -> &'static str {
         match self {
-            Spine::Nothing => "Nothing",
-            Spine::TabTicks => "Tab ticks",
-            Spine::Favicons => "Favicons",
+            Spine::Nothing => tr("common-none"),
+            Spine::TabTicks => tr("theme-tab-ticks"),
+            Spine::Favicons => tr("theme-favicons"),
         }
     }
 
     pub fn note(self) -> &'static str {
         match self {
-            Spine::Nothing => {
-                "Today's behaviour — a hidden sidebar leaves nothing, so the hot edge is \
-                 only findable by accident."
-            },
-            Spine::TabTicks => {
-                "One 3pt tick per tab, coloured by workspace, the active one twice as \
-                 long. Fits inside the 14pt trigger it advertises."
-            },
-            Spine::Favicons => {
-                "Favicons stacked down the edge. Costs more width, but you can aim at a \
-                 specific tab without opening anything."
-            },
+            Spine::Nothing => tr("theme-today-s-behaviour-a-hidden-sidebar-leaves"),
+            Spine::TabTicks => tr("theme-one-3pt-tick-per-tab-coloured-by"),
+            Spine::Favicons => tr("theme-favicons-stacked-down-the-edge-costs-more"),
         }
     }
 }
@@ -717,9 +689,9 @@ impl ShelfHome {
 
     pub fn label(self) -> &'static str {
         match self {
-            ShelfHome::Bar => "Bar only",
-            ShelfHome::Sidebar => "Sidebar only",
-            ShelfHome::Wherever => "Wherever the chrome is",
+            ShelfHome::Bar => tr("theme-bar-only"),
+            ShelfHome::Sidebar => tr("theme-sidebar-only"),
+            ShelfHome::Wherever => tr("theme-wherever-the-chrome-is"),
         }
     }
 
@@ -915,28 +887,20 @@ impl Preset {
     pub fn label(self) -> &'static str {
         match self {
             Preset::Zervo => "Zervo",
-            Preset::Candy => "Candy",
-            Preset::Flat => "Flat",
-            Preset::LiquidGlass => "Liquid Glass",
-            Preset::Material => "Material",
+            Preset::Candy => tr("theme-candy"),
+            Preset::Flat => tr("theme-flat"),
+            Preset::LiquidGlass => tr("common-liquid-glass"),
+            Preset::Material => tr("theme-material"),
         }
     }
 
     pub fn note(self) -> &'static str {
         match self {
-            Preset::Zervo => {
-                "The one that is finished. Glass laid on the page, a quiet accent taken \
-                 from the space you are in, and every motion on."
-            },
-            Preset::Candy => "The accent is the light source, the seam is gone, everything glows.",
-            Preset::Flat => "Solid, a small radius and no sheen — a flat desktop toolkit.",
-            Preset::LiquidGlass => {
-                "Apple’s glass for docked controls on supported Macs, with frosted surfaces elsewhere."
-            },
-            Preset::Material => {
-                "A generous radius, a longer shadow, no sheen, and glow standing in for \
-                 the ripple's resting state."
-            },
+            Preset::Zervo => tr("theme-the-one-that-is-finished-glass-laid"),
+            Preset::Candy => tr("theme-the-accent-is-the-light-source-the"),
+            Preset::Flat => tr("theme-solid-a-small-radius-and-no-sheen"),
+            Preset::LiquidGlass => tr("theme-apple-s-glass-for-docked-controls-on"),
+            Preset::Material => tr("theme-a-generous-radius-a-longer-shadow-no"),
         }
     }
 
@@ -1178,7 +1142,7 @@ impl Appearance {
     }
 
     pub fn preset_label(&self) -> &'static str {
-        self.preset.map_or("Custom", Preset::label)
+        self.preset.map_or(tr("common-custom"), Preset::label)
     }
 
     /// Whether two arrangements look the same, whatever they are called.
@@ -1815,9 +1779,9 @@ impl ThemeMode {
 
     pub fn label(&self) -> &'static str {
         match self {
-            ThemeMode::Auto => "Auto",
-            ThemeMode::Light => "Light",
-            ThemeMode::Dark => "Dark",
+            ThemeMode::Auto => tr("theme-auto"),
+            ThemeMode::Light => tr("theme-light"),
+            ThemeMode::Dark => tr("theme-dark"),
         }
     }
 }

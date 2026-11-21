@@ -22,6 +22,7 @@
 //! The file is useless to any other account on the machine, but it *is* a file
 //! Zervo wrote.
 
+use crate::l10n::text as tr;
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl Vault {
     pub fn set(&mut self, site: &str, username: &str, password: &str) -> Result<(), Failure> {
         let site = normalise(site);
         if site.is_empty() || username.is_empty() {
-            return Err("A site and a username are both needed.".to_owned());
+            return Err(tr("password-a-site-and-a-username-are-both").to_owned());
         }
         store_secret(&site, username, password)?;
         let login = Login {
@@ -303,7 +304,7 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
         .output()
         .map_err(|error| format!("Could not run PowerShell to encrypt the password: {error}"))?;
     if !output.status.success() {
-        return Err("Windows would not encrypt the password.".to_owned());
+        return Err(tr("password-windows-would-not-encrypt-the-password").to_owned());
     }
     // This file *is* the secret on Windows, DPAPI-wrapped. It gets the same
     // write-and-rename as everything else in `store`, so a half-written blob
@@ -355,7 +356,7 @@ fn secret_path(site: &str, username: &str) -> Result<std::path::PathBuf, Failure
         .collect();
     crate::settings::data_dir()
         .map(|dir| dir.join("credentials").join(format!("{safe}.dpapi")))
-        .ok_or_else(|| "No place to keep credentials.".to_owned())
+        .ok_or_else(|| tr("password-no-place-to-keep-credentials").to_owned())
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -376,8 +377,7 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|_| {
-            "No credential store found. Install libsecret (secret-tool) to save passwords."
-                .to_owned()
+            tr("password-no-credential-store-found-install-libsecret-secret").to_owned()
         })?;
     // secret-tool takes the secret on stdin, which keeps it out of the process
     // list — better than the macOS path manages.
@@ -386,7 +386,7 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
     }
     match child.wait() {
         Ok(status) if status.success() => Ok(()),
-        _ => Err("The credential store refused to save the password.".to_owned()),
+        _ => Err(tr("password-the-credential-store-refused-to-save-the").to_owned()),
     }
 }
 

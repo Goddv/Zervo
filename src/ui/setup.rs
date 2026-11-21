@@ -21,6 +21,7 @@
 //! choice is made by looking rather than by reading five descriptions of
 //! glass.
 
+use crate::l10n::text as tr;
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Rect, RichText, Sense, Stroke,
     TextEdit, Ui, pos2, vec2,
@@ -139,7 +140,7 @@ fn panel(
     accent: Color32,
 ) {
     match index {
-        0 => welcome(ui, chrome, body, accent),
+        0 => welcome(ui, chrome, actions, body, accent),
         1 => material(ui, chrome, actions, body),
         2 => space(ui, chrome, actions, body, accent),
         3 => layout(ui, chrome, actions, body),
@@ -169,7 +170,13 @@ fn heading(ui: &mut Ui, palette: &Palette, accent: Color32, kicker: &str, title:
     ui.add_space(26.0);
 }
 
-fn welcome(ui: &mut Ui, chrome: &ChromeContext, body: Rect, accent: Color32) {
+fn welcome(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    body: Rect,
+    accent: Color32,
+) {
     let palette = chrome.palette;
     ui.add_space((body.height() - 330.0).max(0.0) * 0.5);
     let (icon, _) = ui.allocate_exact_size(vec2(112.0, 112.0), Sense::hover());
@@ -187,15 +194,14 @@ fn welcome(ui: &mut Ui, chrome: &ChromeContext, body: Rect, accent: Color32) {
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             ui.label(
-                RichText::new(
-                    "A calm, workspace-oriented browser on Servo — an independent engine, \
-                     written in Rust. No Chromium underneath, and no Gecko.",
-                )
-                .size(15.0)
-                .color(palette.text_muted),
+                RichText::new(tr("setup-a-calm-workspace-oriented-browser-on-servo"))
+                    .size(15.0)
+                    .color(palette.text_muted),
             );
         },
     );
+    ui.add_space(12.0);
+    super::language_picker(ui, chrome.settings, actions);
 }
 
 fn material(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, body: Rect) {
@@ -205,12 +211,9 @@ fn material(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>
         ui,
         &palette,
         theme::workspace_color_from(0, chrome.settings.space_colour),
-        "Step 1 of 4",
-        "Pick how it should feel",
-        "This is one material, and every surface in Zervo is drawn through it. Zervo's own \
-         is the one that is finished and settled — the other four came out of a design \
-         study and are worth your time. Nothing here is a decision you are stuck with: \
-         every field is on the Appearance page afterwards, one at a time.",
+        tr("setup-step-1-of-4"),
+        tr("setup-pick-how-it-should-feel"),
+        tr("setup-this-is-one-material-and-every-surface"),
     );
     ui.horizontal_wrapped(|ui| {
         // Centred by hand: `horizontal_wrapped` starts at the left edge, and a
@@ -298,11 +301,11 @@ fn preset_card(ui: &mut Ui, palette: &Palette, preset: Preset, chosen: bool) -> 
 /// Appearance page has room for and a 150pt card does not.
 fn preset_blurb(preset: Preset) -> &'static str {
     match preset {
-        Preset::Zervo => "Quiet, settled, finished",
-        Preset::Candy => "Frosted, lit, colourful",
-        Preset::Flat => "No blur, no sheen, square",
-        Preset::LiquidGlass => "Native glass on supported Macs",
-        Preset::Material => "Generous corners, no glass",
+        Preset::Zervo => tr("setup-quiet-settled-finished"),
+        Preset::Candy => tr("setup-frosted-lit-colourful"),
+        Preset::Flat => tr("setup-no-blur-no-sheen-square"),
+        Preset::LiquidGlass => tr("setup-native-glass-on-supported-macs"),
+        Preset::Material => tr("setup-generous-corners-no-glass"),
     }
 }
 
@@ -371,10 +374,9 @@ fn space(
         ui,
         &palette,
         accent,
-        "Step 2 of 4",
-        "Name your first space",
-        "Tabs live in named spaces. Its colour can become the window's colour, so you can \
-         tell where you are before you read anything.",
+        tr("setup-step-2-of-4"),
+        tr("setup-name-your-first-space"),
+        tr("setup-tabs-live-in-named-spaces-its-colour"),
     );
     ui.allocate_ui_with_layout(
         vec2(320.0, 0.0),
@@ -393,7 +395,7 @@ fn space(
                         .frame(Frame::NONE)
                         .font(FontId::proportional(15.0))
                         .text_color(palette.text)
-                        .hint_text(RichText::new("Home").color(palette.text_muted))
+                        .hint_text(RichText::new(tr("common-home")).color(palette.text_muted))
                         .desired_width(f32::INFINITY),
                 )
                 .lost_focus()
@@ -433,7 +435,7 @@ fn space(
             });
             ui.add_space(14.0);
             ui.label(
-                RichText::new("You can add more later, and drag tabs between them.")
+                RichText::new(tr("setup-you-can-add-more-later-and-drag"))
                     .size(11.5)
                     .color(palette.text_muted),
             );
@@ -448,10 +450,9 @@ fn layout(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, 
         ui,
         &palette,
         theme::workspace_color_from(0, chrome.settings.space_colour),
-        "Step 3 of 4",
-        "Where should the chrome live?",
-        "All three are always available — ⌘S switches between them at any time. This is \
-         just where you start.",
+        tr("setup-step-3-of-4"),
+        tr("setup-where-should-the-chrome-live"),
+        tr("setup-all-three-are-always-available-s-switches"),
     );
     ui.horizontal(|ui| {
         let width = 170.0 * 3.0 + ui.spacing().item_spacing.x * 2.0;
@@ -533,31 +534,30 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
         ui,
         &palette,
         theme::workspace_color_from(0, chrome.settings.space_colour),
-        "Step 4 of 4",
-        "Before you start",
-        "Servo is young. These are real, they are the engine rather than Zervo, and you \
-         will meet them.",
+        tr("setup-step-4-of-4"),
+        tr("setup-before-you-start"),
+        tr("setup-servo-is-young-these-are-real-they"),
     );
     let rows: [(Icon, &str, &str); 4] = [
         (
             Icon::Music,
-            "Streaming video will not play",
-            "No Media Source Extensions. Local and progressive video is fine.",
+            tr("setup-streaming-video-will-not-play"),
+            tr("setup-no-media-source-extensions-local-and-progressive"),
         ),
         (
             Icon::Extensions,
-            "No extensions",
-            "The engine has none, so neither does the button.",
+            tr("setup-no-extensions"),
+            tr("setup-the-engine-has-none-so-neither-does"),
         ),
         (
             Icon::Lock,
-            "Passwords cannot fill themselves in",
-            "Kept in your keychain, but the engine gives no hook for a submitted form.",
+            tr("setup-passwords-cannot-fill-themselves-in"),
+            tr("setup-kept-in-your-keychain-but-the-engine"),
         ),
         (
             Icon::Warning,
-            "Some sites just break",
-            "Missing APIs, or a refused user agent. Zervo will tell you which.",
+            tr("setup-some-sites-just-break"),
+            tr("setup-missing-apis-or-a-refused-user-agent"),
         ),
     ];
     ui.allocate_ui_with_layout(
@@ -599,12 +599,9 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
             }
             ui.add_space(6.0);
             ui.label(
-                RichText::new(
-                    "Keeping another browser around is sensible. Zervo will offer to hand a \
-                     page over rather than pretend.",
-                )
-                .size(11.5)
-                .color(palette.text_muted),
+                RichText::new(tr("setup-keeping-another-browser-around-is-sensible-zervo"))
+                    .size(11.5)
+                    .color(palette.text_muted),
             );
         },
     );
@@ -619,7 +616,7 @@ fn ready(
 ) {
     let palette = chrome.palette;
     let name = if chrome.settings.first_space.trim().is_empty() {
-        "Home".to_owned()
+        tr("common-home").to_owned()
     } else {
         chrome.settings.first_space.trim().to_owned()
     };
@@ -638,9 +635,12 @@ fn ready(
     );
     ui.add_space(24.0);
     ui.label(
-        RichText::new(format!("{name} is ready"))
-            .size(34.0)
-            .color(palette.text),
+        RichText::new(crate::l10n::message(
+            "setup-space-ready",
+            [("name", name.as_str().into())],
+        ))
+        .size(34.0)
+        .color(palette.text),
     );
     ui.add_space(12.0);
     ui.allocate_ui_with_layout(
@@ -662,11 +662,11 @@ fn ready(
     ui.add_space(28.0);
     ui.horizontal(|ui| {
         ui.add_space(((ui.available_width() - 300.0) * 0.5).max(0.0));
-        if pill(ui, &palette, "Start over", false).clicked() {
+        if pill(ui, &palette, tr("setup-start-over"), false).clicked() {
             go(ui.ctx(), 0);
         }
         ui.add_space(10.0);
-        if pill(ui, &palette, "Start browsing", true).clicked() {
+        if pill(ui, &palette, tr("setup-start-browsing"), true).clicked() {
             finish(chrome, actions);
         }
     });
@@ -770,11 +770,11 @@ fn footer(
                 ))
                 .layout(egui::Layout::top_down(egui::Align::Center)),
         );
-        if pill(&mut middle, &palette, "Set it up", true).clicked() {
+        if pill(&mut middle, &palette, tr("setup-set-it-up"), true).clicked() {
             go(&ui.ctx().clone(), 1);
         }
         middle.label(
-            RichText::new("Four questions. About a minute.")
+            RichText::new(tr("setup-four-questions-about-a-minute"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -789,7 +789,7 @@ fn footer(
             ))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    if pill(&mut left, &palette, "Back", false).clicked() {
+    if pill(&mut left, &palette, tr("common-back"), false).clicked() {
         go(&ui.ctx().clone(), now.saturating_sub(1));
     }
 
@@ -806,7 +806,11 @@ fn footer(
         if pill(
             &mut right,
             &palette,
-            if last { "Finish" } else { "Next" },
+            if last {
+                tr("setup-finish")
+            } else {
+                tr("setup-next")
+            },
             true,
         )
         .clicked()
@@ -823,7 +827,7 @@ fn finish(chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     chrome.settings.seen_setup = true;
     let name = chrome.settings.first_space.trim().to_owned();
     chrome.settings.first_space = if name.is_empty() {
-        "Home".to_owned()
+        tr("common-home").to_owned()
     } else {
         name
     };

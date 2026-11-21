@@ -15,6 +15,7 @@
 //! BY-SA, which are licences with a condition attached, so the title, the
 //! photographer and the licence travel with the picture and are drawn with it.
 
+use crate::l10n::text as tr;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,7 +42,7 @@ impl Source {
             Source::File(path) => Path::new(path)
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "A file".to_owned()),
+                .unwrap_or_else(|| tr("wallpaper-a-file").to_owned()),
         }
     }
 }
@@ -74,14 +75,14 @@ impl Subject {
 
     pub fn label(self) -> &'static str {
         match self {
-            Subject::Landscape => "Landscape",
-            Subject::Mountains => "Mountains",
-            Subject::Coast => "Coast",
-            Subject::Forest => "Forest",
-            Subject::Sky => "Sky",
-            Subject::Night => "Night",
-            Subject::City => "City",
-            Subject::Texture => "Texture",
+            Subject::Landscape => tr("wallpaper-landscape"),
+            Subject::Mountains => tr("wallpaper-mountains"),
+            Subject::Coast => tr("wallpaper-coast"),
+            Subject::Forest => tr("wallpaper-forest"),
+            Subject::Sky => tr("wallpaper-sky"),
+            Subject::Night => tr("wallpaper-night"),
+            Subject::City => tr("wallpaper-city"),
+            Subject::Texture => tr("wallpaper-texture"),
         }
     }
 
@@ -121,10 +122,10 @@ impl Cadence {
 
     pub fn label(self) -> &'static str {
         match self {
-            Cadence::Manual => "Manually",
-            Cadence::Launch => "Each launch",
-            Cadence::Hourly => "Hourly",
-            Cadence::Daily => "Daily",
+            Cadence::Manual => tr("wallpaper-manually"),
+            Cadence::Launch => tr("wallpaper-each-launch"),
+            Cadence::Hourly => tr("wallpaper-hourly"),
+            Cadence::Daily => tr("wallpaper-daily"),
         }
     }
 
@@ -155,7 +156,7 @@ impl Credit {
     /// in the order a person reads it.
     pub fn line(&self) -> String {
         let mut line = if self.title.is_empty() {
-            "Untitled".to_owned()
+            tr("wallpaper-untitled").to_owned()
         } else {
             self.title.clone()
         };
@@ -709,7 +710,7 @@ fn licence_name(code: &str, version: &str) -> String {
     let name = match code.as_str() {
         "" => return String::new(),
         "CC0" => "CC0".to_owned(),
-        "PDM" => return "Public domain".to_owned(),
+        "PDM" => return tr("wallpaper-public-domain").to_owned(),
         other => format!("CC {other}"),
     };
     if version.is_empty() {

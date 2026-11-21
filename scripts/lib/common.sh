@@ -268,6 +268,8 @@ zervo_stage_tree() {
     install -Dm644 assets/linux/zervo.1 "$stage$prefix/share/man/man1/zervo.1"
     gzip -9n -f "$stage$prefix/share/man/man1/zervo.1"
     install -Dm644 LICENSE "$stage$prefix/share/licenses/zervo/LICENSE"
+    install -Dm644 assets/licenses/NotoSansJP-OFL.txt \
+        "$stage$prefix/share/licenses/zervo/NotoSansJP-OFL.txt"
     # Debian looks for the licence at a different path, and a package without
     # one is a policy violation lintian reports at error level. Same file,
     # both places — the .rpm ignores the second and the .deb ignores the first.
@@ -300,7 +302,7 @@ ZERVO_RPM_RECOMMENDS="zenity xdg-utils libsecret hicolor-icon-theme"
 # own library does get picked up by both generators; only the plugins are
 # invisible.
 # shellcheck disable=SC2034
-ZERVO_DEB_MEDIA_RECOMMENDS="gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav"
+ZERVO_DEB_MEDIA_RECOMMENDS="gstreamer1.0-gl, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav"
 # Fedora's free repositories only. gstreamer1-libav lives in RPM Fusion, and a
 # weak dependency on something no enabled repository provides is skipped in
 # silence, which is worse than not asking.

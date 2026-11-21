@@ -9,6 +9,7 @@
 //! playback state and position, and takes play/pause/track actions back, so
 //! they drive whatever the page is playing.
 
+use crate::l10n::text as tr;
 use egui::{
     Align2, CornerRadius, CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
 };
@@ -50,9 +51,9 @@ impl WidgetKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            WidgetKind::Clock => "Clock",
-            WidgetKind::NowPlaying => "Now playing",
-            WidgetKind::Transport => "Player controls",
+            WidgetKind::Clock => tr("widgets-clock"),
+            WidgetKind::NowPlaying => tr("common-now-playing"),
+            WidgetKind::Transport => tr("widgets-player-controls"),
         }
     }
 
@@ -742,7 +743,7 @@ pub fn draw(
             5.0,
             4.5,
         ));
-        let label = "Drop a widget";
+        let label = tr("widgets-drop-a-widget");
         let text = root
             .painter()
             .layout_no_wrap(label.to_owned(), FontId::proportional(11.5), ink);
@@ -1076,7 +1077,7 @@ fn draw_widget(
                 painter.text(
                     rect.center(),
                     Align2::CENTER_CENTER,
-                    "Nothing playing",
+                    tr("widgets-nothing-playing"),
                     FontId::proportional(12.5),
                     palette.text_muted,
                 );

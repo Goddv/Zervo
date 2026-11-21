@@ -4,6 +4,7 @@
 //! the navigation column down the left. This is where the great majority of
 //! `chrome.settings` is read and written; almost nowhere else touches it.
 
+use crate::l10n::text as tr;
 use egui::{
     Align2, CornerRadius, CursorIcon, FontId, Frame, Id, Margin, Rect, RichText, Sense, Shape,
     Stroke, TextEdit, Ui, pos2, vec2,
@@ -77,7 +78,7 @@ pub(crate) fn draw_settings_page(
     {
         let ui = &mut nav_ui;
         ui.label(
-            RichText::new("Settings")
+            RichText::new(tr("common-settings"))
                 .size(17.0)
                 .strong()
                 .color(palette.text),
@@ -88,12 +89,12 @@ pub(crate) fn draw_settings_page(
             let (rect, response) =
                 ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
             let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.id().with(("settings_nav", section.label())),
+                ui.id().with(("settings_nav", section)),
                 response.hovered() && !selected,
                 0.12,
             ));
             let select_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.id().with(("settings_nav_sel", section.label())),
+                ui.id().with(("settings_nav_sel", section)),
                 selected,
                 0.18,
             ));
@@ -111,16 +112,28 @@ pub(crate) fn draw_settings_page(
                     palette.active.gamma_multiply(select_t),
                 );
             }
-            ui.painter().text(
-                pos2(rect.min.x + 12.0, rect.center().y),
-                Align2::LEFT_CENTER,
-                section.label(),
+            let ink = if selected {
+                palette.text
+            } else {
+                palette.text_muted
+            };
+            let mut label = egui::text::LayoutJob::simple_singleline(
+                section.label().to_owned(),
                 FontId::proportional(13.5),
-                if selected {
-                    palette.text
-                } else {
-                    palette.text_muted
-                },
+                ink,
+            );
+            label.wrap =
+                egui::text::TextWrapping::truncate_at_width((rect.width() - 20.0).max(0.0));
+            let label = ui.painter().layout_job(label);
+            let response = if label.elided {
+                response.on_hover_text(section.label())
+            } else {
+                response
+            };
+            ui.painter().galley(
+                pos2(rect.min.x + 12.0, rect.center().y - label.size().y / 2.0),
+                label,
+                ink,
             );
             if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                 chrome.browser.settings_section = section;
@@ -238,7 +251,7 @@ fn save_as_preset(
 ) {
     let open_id = Id::new("zervo_preset_naming");
     let draft_id = Id::new("zervo_preset_name");
-    if ghost_button(ui, palette, Icon::Plus, "Save as a preset…").clicked() {
+    if ghost_button(ui, palette, Icon::Plus, tr("settings-save-as-a-preset")).clicked() {
         let open = ui.ctx().data(|data| data.get_temp::<bool>(open_id)) == Some(true);
         ui.ctx().data_mut(|data| data.insert_temp(open_id, !open));
     }
@@ -254,7 +267,7 @@ fn save_as_preset(
     let field = ui.add(
         TextEdit::singleline(&mut name)
             .font(FontId::proportional(12.5))
-            .hint_text(RichText::new("Name it").color(palette.text_muted))
+            .hint_text(RichText::new(tr("settings-name-it")).color(palette.text_muted))
             .desired_width(150.0),
     );
     if opening {
@@ -610,11 +623,11 @@ pub(crate) fn appearance_specimen(ui: &Ui, palette: &Palette, rect: Rect) {
     painter.text(
         pos2(chrome.min.x + 13.0, y + 9.5),
         Align2::LEFT_CENTER,
-        "Servo aims to…",
+        tr("settings-servo-aims-to"),
         FontId::proportional(8.0),
         palette.text,
     );
-    for label in ["Settings", "New Tab"] {
+    for label in [tr("common-settings"), tr("common-new-tab")] {
         y += 21.0;
         painter.text(
             pos2(chrome.min.x + 13.0, y + 8.5),
@@ -636,7 +649,7 @@ pub(crate) fn appearance_specimen(ui: &Ui, palette: &Palette, rect: Rect) {
     painter.text(
         pos2(card.min.x + 11.0, card.center().y),
         Align2::LEFT_CENTER,
-        "Most visited",
+        tr("common-most-visited"),
         FontId::proportional(9.0),
         ink.text_muted,
     );
@@ -648,7 +661,7 @@ pub(crate) fn appearance_specimen(ui: &Ui, palette: &Palette, rect: Rect) {
     painter.text(
         pos2(field.min.x + 11.0, field.center().y),
         Align2::LEFT_CENTER,
-        "Search…",
+        tr("common-search-hint"),
         FontId::proportional(9.0),
         ink.text_muted,
     );
@@ -675,7 +688,7 @@ pub(crate) fn settings_appearance(
     let opened_as = chrome.settings.appearance;
     let mut chose_preset = false;
 
-    settings_section(ui, palette, "Preset", |ui| {
+    settings_section(ui, palette, tr("settings-preset"), |ui| {
         ui.horizontal_wrapped(|ui| {
             for preset in theme::Preset::ALL {
                 let selected = chrome.settings.appearance.preset == Some(preset);
@@ -703,7 +716,7 @@ pub(crate) fn settings_appearance(
                     if response.secondary_clicked() {
                         remove = Some(index);
                     }
-                    response.on_hover_text("Right-click to forget this one");
+                    response.on_hover_text(tr("settings-right-click-to-forget-this-one"));
                 }
             });
             if let Some(appearance) = apply {
@@ -721,12 +734,12 @@ pub(crate) fn settings_appearance(
             palette,
             match chrome.settings.appearance.preset {
                 Some(preset) => preset.note(),
-                None => "Custom — every value below is yours. Pick a preset to start over.",
+                None => tr("settings-custom-every-value-below-is-yours-pick"),
             },
         );
     });
 
-    settings_section(ui, palette, "Theme", |ui| {
+    settings_section(ui, palette, tr("common-theme"), |ui| {
         if choose(
             ui,
             palette,
@@ -739,19 +752,18 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "Auto follows the system appearance and day/night cycle. A preset picks a \
-             material, not a theme — this is yours.",
+            tr("settings-auto-follows-the-system-appearance-and-day"),
         );
     });
 
-    settings_section(ui, palette, "Accent colour", |ui| {
+    settings_section(ui, palette, tr("settings-accent-colour"), |ui| {
         accent_swatches(ui, chrome, palette, actions);
 
         ui.add_space(10.0);
         if widgets::toggle(
             ui,
             &mut chrome.settings.appearance.workspace_accent,
-            "Take the accent from the active workspace",
+            tr("settings-take-the-accent-from-the-active-workspace"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
@@ -759,8 +771,7 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "The workspace's own colour instead of one global accent — the window changes \
-             colour when you change space.",
+            tr("settings-the-workspace-s-own-colour-instead-of"),
         );
 
         ui.add_space(10.0);
@@ -768,7 +779,7 @@ pub(crate) fn settings_appearance(
         if tuning(
             ui,
             palette,
-            "Accent strength in the chrome",
+            tr("settings-accent-strength-in-the-chrome"),
             candy,
             0.0..=0.4,
             |value| format!("{value:.3}"),
@@ -782,54 +793,55 @@ pub(crate) fn settings_appearance(
             ui,
             palette,
             if candy <= 0.06 {
-                "What shipped is 0.045 — quiet enough that ten accents produce ten \
-                 near-identical greys."
+                tr("settings-what-shipped-is-0-045-quiet-enough")
             } else if candy >= 0.24 {
-                "The chrome is unmistakably coloured, and the contrast rule that picks ink \
-                 by WCAG ratio is now load-bearing rather than a backstop."
+                tr("settings-the-chrome-is-unmistakably-coloured-and-the")
             } else {
-                "The accent reads as a room rather than as a highlight, and the text rule \
-                 still has slack."
+                tr("settings-the-accent-reads-as-a-room-rather")
             },
         );
     });
 
-    settings_section(ui, palette, "Seam between chrome and page", |ui| {
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.appearance.seam,
-            &theme::Seam::ALL,
-            zervo_core::theme::Seam::label,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(ui, palette, chrome.settings.appearance.seam.note());
-
-        if !chrome.settings.appearance.seam.closes_gap() {
-            ui.add_space(10.0);
-            if tuning(
+    settings_section(
+        ui,
+        palette,
+        tr("settings-seam-between-chrome-and-page"),
+        |ui| {
+            if choose(
                 ui,
                 palette,
-                "Gap around the content",
-                &mut chrome.settings.appearance.gap,
-                0.0..=20.0,
-                |value| format!("{value:.0}pt"),
-            )
-            .settled
-            {
+                &mut chrome.settings.appearance.seam,
+                &theme::Seam::ALL,
+                zervo_core::theme::Seam::label,
+            ) {
                 actions.push(UiAction::SettingsChanged);
             }
-            note(
-                ui,
-                palette,
-                "CONTENT_MARGIN. Zero puts the page against the chrome; the setting above \
-                 picks what draws the join.",
-            );
-        }
-    });
+            note(ui, palette, chrome.settings.appearance.seam.note());
 
-    settings_section(ui, palette, "Material", |ui| {
+            if !chrome.settings.appearance.seam.closes_gap() {
+                ui.add_space(10.0);
+                if tuning(
+                    ui,
+                    palette,
+                    tr("settings-gap-around-the-content"),
+                    &mut chrome.settings.appearance.gap,
+                    0.0..=20.0,
+                    |value| format!("{value:.0}pt"),
+                )
+                .settled
+                {
+                    actions.push(UiAction::SettingsChanged);
+                }
+                note(
+                    ui,
+                    palette,
+                    tr("settings-content-margin-zero-puts-the-page-against"),
+                );
+            }
+        },
+    );
+
+    settings_section(ui, palette, tr("settings-material"), |ui| {
         if choose(
             ui,
             palette,
@@ -842,15 +854,15 @@ pub(crate) fn settings_appearance(
         let translucency = chrome.settings.appearance.translucency;
         let material_note = match translucency {
             theme::Translucency::LiquidGlass if chrome.native_glass.available => {
-                "The docked sidebar and toolbar use macOS Liquid Glass. Page overlays use Zervo’s frost."
+                tr("settings-the-docked-sidebar-and-toolbar-use-macos")
             },
             _ if translucency.is_translucent()
                 && palette.translucency == theme::Translucency::Solid =>
             {
-                "macOS Reduce Transparency is on. Surfaces are shown as solid."
+                tr("settings-macos-reduce-transparency")
             },
             theme::Translucency::LiquidGlass => {
-                "Zervo’s frosted material is used here. Native Liquid Glass requires macOS 26 or later."
+                tr("settings-zervo-s-frosted-material-is-used-here")
             },
             _ => translucency.note(),
         };
@@ -859,9 +871,7 @@ pub(crate) fn settings_appearance(
             note(
                 ui,
                 palette,
-                "This arrangement's fill is opaque, so while it is frosted the cards are \
-                 held just short of it — otherwise this control would be one that does \
-                 nothing. Lower the fill and it stops being held.",
+                tr("settings-this-arrangement-s-fill-is-opaque-so"),
             );
         }
 
@@ -869,7 +879,7 @@ pub(crate) fn settings_appearance(
         if tuning(
             ui,
             palette,
-            "Blur",
+            tr("settings-blur"),
             &mut chrome.settings.appearance.blur,
             0.0..=30.0,
             |value| format!("{value:.1}px"),
@@ -881,14 +891,14 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "Controls the blur of Zervo’s frosted surfaces. macOS controls the blur of native glass.",
+            tr("settings-controls-the-blur-of-zervo-s-frosted"),
         );
 
         ui.add_space(10.0);
         if tuning(
             ui,
             palette,
-            "Fill",
+            tr("settings-fill"),
             &mut chrome.settings.appearance.fill,
             0.2..=1.0,
             |value| format!("{value:.2}"),
@@ -897,18 +907,13 @@ pub(crate) fn settings_appearance(
         {
             actions.push(UiAction::SettingsChanged);
         }
-        note(
-            ui,
-            palette,
-            "A card's own alpha. A menu and an input keep their ratio to it — about 0.62 \
-             and 1.13 of whatever you pick.",
-        );
+        note(ui, palette, tr("settings-a-card-s-own-alpha-a-menu"));
 
         ui.add_space(10.0);
         if tuning(
             ui,
             palette,
-            "Sheen",
+            tr("settings-sheen"),
             &mut chrome.settings.appearance.sheen,
             0.0..=60.0,
             |value| format!("{value:.0}/255"),
@@ -917,16 +922,10 @@ pub(crate) fn settings_appearance(
         {
             actions.push(UiAction::SettingsChanged);
         }
-        note(
-            ui,
-            palette,
-            "White laid over the fill, out of 255. What shipped is 9 in dark and 24 in \
-             light; the light theme keeps that ratio to whatever you pick, because the \
-             same wash that lifts near-black is invisible on near-white.",
-        );
+        note(ui, palette, tr("settings-white-laid-over-the-fill-out-of"));
 
         ui.add_space(12.0);
-        subhead(ui, palette, "Edge");
+        subhead(ui, palette, tr("settings-edge"));
         if choose(
             ui,
             palette,
@@ -942,7 +941,7 @@ pub(crate) fn settings_appearance(
         if tuning(
             ui,
             palette,
-            "Corner scale",
+            tr("settings-corner-scale"),
             &mut chrome.settings.appearance.corners,
             0.0..=2.0,
             |value| {
@@ -960,15 +959,14 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "Multiplies the whole ladder at once — 2/7/8/10/12/14/16 keep their \
-             relationship, so nothing has to be re-tuned to be made rounder.",
+            tr("settings-multiplies-the-whole-ladder-at-once-2"),
         );
 
         ui.add_space(10.0);
         if tuning(
             ui,
             palette,
-            "Glow on the focused surface",
+            tr("settings-glow-on-the-focused-surface"),
             &mut chrome.settings.appearance.glow,
             0.0..=1.0,
             |value| format!("{value:.2}"),
@@ -977,19 +975,14 @@ pub(crate) fn settings_appearance(
         {
             actions.push(UiAction::SettingsChanged);
         }
-        note(
-            ui,
-            palette,
-            "The accent as a lamp inside the glass rather than a swatch on it: the active \
-             tab, the focused pill, the starred state.",
-        );
+        note(ui, palette, tr("settings-the-accent-as-a-lamp-inside-the"));
     });
 
-    settings_section(ui, palette, "Motion", |ui| {
+    settings_section(ui, palette, tr("settings-motion"), |ui| {
         if tuning(
             ui,
             palette,
-            "Settle time",
+            tr("settings-settle-time"),
             &mut chrome.settings.appearance.motion,
             0.0..=0.4,
             |value| format!("{value:.2}s"),
@@ -1003,13 +996,13 @@ pub(crate) fn settings_appearance(
             ui,
             palette,
             if motion <= 0.001 {
-                "Off — nothing animates. What Reduce Motion should map to."
+                tr("settings-off-nothing-animates-what-reduce-motion-should")
             } else if motion < 0.1 {
-                "Under a tenth of a second reads as flicker; a surface should settle, not pop."
+                tr("settings-under-a-tenth-of-a-second-reads")
             } else if motion > 0.3 {
-                "Slow enough to notice you are waiting for the chrome."
+                tr("settings-slow-enough-to-notice-you-are-waiting")
             } else {
-                "What shipped is 0.14. Hovers, selections, morphs and fades all take it."
+                tr("settings-what-shipped-is-0-14-hovers-selections")
             },
         );
 
@@ -1017,7 +1010,7 @@ pub(crate) fn settings_appearance(
         if widgets::toggle(
             ui,
             &mut chrome.settings.appearance.sweep,
-            "Specular sweep when a surface resizes",
+            tr("settings-specular-sweep-when-a-surface-resizes"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
@@ -1025,15 +1018,14 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "One pass of light across any surface that changes size — the cheapest way to \
-             say a thing is glass and not a rectangle.",
+            tr("settings-one-pass-of-light-across-any-surface"),
         );
 
         ui.add_space(8.0);
         if widgets::toggle(
             ui,
             &mut chrome.settings.appearance.liquid,
-            "Move the selection instead of cross-fading it",
+            tr("settings-move-the-selection-instead-of-cross-fading"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
@@ -1041,29 +1033,23 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "One highlight that travels and stretches, rather than two rows half-lit for \
-             the settle time.",
+            tr("settings-one-highlight-that-travels-and-stretches-rather"),
         );
 
         ui.add_space(8.0);
         if widgets::toggle(
             ui,
             &mut chrome.settings.appearance.pill_progress,
-            "Load in the address pill, not a spinner",
+            tr("settings-load-in-the-address-pill-not-a"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
-        note(
-            ui,
-            palette,
-            "Gives the pill back the width it reserves for a spinner slot, and puts \
-             progress where you are already looking.",
-        );
+        note(ui, palette, tr("settings-gives-the-pill-back-the-width-it"));
     });
 
-    settings_section(ui, palette, "Chrome", |ui| {
-        subhead(ui, palette, "Where the chrome lives");
+    settings_section(ui, palette, tr("settings-chrome"), |ui| {
+        subhead(ui, palette, tr("settings-where-the-chrome-lives"));
         if choose(
             ui,
             palette,
@@ -1083,7 +1069,11 @@ pub(crate) fn settings_appearance(
         );
 
         ui.add_space(14.0);
-        subhead(ui, palette, "What a hidden sidebar leaves at the edge");
+        subhead(
+            ui,
+            palette,
+            tr("settings-what-a-hidden-sidebar-leaves-at-the"),
+        );
         if choose(
             ui,
             palette,
@@ -1096,7 +1086,7 @@ pub(crate) fn settings_appearance(
         note(ui, palette, chrome.settings.appearance.spine.note());
 
         ui.add_space(12.0);
-        subhead(ui, palette, "Where the widget shelf lives");
+        subhead(ui, palette, tr("settings-where-the-widget-shelf-lives"));
         if choose(
             ui,
             palette,
@@ -1109,8 +1099,7 @@ pub(crate) fn settings_appearance(
         note(
             ui,
             palette,
-            "The bar alone is what shipped, and it is why full-page mode cannot reach the \
-             shelf at all.",
+            tr("settings-the-bar-alone-is-what-shipped-and"),
         );
 
         if cfg!(target_os = "macos") {
@@ -1118,45 +1107,41 @@ pub(crate) fn settings_appearance(
             if widgets::toggle(
                 ui,
                 &mut chrome.settings.appearance.align_nav,
-                "Centre the nav row on the window controls",
+                tr("settings-centre-the-nav-row-on-the-window"),
                 palette,
             ) {
                 actions.push(UiAction::SettingsChanged);
             }
-            note(
-                ui,
-                palette,
-                "The lights are 12pt at 14pt in, so their centre is 20; a 25pt row has to \
-                 start at 7.5 to meet it. A near-miss reads worse than an obvious offset.",
-            );
+            note(ui, palette, tr("settings-the-lights-are-12pt-at-14pt-in"));
         }
     });
 
     settings_window_section(ui, chrome, palette, actions);
 
-    settings_section(ui, palette, "This arrangement", |ui| {
+    settings_section(ui, palette, tr("settings-this-arrangement"), |ui| {
         ui.horizontal_wrapped(|ui| {
-            if ghost_button(ui, palette, Icon::Reset, "Reset to Zervo").clicked() {
+            if ghost_button(ui, palette, Icon::Reset, tr("settings-reset-to-zervo")).clicked() {
                 chrome.settings.appearance = theme::Appearance::classic();
                 chose_preset = true;
                 actions.push(UiAction::SettingsChanged);
             }
-            if ghost_button(ui, palette, Icon::Copy, "Copy as a Material").clicked() {
+            if ghost_button(ui, palette, Icon::Copy, tr("settings-copy-as-a-material")).clicked() {
                 ui.ctx()
                     .copy_text(chrome.settings.appearance.material().as_rust());
             }
-            if ghost_button(ui, palette, Icon::FileArrowDown, "Copy as JSON").clicked() {
+            if ghost_button(
+                ui,
+                palette,
+                Icon::FileArrowDown,
+                tr("settings-copy-as-json"),
+            )
+            .clicked()
+            {
                 ui.ctx().copy_text(chrome.settings.appearance.as_json());
             }
             save_as_preset(ui, chrome, palette, actions);
         });
-        note(
-            ui,
-            palette,
-            "A theme used to be a Rust constant with no file format and no loader. Every \
-             value on this page is settable at runtime, so the loader already exists — and \
-             the file format is whatever this panel writes out.",
-        );
+        note(ui, palette, tr("settings-a-theme-used-to-be-a-rust"));
     });
 
     if !chose_preset && chrome.settings.appearance != opened_as {
@@ -1219,7 +1204,7 @@ fn accent_swatches(
         if response
             .clone()
             .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text("Mix your own")
+            .on_hover_text(tr("settings-mix-your-own"))
             .clicked()
         {
             // Opening it also selects it, seeded from whatever is in force
@@ -1247,7 +1232,7 @@ fn accent_swatches(
                             chrome.settings.accent = AccentColor::Custom(rgb[0], rgb[1], rgb[2]);
                             actions.push(UiAction::SettingsChanged);
                         }
-                        if ui.button("Done").clicked() {
+                        if ui.button(tr("common-done")).clicked() {
                             ui.ctx().data_mut(|data| data.insert_temp(picker, false));
                         }
                     });
@@ -1281,7 +1266,7 @@ fn settings_window_section(
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
-    settings_section(ui, palette, "App icon", |ui| {
+    settings_section(ui, palette, tr("settings-app-icon"), |ui| {
         let icons = AppIcon::ALL;
         let labels: Vec<&str> = icons.iter().map(crate::settings::AppIcon::label).collect();
         let current = icons
@@ -1294,18 +1279,15 @@ fn settings_window_section(
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new(
-                "Transparent lets the desktop show through the icon's backdrop. \
-                 Changes apply to the Dock immediately.",
-            )
-            .size(11.5)
-            .color(palette.text_muted),
+            RichText::new(tr("settings-transparent-lets-the-desktop-show-through-the"))
+                .size(11.5)
+                .color(palette.text_muted),
         );
     });
 
-    settings_section(ui, palette, "Window", |ui| {
+    settings_section(ui, palette, tr("common-window"), |ui| {
         ui.label(
-            RichText::new("Top glow strip")
+            RichText::new(tr("settings-top-glow-strip"))
                 .size(13.0)
                 .color(palette.text),
         );
@@ -1317,7 +1299,7 @@ fn settings_window_section(
         }
         ui.label(
             RichText::new(if chrome.settings.top_glow <= 0.0 {
-                "Off — flat chrome, no light across the top.".to_owned()
+                tr("settings-off-flat-chrome-no-light-across-the").to_owned()
             } else {
                 format!(
                     "{:.0}% — accent-tinted light across the top of the window.",
@@ -1332,13 +1314,13 @@ fn settings_window_section(
         if widgets::toggle(
             ui,
             &mut chrome.settings.content_border,
-            "Outline around content",
+            tr("settings-outline-around-content"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
         ui.label(
-            RichText::new("Accent-tinted edge framing the web page.")
+            RichText::new(tr("settings-accent-tinted-edge-framing-the-web-page"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -1347,13 +1329,13 @@ fn settings_window_section(
         if widgets::toggle(
             ui,
             &mut chrome.settings.content_shadow,
-            "Shadow around content",
+            tr("settings-shadow-around-content"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
         ui.label(
-            RichText::new("Depth under the card. On a window this size it mostly traces the edge.")
+            RichText::new(tr("settings-depth-under-the-card-on-a-window"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -1380,13 +1362,13 @@ fn settings_window_section(
         if widgets::toggle(
             ui,
             &mut chrome.settings.content_halo,
-            "Halo around content",
+            tr("settings-halo-around-content"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
         ui.label(
-            RichText::new("A glow spreading out from the card's edge.")
+            RichText::new(tr("settings-a-glow-spreading-out-from-the-card"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -1430,9 +1412,14 @@ pub(crate) fn settings_general(
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
-    settings_section(ui, palette, "Startup", |ui| {
+    settings_section(ui, palette, tr("settings-language"), |ui| {
+        language_picker(ui, chrome.settings, actions);
+        note(ui, palette, tr("language-fallback"));
+    });
+
+    settings_section(ui, palette, tr("settings-startup"), |ui| {
         ui.label(
-            RichText::new("Homepage")
+            RichText::new(tr("settings-homepage"))
                 .size(12.0)
                 .color(palette.text_muted),
         );
@@ -1446,9 +1433,9 @@ pub(crate) fn settings_general(
         }
     });
 
-    settings_section(ui, palette, "Search", |ui| {
+    settings_section(ui, palette, tr("common-search"), |ui| {
         ui.label(
-            RichText::new("Search engine")
+            RichText::new(tr("settings-search-engine"))
                 .size(12.0)
                 .color(palette.text_muted),
         );
@@ -1471,50 +1458,52 @@ pub(crate) fn settings_general(
             });
     });
 
-    settings_section(ui, palette, "Downloads", |ui| {
+    settings_section(ui, palette, tr("common-downloads"), |ui| {
         if widgets::toggle(
             ui,
             &mut chrome.settings.downloads_auto,
-            "Save files without asking where",
+            tr("settings-save-files-without-asking-where"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new(format!(
-                "Saved to {}",
-                crate::downloads::downloads_dir().display()
+            RichText::new(crate::l10n::message(
+                "settings-download-location",
+                [(
+                    "path",
+                    crate::downloads::downloads_dir()
+                        .display()
+                        .to_string()
+                        .into(),
+                )],
             ))
             .size(11.5)
             .color(palette.text_muted),
         );
     });
 
-    settings_section(ui, palette, "Compatibility", |ui| {
+    settings_section(ui, palette, tr("settings-compatibility"), |ui| {
         if widgets::toggle(
             ui,
             &mut chrome.settings.user_agent_compat,
-            "Present as plain Firefox",
+            tr("settings-present-as-plain-firefox"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new(
-                "Servo's own user agent already claims Firefox, but keeps a Servo token \
-                 and omits Gecko — and enough sites match on exactly those to turn you \
-                 away. Takes effect on the next launch.",
-            )
-            .size(11.5)
-            .color(palette.text_muted),
+            RichText::new(tr("settings-servo-s-own-user-agent-already-claims"))
+                .size(11.5)
+                .color(palette.text_muted),
         );
     });
 
-    settings_section(ui, palette, "New tabs", |ui| {
+    settings_section(ui, palette, tr("settings-new-tabs"), |ui| {
         ui.label(
-            RichText::new("Open with")
+            RichText::new(tr("settings-open-with"))
                 .size(12.0)
                 .color(palette.text_muted),
         );
@@ -1523,7 +1512,12 @@ pub(crate) fn settings_general(
             .iter()
             .position(|page| *page == chrome.settings.new_tab_page)
             .unwrap_or(0);
-        if let Some(index) = widgets::segmented(ui, current, &["Zervo page", "Homepage"], palette) {
+        if let Some(index) = widgets::segmented(
+            ui,
+            current,
+            &[tr("settings-zervo-page"), tr("settings-homepage")],
+            palette,
+        ) {
             chrome.settings.new_tab_page = pages[index];
             actions.push(UiAction::SettingsChanged);
         }
@@ -1570,15 +1564,15 @@ pub(crate) fn settings_layout(
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
-    settings_section(ui, palette, "Toolbar", |ui| {
+    settings_section(ui, palette, tr("settings-toolbar"), |ui| {
         for (value, label) in [
             (
                 &mut chrome.settings.show_forward_button,
-                "Show forward button",
+                tr("settings-show-forward-button"),
             ),
             (
                 &mut chrome.settings.show_reload_button,
-                "Show reload button",
+                tr("settings-show-reload-button"),
             ),
         ] {
             if widgets::toggle(ui, value, label, palette) {
@@ -1587,24 +1581,27 @@ pub(crate) fn settings_layout(
         }
     });
 
-    settings_section(ui, palette, "Sidebar", |ui| {
+    settings_section(ui, palette, tr("common-sidebar"), |ui| {
         for (value, label) in [
             (
                 &mut chrome.settings.show_essentials,
-                "Show pinned essentials grid",
+                tr("settings-show-pinned-essentials-grid"),
             ),
             (
                 &mut chrome.settings.show_tab_counts,
-                "Show workspace tab counts",
+                tr("settings-show-workspace-tab-counts"),
             ),
             (
                 &mut chrome.settings.always_show_tab_close,
-                "Always show tab close buttons",
+                tr("settings-always-show-tab-close-buttons"),
             ),
-            (&mut chrome.settings.compact_sidebar, "Compact rows"),
+            (
+                &mut chrome.settings.compact_sidebar,
+                tr("settings-compact-rows"),
+            ),
             (
                 &mut chrome.settings.sidebar_autohide,
-                "Reveal a hidden sidebar on hover",
+                tr("settings-reveal-a-hidden-sidebar-on-hover"),
             ),
         ] {
             if widgets::toggle(ui, value, label, palette) {
@@ -1612,7 +1609,7 @@ pub(crate) fn settings_layout(
             }
         }
     });
-    settings_section(ui, palette, "New tab page", |ui| {
+    settings_section(ui, palette, tr("settings-new-tab-page"), |ui| {
         if choose(
             ui,
             palette,
@@ -1626,25 +1623,20 @@ pub(crate) fn settings_layout(
         note(ui, palette, chrome.settings.newtab_home.note());
         ui.add_space(10.0);
         ui.label(
-            RichText::new(
-                "Both pages are the same page: nothing was removed from the board, and \
-                 the header's own control moves between them. The cards are arranged on \
-                 the board itself — press Customise there to move, resize and remove \
-                 them.",
-            )
-            .size(11.5)
-            .color(palette.text_muted),
+            RichText::new(tr("settings-both-pages-are-the-same-page-nothing"))
+                .size(11.5)
+                .color(palette.text_muted),
         );
         ui.add_space(10.0);
         ui.label(
-            RichText::new("Custom greeting")
+            RichText::new(tr("settings-custom-greeting"))
                 .size(12.0)
                 .color(palette.text_muted),
         );
         let response = ui.add(
             TextEdit::singleline(&mut chrome.settings.newtab_message)
                 .font(FontId::proportional(13.0))
-                .hint_text("Leave empty for the time of day")
+                .hint_text(tr("settings-leave-empty-for-the-time-of-day"))
                 .desired_width(f32::INFINITY),
         );
         if response.lost_focus() {
@@ -1652,7 +1644,7 @@ pub(crate) fn settings_layout(
         }
     });
 
-    settings_section(ui, palette, "World clocks", |ui| {
+    settings_section(ui, palette, tr("common-world-clocks"), |ui| {
         let mut remove = None;
         for (index, zone) in chrome.settings.newtab_world_clocks.iter().enumerate() {
             ui.horizontal(|ui| {
@@ -1664,7 +1656,7 @@ pub(crate) fn settings_layout(
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if icons::icon_button(ui, Icon::Close, 13.0, palette, true)
-                        .on_hover_text("Take this city off")
+                        .on_hover_text(tr("settings-take-this-city-off"))
                         .clicked()
                     {
                         remove = Some(index);
@@ -1678,14 +1670,14 @@ pub(crate) fn settings_layout(
         }
         if chrome.settings.newtab_world_clocks.is_empty() {
             ui.label(
-                RichText::new("No cities — the card says so rather than showing nothing.")
+                RichText::new(tr("settings-no-cities-the-card-says-so-rather"))
                     .size(11.5)
                     .color(palette.text_muted),
             );
         }
         ui.add_space(6.0);
         egui::ComboBox::from_id_salt("zervo_world_clock_add")
-            .selected_text("Add a city…")
+            .selected_text(tr("settings-add-a-city"))
             .width(220.0)
             .show_ui(ui, |ui| {
                 for (label, name) in crate::newtab::Zone::CATALOGUE {
@@ -1711,20 +1703,22 @@ pub(crate) fn settings_layout(
             });
         ui.add_space(4.0);
         ui.label(
-            RichText::new(
-                "Each clock reads the zone from the compiled-in IANA table, so daylight \
-                 saving is right without anyone maintaining it.",
-            )
-            .size(11.5)
-            .color(palette.text_muted),
+            RichText::new(tr("settings-each-clock-reads-the-zone-from-the"))
+                .size(11.5)
+                .color(palette.text_muted),
         );
     });
 
-    settings_section(ui, palette, "Wallpaper", |ui| {
+    settings_section(ui, palette, tr("common-wallpaper"), |ui| {
         use crate::wallpaper::{Cadence, Source, Subject};
         let photo = chrome.settings.new_tab_background == NewTabBackground::Photo;
         let mut wants_photo = photo;
-        if widgets::toggle(ui, &mut wants_photo, "Show a photograph", palette) {
+        if widgets::toggle(
+            ui,
+            &mut wants_photo,
+            tr("settings-show-a-photograph"),
+            palette,
+        ) {
             chrome.settings.new_tab_background = if wants_photo {
                 NewTabBackground::Photo
             } else {
@@ -1734,19 +1728,23 @@ pub(crate) fn settings_layout(
         }
         ui.add_space(4.0);
         ui.label(
-            RichText::new(
-                "Pictures come from Wikimedia Commons and Openverse, which publish under \
-                 licences that allow this. Neither needs an account. The credit line under \
-                 the page is part of the licence, so it is always drawn.",
-            )
+            RichText::new(tr(
+                "settings-pictures-come-from-wikimedia-commons-and-openverse",
+            ))
             .size(11.5)
             .color(palette.text_muted),
         );
 
         ui.add_space(10.0);
-        ui.label(RichText::new("Source").size(12.0).color(palette.text_muted));
-        let mut sources: Vec<(String, Source)> =
-            vec![("Commons picture of the day".to_owned(), Source::Commons)];
+        ui.label(
+            RichText::new(tr("settings-source"))
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+        let mut sources: Vec<(String, Source)> = vec![(
+            tr("settings-commons-picture-of-the-day").to_owned(),
+            Source::Commons,
+        )];
         sources.extend(Subject::ALL.iter().map(|subject| {
             (
                 format!("Openverse — {}", subject.label().to_lowercase()),
@@ -1775,7 +1773,7 @@ pub(crate) fn settings_layout(
 
         ui.add_space(10.0);
         ui.label(
-            RichText::new("Change it")
+            RichText::new(tr("settings-change-it"))
                 .size(12.0)
                 .color(palette.text_muted),
         );
@@ -1791,7 +1789,11 @@ pub(crate) fn settings_layout(
         }
 
         ui.add_space(10.0);
-        ui.label(RichText::new("Veil").size(12.0).color(palette.text_muted));
+        ui.label(
+            RichText::new(tr("settings-veil"))
+                .size(12.0)
+                .color(palette.text_muted),
+        );
         if widgets::slider(ui, &mut chrome.settings.wallpaper_dim, 0.15..=0.9, palette).settled {
             actions.push(UiAction::PersistSettings);
         }
@@ -1806,10 +1808,10 @@ pub(crate) fn settings_layout(
 
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if ui.button("Another picture").clicked() {
+            if ui.button(tr("common-another-picture")).clicked() {
                 actions.push(UiAction::ShuffleWallpaper);
             }
-            if ui.button("Choose a file…").clicked() {
+            if ui.button(tr("common-choose-file")).clicked() {
                 actions.push(UiAction::PickWallpaper);
             }
         });
@@ -1818,59 +1820,56 @@ pub(crate) fn settings_layout(
         let note = if let Some(why) = chrome.wallpaper.error {
             format!("The last attempt failed: {why}")
         } else if chrome.wallpaper.loading {
-            "Fetching one…".to_owned()
+            tr("settings-fetching-one").to_owned()
         } else if chrome.wallpaper.texture.is_some() {
             format!("Showing {} — from {}.", credit.line(), credit.source)
         } else {
-            "Nothing fetched yet.".to_owned()
+            tr("settings-nothing-fetched-yet").to_owned()
         };
         ui.label(RichText::new(note).size(11.5).color(palette.text_muted));
     });
 
-    settings_section(ui, palette, "Trackpad", |ui| {
+    settings_section(ui, palette, tr("settings-trackpad"), |ui| {
         if widgets::toggle(
             ui,
             &mut chrome.settings.gestures.enabled,
-            "Two-finger swipes",
+            tr("settings-two-finger-swipes"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
         ui.label(
-            RichText::new(
-                "A quick, straight flick. A slow or wandering one is a scroll and is \
-                 left alone.",
-            )
-            .size(11.5)
-            .color(palette.text_muted),
+            RichText::new(tr("settings-a-quick-straight-flick-a-slow-or"))
+                .size(11.5)
+                .color(palette.text_muted),
         );
         if chrome.settings.gestures.enabled {
             ui.add_space(10.0);
             let mut changed = false;
             changed |= gesture_row(
                 ui,
-                "Swipe right",
-                "Anywhere in the window.",
+                tr("settings-swipe-right"),
+                tr("settings-anywhere-in-the-window"),
                 &mut chrome.settings.gestures.right,
                 palette,
             );
             changed |= gesture_row(
                 ui,
-                "Swipe left",
+                tr("settings-swipe-left"),
                 "",
                 &mut chrome.settings.gestures.left,
                 palette,
             );
             changed |= gesture_row(
                 ui,
-                "Swipe down",
-                "Over the bar above the page — everywhere else this scrolls.",
+                tr("settings-swipe-down"),
+                tr("settings-over-the-bar-above-the-page-everywhere"),
                 &mut chrome.settings.gestures.down,
                 palette,
             );
             changed |= gesture_row(
                 ui,
-                "Swipe up",
+                tr("settings-swipe-up"),
                 "",
                 &mut chrome.settings.gestures.up,
                 palette,
@@ -1881,19 +1880,16 @@ pub(crate) fn settings_layout(
         }
     });
 
-    settings_section(ui, palette, "Arrangement", |ui| {
+    settings_section(ui, palette, tr("settings-arrangement"), |ui| {
         ui.label(
-            RichText::new(
-                "The navigation bar, its widgets, and the widths of the sidebar and \
-                 address bar are all arranged by dragging them rather than set here.",
-            )
-            .size(11.5)
-            .color(palette.text_muted),
+            RichText::new(tr("settings-the-navigation-bar-its-widgets-and-the"))
+                .size(11.5)
+                .color(palette.text_muted),
         );
         ui.add_space(8.0);
         if ui
-            .button("Reset to defaults")
-            .on_hover_text("Puts every bar button, widget and width back")
+            .button(tr("settings-reset-to-defaults"))
+            .on_hover_text(tr("settings-puts-every-bar-button-widget-and-width"))
             .clicked()
         {
             actions.push(UiAction::ResetLayout);
@@ -1913,16 +1909,11 @@ pub(crate) fn settings_passwords(
 ) {
     let palette = chrome.palette;
 
-    settings_section(ui, &palette, "Saved logins", |ui| {
+    settings_section(ui, &palette, tr("settings-saved-logins"), |ui| {
         ui.label(
-            RichText::new(
-                "Passwords are kept in your system keychain, never in Zervo's own files. \
-                 Press ⌘⇧L on a sign-in page to fill the saved login for that site, and \
-                 Zervo also uses it when a site asks for HTTP authentication. Both only \
-                 ever happen over https, and only for an exact match on the site name.",
-            )
-            .size(12.0)
-            .color(palette.text_muted),
+            RichText::new(tr("settings-passwords-are-kept-in-your-system-keychain"))
+                .size(12.0)
+                .color(palette.text_muted),
         );
         ui.add_space(10.0);
         // What the engine cannot do, said where the feature is rather than in
@@ -1934,15 +1925,13 @@ pub(crate) fn settings_passwords(
             ui,
             &palette,
             Icon::Info,
-            "The engine gives Zervo no hook for a submitted form, so it never notices \
-             that you have just signed in and never offers to save the password. Add one \
-             below and it works everywhere a saved login does.",
+            tr("settings-the-engine-gives-zervo-no-hook-for"),
         );
         ui.add_space(12.0);
 
         if chrome.vault.is_empty() {
             ui.label(
-                RichText::new("Nothing saved yet.")
+                RichText::new(tr("settings-nothing-saved-yet"))
                     .size(13.0)
                     .color(palette.text_muted),
             );
@@ -1988,7 +1977,7 @@ pub(crate) fn settings_passwords(
                     Id::new("zervo_pw_remove").with((&site, &username)),
                     Sense::click(),
                 )
-                .on_hover_text("Forget this login")
+                .on_hover_text(tr("settings-forget-this-login"))
                 .on_hover_cursor(CursorIcon::PointingHand)
                 .clicked()
             {
@@ -1998,7 +1987,7 @@ pub(crate) fn settings_passwords(
     });
 
     ui.add_space(14.0);
-    settings_section(ui, &palette, "Add a login", |ui| {
+    settings_section(ui, &palette, tr("settings-add-a-login"), |ui| {
         let field = |ui: &mut Ui, label: &str, value: &mut String, secret: bool| {
             ui.horizontal(|ui| {
                 ui.allocate_ui(vec2(90.0, 26.0), |ui| {
@@ -2013,21 +2002,21 @@ pub(crate) fn settings_passwords(
             });
         };
         let draft = &mut chrome.browser.password_draft;
-        field(ui, "Site", &mut draft.0, false);
-        field(ui, "Username", &mut draft.1, false);
-        field(ui, "Password", &mut draft.2, true);
+        field(ui, tr("settings-site"), &mut draft.0, false);
+        field(ui, tr("settings-username"), &mut draft.1, false);
+        field(ui, tr("settings-password"), &mut draft.2, true);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Save login").clicked() {
+            if ui.button(tr("settings-save-login")).clicked() {
                 actions.push(UiAction::SavePassword);
             }
             ui.add_space(6.0);
-            if ui.button("Import…").clicked() {
+            if ui.button(tr("settings-import")).clicked() {
                 actions.push(UiAction::ImportPasswords);
             }
             if ui
-                .button("Export…")
-                .on_hover_text("Writes every password to a plain, unencrypted file")
+                .button(tr("settings-export"))
+                .on_hover_text(tr("settings-writes-every-password-to-a-plain-unencrypted"))
                 .clicked()
             {
                 actions.push(UiAction::ExportPasswords);
@@ -2047,14 +2036,19 @@ pub(crate) fn settings_passwords(
 pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
     settings_section(ui, palette, "Zervo", |ui| {
         ui.label(
-            RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                .size(13.0)
-                .color(palette.text),
+            RichText::new(crate::l10n::message(
+                "settings-version",
+                [("version", env!("CARGO_PKG_VERSION").into())],
+            ))
+            .size(13.0)
+            .color(palette.text),
         );
         ui.label(
-            RichText::new("Rendering engine: Servo, compositing through WebRender.")
-                .size(12.0)
-                .color(palette.text_muted),
+            RichText::new(tr(
+                "settings-rendering-engine-servo-compositing-through-webrender",
+            ))
+            .size(12.0)
+            .color(palette.text_muted),
         );
         // Not a guess about the platform: the driver's own GL_RENDERER and
         // GL_VERSION, read at startup from the context the page is drawn in.
@@ -2082,7 +2076,7 @@ pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
                 .color(palette.text_muted),
         );
         ui.label(
-            RichText::new("Chrome: egui on winit, painted against Servo's GL context.")
+            RichText::new(tr("settings-chrome-egui-on-winit-painted-against-servo"))
                 .size(12.0)
                 .color(palette.text_muted),
         );

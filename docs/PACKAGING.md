@@ -288,9 +288,9 @@ The AppImage uses the host graphics and display libraries. In media builds
 it also uses the host’s GStreamer 1.20+ and GLib as a unit, including the
 host’s plugin scanner and plugins. The packaging script checks the AppDir for
 copies of these libraries before building the image. On Debian-family systems
-with media enabled, install `gstreamer1.0-plugins-{base,good,bad,ugly}` and
-`gstreamer1.0-libav`. The libraries in the base and bad packages are required
-even to start a media build.
+with media enabled, install `gstreamer1.0-gl`,
+`gstreamer1.0-plugins-{base,good,bad,ugly}`, and `gstreamer1.0-libav`.
+The linked GL, base, and bad libraries are required to start a media build.
 
 Tagged release AppImages include a `.zsync` file for delta updates. If FUSE is
 unavailable, run the image with `--appimage-extract-and-run`:

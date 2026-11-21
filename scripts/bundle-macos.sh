@@ -144,6 +144,7 @@ note "$(lipo -archs "$BIN_DIR/Zervo")"
 say "icon"
 ./scripts/make-icns.sh
 cp assets/icon/Zervo.icns "$RES_DIR/Zervo.icns"
+cp assets/licenses/NotoSansJP-OFL.txt "$RES_DIR/"
 
 if [ "$WITH_MEDIA" = 1 ]; then
     say "bundling GStreamer"

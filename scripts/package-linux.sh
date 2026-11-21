@@ -316,6 +316,7 @@ appstream-util validate-relax --nonet \\
 # so it is listed here even though %license below is the one Fedora reads.
 %license %{_datadir}/doc/zervo/copyright
 %license %{_datadir}/licenses/zervo/LICENSE
+%license %{_datadir}/licenses/zervo/NotoSansJP-OFL.txt
 
 %changelog
 * $CHANGELOG_DATE $ZERVO_MAINTAINER - $VERSION-1

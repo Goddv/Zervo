@@ -11,7 +11,7 @@ pkgrel=1
 pkgdesc='A sidebar-first browser built on the Servo engine'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Goddv/Zervo'
-license=('MPL-2.0')
+license=('MPL-2.0' 'OFL-1.1')
 
 depends=(
     'fontconfig'
@@ -147,4 +147,6 @@ package() {
         "$pkgdir/usr/share/metainfo/app.zervo.Zervo.metainfo.xml"
     install -Dm644 assets/linux/zervo.1 "$pkgdir/usr/share/man/man1/zervo.1"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 assets/licenses/NotoSansJP-OFL.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/NotoSansJP-OFL.txt"
 }

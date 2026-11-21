@@ -4,6 +4,7 @@
 //! bottom utility bar — around a floating rounded card holding the web
 //! content (or the zervo://settings tab). Pure UI — emits `UiAction`s.
 
+use crate::l10n::text as tr;
 use std::collections::HashMap;
 
 use egui::epaint::Mesh;
@@ -136,6 +137,7 @@ pub enum UiAction {
     DragWindow,
     /// A setting changed: persist and re-apply (theme, etc.).
     SettingsChanged,
+    ChangeLanguage,
     /// A setting changed that needs nothing re-applied — just write it out.
     PersistSettings,
 }
@@ -223,6 +225,41 @@ impl ChromeContext<'_> {
 /// Draw the chrome into the root `Ui` handed to us by `EguiGlow::run`. The
 /// caller registers the webview blit at `content_rect` (unless an internal
 /// page is open), then calls [`finish_content_frame`].
+fn language_picker(ui: &mut Ui, settings: &mut Settings, actions: &mut Vec<UiAction>) {
+    let languages = crate::l10n::languages();
+    let selected = languages
+        .iter()
+        .find(|(locale, _)| *locale == settings.language)
+        .map_or_else(|| tr("language-system"), |(_, name)| *name);
+    let mut chosen = None;
+    let label = ui.label(tr("ui-language"));
+    let picker = egui::ComboBox::from_id_salt("interface-language")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(settings.language.is_empty(), tr("language-system"))
+                .clicked()
+            {
+                chosen = Some("");
+            }
+            for (locale, name) in languages {
+                if ui
+                    .selectable_label(settings.language == locale, name)
+                    .clicked()
+                {
+                    chosen = Some(locale);
+                }
+            }
+        });
+    picker.response.labelled_by(label.id);
+    if let Some(locale) = chosen
+        && locale != settings.language
+    {
+        settings.language = locale.to_owned();
+        actions.push(UiAction::ChangeLanguage);
+    }
+}
+
 pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     let mut actions = Vec::new();
 
@@ -553,7 +590,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         .active_tab()
         .and_then(|tab| url::Url::parse(&tab.url).ok())
         .and_then(|url| url.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "This page".to_owned());
+        .unwrap_or_else(|| tr("chrome-this-page").to_owned());
     let scale = root.pixels_per_point();
     chrome.controls.draw(
         root,
@@ -836,7 +873,7 @@ fn sidebar_body(
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if icons::icon_button(ui, Icon::Plus, 15.0, &palette, true)
-                        .on_hover_text("New workspace")
+                        .on_hover_text(tr("chrome-new-workspace"))
                         .clicked()
                     {
                         actions.push(UiAction::NewWorkspace);
@@ -848,7 +885,7 @@ fn sidebar_body(
                     // worse than one that is not there.
                     if chrome.settings.layout == crate::settings::Layout::FullPage
                         && icons::icon_button(ui, Icon::Browser, 16.0, &palette, true)
-                            .on_hover_text("Leave full-page mode (⌘S)")
+                            .on_hover_text(tr("chrome-leave-full-page-mode-s"))
                             .clicked()
                     {
                         actions.push(UiAction::ToggleSidebar);
@@ -955,9 +992,9 @@ fn sidebar_body(
                 !chrome.settings.layout.is_sidebar(),
             )
             .on_hover_text(if chrome.settings.layout.is_sidebar() {
-                "Hide sidebar (⌘S)"
+                tr("chrome-hide-sidebar-s")
             } else {
-                "Show sidebar (⌘S)"
+                tr("chrome-show-sidebar-s")
             })
             .clicked()
             {
@@ -974,7 +1011,7 @@ fn sidebar_body(
             }
             if chrome.settings.show_reload_button
                 && icons::icon_button(ui, Icon::Reload, 17.0, &palette, !is_settings)
-                    .on_hover_text("Reload (⌘R)")
+                    .on_hover_text(tr("chrome-reload-r"))
                     .clicked()
             {
                 actions.push(UiAction::Reload);
@@ -1148,7 +1185,7 @@ fn sidebar_body(
                 ui.painter().text(
                     pos2(rect.min.x + 32.0, rect.center().y),
                     Align2::LEFT_CENTER,
-                    "New Tab",
+                    tr("common-new-tab"),
                     FontId::proportional(13.5),
                     palette.text_muted,
                 );
@@ -1333,11 +1370,15 @@ fn draw_history_page(
     );
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("History").size(24.0).color(palette.text));
+        ui.label(
+            RichText::new(tr("common-history"))
+                .size(24.0)
+                .color(palette.text),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if !chrome.library.history.is_empty()
                 && icons::icon_button(ui, Icon::Trash, 15.0, &palette, true)
-                    .on_hover_text("Clear all history")
+                    .on_hover_text(tr("chrome-clear-all-history"))
                     .clicked()
             {
                 actions.push(UiAction::ClearHistory);
@@ -1368,7 +1409,7 @@ fn draw_history_page(
             .frame(Frame::NONE)
             .font(FontId::proportional(13.5))
             .text_color(palette.text)
-            .hint_text(RichText::new("Search history").color(palette.text_muted))
+            .hint_text(RichText::new(tr("chrome-search-history")).color(palette.text_muted))
             .desired_width(editor.available_width()),
     );
     ui.advance_cursor_after_rect(field);
@@ -1379,9 +1420,9 @@ fn draw_history_page(
     if groups.is_empty() {
         ui.label(
             RichText::new(if chrome.library.history.is_empty() {
-                "Nothing here yet."
+                tr("chrome-nothing-here-yet")
             } else {
-                "No pages match that search."
+                tr("chrome-no-pages-match-that-search")
             })
             .size(13.5)
             .color(palette.text_muted),
@@ -1487,9 +1528,9 @@ fn draw_favourite_star(
 
     let response = icons::icon_button(ui, Icon::Star, NAVBAR_ICON, &palette, !url.is_empty());
     let label = if saved {
-        "Remove from favourites"
+        tr("chrome-remove-from-favourites")
     } else {
-        "Add to favourites"
+        tr("chrome-add-to-favourites")
     };
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
@@ -1730,7 +1771,7 @@ fn draw_favourites_card(
             ui.painter().text(
                 header.left_center(),
                 Align2::LEFT_CENTER,
-                "Favourites",
+                tr("common-favourites"),
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
@@ -1747,9 +1788,9 @@ fn draw_favourites_card(
             if ui
                 .interact(switch, id.with("layout"), Sense::click())
                 .on_hover_text(if grid {
-                    "Show as a list"
+                    tr("chrome-show-as-a-list")
                 } else {
-                    "Show as tiles"
+                    tr("chrome-show-as-tiles")
                 })
                 .on_hover_cursor(CursorIcon::PointingHand)
                 .clicked()
@@ -1765,7 +1806,7 @@ fn draw_favourites_card(
                 ui.painter().text(
                     body.left_top() + vec2(4.0, 12.0),
                     Align2::LEFT_TOP,
-                    "Nothing saved yet — the star adds this page.",
+                    tr("chrome-nothing-saved-yet-the-star-adds-this"),
                     FontId::proportional(12.0),
                     palette.text_muted,
                 );
@@ -1903,7 +1944,7 @@ fn draw_favourites_card(
                     icons::draw_icon(ui.painter(), save.shrink(3.0), Icon::Check, palette.accent);
                     let saved = ui
                         .interact(save, id.with(("save", index)), Sense::click())
-                        .on_hover_text("Save")
+                        .on_hover_text(tr("common-save"))
                         .on_hover_cursor(CursorIcon::PointingHand)
                         .clicked();
                     let cancel = Rect::from_center_size(
@@ -1918,7 +1959,7 @@ fn draw_favourites_card(
                     );
                     let cancelled = ui
                         .interact(cancel, id.with(("cancelrename", index)), Sense::click())
-                        .on_hover_text("Discard")
+                        .on_hover_text(tr("chrome-discard"))
                         .clicked();
 
                     if saved || entered {
@@ -1952,7 +1993,7 @@ fn draw_favourites_card(
                     );
                     if ui
                         .interact(rename, id.with(("edit", index)), Sense::click())
-                        .on_hover_text("Rename")
+                        .on_hover_text(tr("common-rename"))
                         .clicked()
                     {
                         edit = Some(Some((url.clone(), title.clone())));
@@ -1969,7 +2010,7 @@ fn draw_favourites_card(
                     );
                     if ui
                         .interact(close, id.with(("x", index)), Sense::click())
-                        .on_hover_text("Remove")
+                        .on_hover_text(tr("common-remove"))
                         .clicked()
                     {
                         actions.push(UiAction::RemoveFavourite(url.clone()));
@@ -2036,7 +2077,7 @@ fn draw_downloads_card(
             ui.painter().text(
                 header.left_center(),
                 Align2::LEFT_CENTER,
-                "Downloads",
+                tr("common-downloads"),
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
@@ -2053,7 +2094,7 @@ fn draw_downloads_card(
                 );
                 if ui
                     .interact(clear, id.with("clear"), Sense::click())
-                    .on_hover_text("Clear finished")
+                    .on_hover_text(tr("chrome-clear-finished"))
                     .on_hover_cursor(CursorIcon::PointingHand)
                     .clicked()
                 {
@@ -2069,7 +2110,7 @@ fn draw_downloads_card(
                 ui.painter().text(
                     body.left_top() + vec2(4.0, 12.0),
                     Align2::LEFT_TOP,
-                    "Nothing downloaded yet.",
+                    tr("common-no-downloads"),
                     FontId::proportional(12.0),
                     palette.text_muted,
                 );
@@ -2150,7 +2191,7 @@ fn draw_downloads_card(
                         None => format_bytes(*received),
                     },
                     DownloadState::Complete => format_bytes(*received),
-                    DownloadState::Cancelled => "Stopped".to_owned(),
+                    DownloadState::Cancelled => tr("chrome-stopped").to_owned(),
                     DownloadState::Failed(why) => ellipsize(why, 34),
                 };
                 ui.painter().text(
@@ -2209,25 +2250,31 @@ fn draw_downloads_card(
                         };
 
                     if running {
-                        if control(ui, Icon::Close, "Stop", true, "stop") {
+                        if control(ui, Icon::Close, tr("chrome-stop"), true, "stop") {
                             actions.push(UiAction::CancelDownload(*download));
                         }
                         control(
                             ui,
                             Icon::Pause,
-                            "Pause — the engine cannot suspend a transfer",
+                            tr("chrome-pause-the-engine-cannot-suspend-a-transfer"),
                             false,
                             "pause",
                         );
                     } else {
-                        if control(ui, Icon::Reload, "Start again", true, "restart") {
+                        if control(ui, Icon::Reload, tr("chrome-start-again"), true, "restart") {
                             actions.push(UiAction::RestartDownload(*download));
                         }
                         if *state == DownloadState::Complete {
-                            if control(ui, Icon::Folder, "Show in folder", true, "reveal") {
+                            if control(
+                                ui,
+                                Icon::Folder,
+                                tr("chrome-show-in-folder"),
+                                true,
+                                "reveal",
+                            ) {
                                 actions.push(UiAction::RevealDownload(*download));
                             }
-                            if control(ui, Icon::ExternalLink, "Open", true, "open") {
+                            if control(ui, Icon::ExternalLink, tr("common-open"), true, "open") {
                                 actions.push(UiAction::OpenDownload(*download));
                             }
                         }
@@ -2256,12 +2303,12 @@ fn draw_downloads_card(
                     .map(|entry| entry.filename.clone())
                     .unwrap_or_default();
                 let rows = [
-                    ("Copy download link".to_owned(), 0u8),
-                    ("Copy file name".to_owned(), 1),
-                    ("Show in folder".to_owned(), 2),
-                    ("Open".to_owned(), 3),
-                    ("Start again".to_owned(), 4),
-                    ("Remove from list".to_owned(), 5),
+                    (tr("chrome-copy-download-link").to_owned(), 0u8),
+                    (tr("chrome-copy-file-name").to_owned(), 1),
+                    (tr("chrome-show-in-folder").to_owned(), 2),
+                    (tr("common-open").to_owned(), 3),
+                    (tr("chrome-start-again").to_owned(), 4),
+                    (tr("chrome-remove-from-list").to_owned(), 5),
                 ];
                 match popup_menu(&ctx, &palette, menu_id.with("area"), at, &rows) {
                     Some(choice) => {
@@ -2389,15 +2436,15 @@ impl NavItem {
 
     pub fn label(self) -> &'static str {
         match self {
-            NavItem::Sidebar => "Sidebar",
-            NavItem::Back => "Back",
-            NavItem::Forward => "Forward",
-            NavItem::Reload => "Reload",
-            NavItem::Favourite => "Favourites",
-            NavItem::Extensions => "Extensions",
-            NavItem::History => "History",
-            NavItem::Downloads => "Downloads",
-            NavItem::Settings => "Settings",
+            NavItem::Sidebar => tr("common-sidebar"),
+            NavItem::Back => tr("common-back"),
+            NavItem::Forward => tr("common-forward"),
+            NavItem::Reload => tr("common-reload"),
+            NavItem::Favourite => tr("common-favourites"),
+            NavItem::Extensions => tr("common-extensions"),
+            NavItem::History => tr("common-history"),
+            NavItem::Downloads => tr("common-downloads"),
+            NavItem::Settings => tr("common-settings"),
         }
     }
 }
@@ -2526,7 +2573,7 @@ fn draw_navbar(
         for icon in extras {
             let response = icons::icon_button(&mut group, icon, NAVBAR_ICON, &palette, true);
             if icon == Icon::Plus {
-                let response = response.on_hover_text("Add a widget");
+                let response = response.on_hover_text(tr("chrome-add-a-widget"));
                 if response.clicked() {
                     let open = Id::new("zervo_navbar_add_widget");
                     let was = root_data_flag(&ctx, open);
@@ -2535,9 +2582,9 @@ fn draw_navbar(
                 add_widget = Some(response.rect);
             } else if response
                 .on_hover_text(if config {
-                    "Done arranging"
+                    tr("chrome-done-arranging")
                 } else {
-                    "Arrange the bar"
+                    tr("chrome-arrange-the-bar")
                 })
                 .clicked()
             {
@@ -2748,7 +2795,10 @@ fn draw_navbar_config(
         if !held
             && root
                 .interact(close, drag_id.with(("off", slot)), Sense::click())
-                .on_hover_text(format!("Remove {}", item.label()))
+                .on_hover_text(crate::l10n::message(
+                    "chrome-remove-item",
+                    [("item", item.label().into())],
+                ))
                 .clicked()
         {
             actions.push(UiAction::RemoveNavItem(*item));
@@ -2801,9 +2851,9 @@ fn draw_navbar_config(
                 pos2(tray.min.x + 12.0, tray.center().y),
                 Align2::LEFT_CENTER,
                 if hidden.is_empty() {
-                    "Drag to rearrange"
+                    tr("chrome-drag-to-rearrange")
                 } else {
-                    "Drag to rearrange, or add back:"
+                    tr("chrome-drag-to-rearrange-or-add-back")
                 },
                 FontId::proportional(12.0),
                 palette.text_muted,
@@ -2888,17 +2938,17 @@ fn draw_nav_item(
     });
     let active = chrome.downloads.active_count();
     let response = match item {
-        NavItem::Sidebar => response.on_hover_text("Show sidebar"),
-        NavItem::Reload => response.on_hover_text("Reload (⌘R)"),
-        NavItem::Settings => response.on_hover_text("Settings (⌘,)"),
-        NavItem::History => response.on_hover_text("History"),
+        NavItem::Sidebar => response.on_hover_text(tr("chrome-show-sidebar")),
+        NavItem::Reload => response.on_hover_text(tr("chrome-reload-r")),
+        NavItem::Settings => response.on_hover_text(tr("chrome-settings")),
+        NavItem::History => response.on_hover_text(tr("common-history")),
         NavItem::Extensions => {
-            response.on_hover_text("Extensions — not supported by the engine yet")
+            response.on_hover_text(tr("chrome-extensions-not-supported-by-the-engine-yet"))
         },
         NavItem::Downloads => response.on_hover_text(if active > 0 {
-            format!("Downloads ({active} active)")
+            crate::l10n::message("chrome-downloads-active", [("count", active.into())])
         } else {
-            "Downloads".to_owned()
+            tr("common-downloads").to_owned()
         }),
         _ => response.on_hover_text(item.label()),
     };
@@ -2957,9 +3007,9 @@ fn navbar_resize(
         root.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
     }
     let label = if stored > NAVBAR_ROW + 1.0 {
-        "Hide toolbar widgets"
+        tr("chrome-hide-toolbar-widgets")
     } else {
-        "Show toolbar widgets"
+        tr("chrome-show-toolbar-widgets")
     };
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
@@ -3529,7 +3579,7 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
             crate::dashboard::draw_grabber(ui.painter(), &chrome.palette, grip, emphasis);
             response
                 .clone()
-                .on_hover_text("Widgets — click to open, drag to size");
+                .on_hover_text(tr("chrome-widgets-click-to-open-drag-to-size"));
 
             let mut height = open;
             if response.dragged() {
@@ -3774,23 +3824,35 @@ fn draw_address_pill(
         // the opposite of the truth.
         if let Some(crate::state::TabKind::Trouble(trouble)) = tab.map(|tab| tab.kind) {
             let hint: &str = match trouble {
-                crate::trouble::Trouble::Unsupported => "The engine cannot render this page",
-                crate::trouble::Trouble::Offline => "No network",
-                crate::trouble::Trouble::Certificate => "The certificate does not match this site",
-                crate::trouble::Trouble::NotFound => "Nothing answered at this address",
-                crate::trouble::Trouble::Crashed => "The engine fell over on this page",
+                crate::trouble::Trouble::Unsupported => {
+                    tr("chrome-the-engine-cannot-render-this-page")
+                },
+                crate::trouble::Trouble::Offline => tr("common-offline"),
+                crate::trouble::Trouble::Certificate => {
+                    tr("chrome-the-certificate-does-not-match-this-site")
+                },
+                crate::trouble::Trouble::NotFound => tr("chrome-nothing-answered-at-this-address"),
+                crate::trouble::Trouble::Crashed => tr("chrome-the-engine-fell-over-on-this-page"),
             };
             (trouble.icon(), trouble.badge_tint(&palette), hint)
         } else {
             let url = tab.map(|tab| tab.url.as_str());
             match url.map(|url| url.split(':').next().unwrap_or("")) {
-                Some("https") => (Icon::Lock, palette.text_muted, "Encrypted connection"),
+                Some("https") => (
+                    Icon::Lock,
+                    palette.text_muted,
+                    tr("chrome-encrypted-connection"),
+                ),
                 Some("http") => (
                     Icon::Warning,
                     theme::mix(palette.text_muted, palette.warning, 0.75),
-                    "Not encrypted — anyone on the network can read this",
+                    tr("chrome-not-encrypted-anyone-on-the-network-can"),
                 ),
-                Some("file") => (Icon::Folder, palette.text_muted, "A file on this computer"),
+                Some("file") => (
+                    Icon::Folder,
+                    palette.text_muted,
+                    tr("chrome-a-file-on-this-computer"),
+                ),
                 _ => (Icon::Globe, palette.text_muted, ""),
             }
         }
@@ -3828,11 +3890,9 @@ fn draw_address_pill(
             true,
         );
         let label = if chrome.notifications.open {
-            "Hide notifications".to_owned()
-        } else if count == 1 {
-            "1 notification".to_owned()
+            tr("chrome-hide-notifications").to_owned()
         } else {
-            format!("{count} notifications")
+            crate::l10n::message("chrome-notification-count", [("count", count.into())])
         };
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &label)
@@ -3885,9 +3945,9 @@ fn draw_address_pill(
         })
     .max(1.0);
     let hint = if width >= 176.0 {
-        "Search or enter an address"
+        tr("chrome-search-or-enter-an-address")
     } else {
-        "Search or URL"
+        tr("chrome-search-or-url")
     };
     inner.visuals_mut().weak_text_color = Some(palette.text_muted);
     let editor = TextEdit::singleline(&mut chrome.browser.address_bar)
@@ -4069,11 +4129,11 @@ fn draw_essentials_grid(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut V
                     .on_hover_cursor(CursorIcon::PointingHand)
                     .on_hover_text(&essential.title);
                 response.clone().context_menu(|ui| {
-                    if ui.button("Unpin").clicked() {
+                    if ui.button(tr("chrome-unpin")).clicked() {
                         actions.push(UiAction::TogglePin(essential.tab_id));
                         ui.close();
                     }
-                    if ui.button("Close").clicked() {
+                    if ui.button(tr("common-close")).clicked() {
                         actions.push(UiAction::CloseTab(essential.tab_id));
                         ui.close();
                     }
@@ -4244,7 +4304,7 @@ fn workspace_header(
     );
     // Renaming any workspace, not only a freshly made one.
     response.clone().context_menu(|ui| {
-        if ui.button("Rename").clicked() {
+        if ui.button(tr("common-rename")).clicked() {
             *rename = Some((index, WorkspaceName::Typing(name.to_owned())));
             ui.close();
         }
@@ -4553,7 +4613,7 @@ fn tab_row(
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
             close_response.enabled(),
-            format!("Close {}", style.title),
+            crate::l10n::message("chrome-close-tab", [("title", style.title.into())]),
         )
     });
 
@@ -4675,11 +4735,11 @@ fn tab_row(
 
     if !style.is_settings {
         response.clone().context_menu(|ui| {
-            if ui.button("Pin as Essential").clicked() {
+            if ui.button(tr("chrome-pin-as-essential")).clicked() {
                 actions.push(UiAction::TogglePin(style.tab_id));
                 ui.close();
             }
-            if ui.button("Close").clicked() {
+            if ui.button(tr("common-close")).clicked() {
                 actions.push(UiAction::CloseTab(style.tab_id));
                 ui.close();
             }
@@ -4780,7 +4840,7 @@ fn draw_downloads_page(
                     ui.add_space(16.0);
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("Downloads")
+                            RichText::new(tr("common-downloads"))
                                 .size(21.0)
                                 .strong()
                                 .color(palette.text),
@@ -4788,7 +4848,7 @@ fn draw_downloads_page(
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if !chrome.downloads.items.is_empty()
                                 && icons::icon_button(ui, Icon::Trash, 15.0, &palette, true)
-                                    .on_hover_text("Clear finished")
+                                    .on_hover_text(tr("chrome-clear-finished"))
                                     .clicked()
                             {
                                 actions.push(UiAction::ClearDownloads);
@@ -4811,9 +4871,7 @@ fn draw_downloads_page(
                             ui,
                             &palette,
                             Icon::Info,
-                            "Built without engine-downloads. Responses the engine cannot \
-                             render — an archive, an installer — are not offered for saving, \
-                             so they will not appear here.",
+                            tr("chrome-built-without-engine-downloads-responses-the-engine"),
                         );
                         ui.add_space(14.0);
                     }
@@ -4830,12 +4888,12 @@ fn draw_downloads_page(
                                 palette.text_muted.gamma_multiply(0.6),
                             );
                             ui.label(
-                                RichText::new("No downloads yet")
+                                RichText::new(tr("chrome-no-downloads-yet"))
                                     .size(14.0)
                                     .color(palette.text_muted),
                             );
                             ui.label(
-                                RichText::new("Files you download will appear here.")
+                                RichText::new(tr("chrome-files-you-download-will-appear-here"))
                                     .size(11.5)
                                     .color(palette.text_muted),
                             );
@@ -4885,8 +4943,11 @@ fn draw_downloads_page(
                                 None => format_bytes(item.received),
                             },
                             DownloadState::Complete => format_bytes(item.received),
-                            DownloadState::Cancelled => "Cancelled".to_owned(),
-                            DownloadState::Failed(error) => format!("Failed — {error}"),
+                            DownloadState::Cancelled => tr("chrome-cancelled").to_owned(),
+                            DownloadState::Failed(error) => crate::l10n::message(
+                                "chrome-download-failed",
+                                [("error", error.as_str().into())],
+                            ),
                         };
                         ui.painter().text(
                             pos2(rect.min.x + 48.0, rect.min.y + 40.0),
@@ -4954,7 +5015,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Cancel")
+                                .on_hover_text(tr("common-cancel"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::CancelDownload(item.id));
@@ -4968,7 +5029,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Reveal in Finder")
+                                .on_hover_text(tr("chrome-reveal-in-finder"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::RevealDownload(item.id));
@@ -4980,7 +5041,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Open")
+                                .on_hover_text(tr("common-open"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::OpenDownload(item.id));
@@ -4994,7 +5055,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Remove")
+                                .on_hover_text(tr("common-remove"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::RemoveDownload(item.id));
@@ -5213,7 +5274,7 @@ fn draw_toasts(
                     painter.text(
                         rect.center(),
                         Align2::CENTER_CENTER,
-                        "Clear all",
+                        tr("chrome-clear-all"),
                         FontId::proportional(11.5),
                         theme::mix(palette.text_muted, palette.text, lit),
                     );
