@@ -1305,6 +1305,16 @@ impl RunningApp {
             loading: self.wallpaper.is_loading(),
         };
 
+        // Keep standard controls and their popups on the same appearance as
+        // Zervo's custom-painted chrome, even when the user overrides the OS.
+        let widget_theme = if palette.dark {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        };
+        if self.egui_glow.egui_ctx.theme() != widget_theme {
+            self.egui_glow.egui_ctx.set_theme(widget_theme);
+        }
         self.egui_glow.run(&state.window, |root| {
             let mut browser = state.browser.borrow_mut();
             let mut controls = state.controls.borrow_mut();
