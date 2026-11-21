@@ -71,6 +71,21 @@ struct Permission {
     host: String,
 }
 
+pub struct PageCoordinates {
+    pub bounds: Rect,
+    pub points_per_device_pixel: f32,
+    pub points_per_css_pixel: f32,
+}
+
+impl PageCoordinates {
+    fn to_window(&self, anchor: servo::DeviceIntRect, points_per_pixel: f32) -> Rect {
+        Rect::from_min_max(
+            self.bounds.min + vec2(anchor.min.x as f32, anchor.min.y as f32) * points_per_pixel,
+            self.bounds.min + vec2(anchor.max.x as f32, anchor.max.y as f32) * points_per_pixel,
+        )
+    }
+}
+
 /// Controls waiting for the user, oldest first.
 #[derive(Default)]
 pub struct Controls {
@@ -508,18 +523,16 @@ impl Controls {
     /// stacked page dialogs are a nuisance, and a page cannot reasonably need
     /// two answers at once.
     ///
-    /// `origin` labels dialogs. `scale` and `content_rect` convert the device
-    /// pixel positions Servo reports, which are relative to the webview, into
-    /// window points.
+    /// `origin` labels dialogs, and `page` maps Servo's anchors to window points.
     pub fn draw(
         &mut self,
         root: &mut Ui,
         palette: &Palette,
-        content_rect: Rect,
-        scale: f32,
+        page: PageCoordinates,
         origin: &str,
         vault: &crate::passwords::Vault,
     ) {
+        let content_rect = page.bounds;
         // An authentication challenge takes the screen on its own: it is the
         // one dialog here whose OK hands something away.
         if self.auth.is_some() {
@@ -554,14 +567,6 @@ impl Controls {
         let enter = ctx.input(|input| input.key_pressed(egui::Key::Enter));
         let mut resolution = None;
 
-        // Servo reports positions in device pixels relative to the webview.
-        let to_window = |rect: servo::DeviceIntRect| {
-            Rect::from_min_max(
-                content_rect.min + vec2(rect.min.x as f32 / scale, rect.min.y as f32 / scale),
-                content_rect.min + vec2(rect.max.x as f32 / scale, rect.max.y as f32 / scale),
-            )
-        };
-
         match &mut self.pending[index] {
             EmbedderControl::SimpleDialog(dialog) => {
                 resolution = draw_dialog(
@@ -575,7 +580,8 @@ impl Controls {
                 );
             },
             EmbedderControl::SelectElement(select) => {
-                let anchor = to_window(select.position());
+                // Servo currently sends element bounds as CSS pixels.
+                let anchor = page.to_window(select.position(), page.points_per_css_pixel);
                 let options = select.options().to_vec();
                 let multiple = select.allow_select_multiple();
                 let mut chosen = select.selected_options();
@@ -614,7 +620,7 @@ impl Controls {
                 }
             },
             EmbedderControl::ColorPicker(picker) => {
-                let anchor = to_window(picker.position());
+                let anchor = page.to_window(picker.position(), page.points_per_css_pixel);
                 match draw_color_picker(
                     &ctx,
                     palette,
@@ -635,7 +641,7 @@ impl Controls {
                 }
             },
             EmbedderControl::ContextMenu(menu) => {
-                let anchor = to_window(menu.position());
+                let anchor = page.to_window(menu.position(), page.points_per_device_pixel);
                 match draw_context_menu(
                     &ctx,
                     &measure,
@@ -678,6 +684,8 @@ impl Controls {
 }
 
 /// A floating panel: scrim over the page, card on top. Returns the card's `Ui`.
+const PANEL_PADDING: f32 = 14.0;
+
 fn panel<R>(
     ctx: &egui::Context,
     id: &str,
@@ -687,14 +695,7 @@ fn panel<R>(
     radius: u8,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    let contrasted;
-    let palette = match scrim {
-        Some(_) => palette,
-        None => {
-            contrasted = palette.over(rect);
-            &contrasted
-        },
-    };
+    let fallback = scrim.map_or_else(|| palette.over(rect), |_| *palette);
     egui::Area::new(Id::new(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
@@ -713,22 +714,27 @@ fn panel<R>(
                     dim(palette),
                 );
             }
-            let painter = ui.painter();
-            // Backed opaquely: these float over live page content and the
-            // glass material is only about 95% opaque, which is fine over the
-            // chrome but lets page text ghost through a menu.
-            for shape in glass::shapes(
-                rect,
-                palette,
-                Glass::of(crate::theme::Surface::Menu)
-                    .radius_exact(radius)
-                    .opaque(palette.bg)
-                    .border(palette.border),
-            ) {
-                painter.add(shape);
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            let palette = if surface.is_native() {
+                palette
+            } else {
+                &fallback
+            };
+            if !surface.is_native() {
+                glass::paint(
+                    ui.painter(),
+                    rect,
+                    palette,
+                    Glass::of(crate::theme::Surface::Menu)
+                        .radius_exact(radius)
+                        .opaque(palette.bg)
+                        .border(palette.border),
+                );
             }
-            let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(14.0)));
+            let mut inner =
+                ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(PANEL_PADDING)));
             let value = add(&mut inner);
+            surface.finish(ui, rect, f32::from(radius.max(14)));
             ui.advance_cursor_after_rect(rect);
             value
         })
@@ -927,8 +933,9 @@ fn draw_select(
         };
     }
     let width = anchor.width().max(180.0).min(content_rect.width() - 24.0);
+    let footer = if multiple { 36.0 } else { 0.0 };
     let height =
-        (rows * ROW + 16.0 + if multiple { 36.0 } else { 0.0 }).min(content_rect.height() * 0.7);
+        (rows.max(1.0) * ROW + PANEL_PADDING * 2.0 + footer).min(content_rect.height() * 0.7);
     let rect = clamp_to(
         Rect::from_min_size(pos2(anchor.min.x, anchor.max.y + 4.0), vec2(width, height)),
         content_rect,
@@ -936,9 +943,12 @@ fn draw_select(
 
     let mut picked = None;
     panel(ctx, "zervo_select", palette, None, rect, 10, |ui| {
+        let list_height = (ui.available_height() - footer).max(ROW);
         egui::ScrollArea::vertical()
+            .max_height(list_height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 for entry in options {
                     match entry {
                         SelectElementOptionOrOptgroup::Option(option) => {

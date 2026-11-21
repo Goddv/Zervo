@@ -51,6 +51,7 @@ mod library;
 mod morphicons;
 mod newtab;
 mod notifications;
+mod overlay_glass;
 mod passwords;
 mod phosphor;
 mod transition;
@@ -311,6 +312,8 @@ struct RunningApp {
     _vibrancy: Option<vibrancy::Vibrancy>,
     #[cfg(target_os = "macos")]
     liquid_glass: Option<vibrancy::LiquidGlass>,
+    #[cfg(target_os = "macos")]
+    glass_overlays: Option<overlay_glass::GlassOverlays>,
 }
 
 impl ApplicationHandler<WakerEvent> for App {
@@ -360,6 +363,8 @@ impl ApplicationHandler<WakerEvent> for App {
         let translucent_window = vibrancy.is_some();
         #[cfg(target_os = "macos")]
         let liquid_glass = vibrancy::LiquidGlass::install(&window);
+        #[cfg(target_os = "macos")]
+        let glass_overlays = overlay_glass::GlassOverlays::install(&window);
         #[cfg(not(target_os = "macos"))]
         let translucent_window = false;
 
@@ -640,6 +645,8 @@ impl ApplicationHandler<WakerEvent> for App {
             _vibrancy: vibrancy,
             #[cfg(target_os = "macos")]
             liquid_glass,
+            #[cfg(target_os = "macos")]
+            glass_overlays,
         });
 
         if let (Self::Running(app), Some(url)) = (&mut *self, internal) {
@@ -1253,6 +1260,9 @@ impl RunningApp {
             }
         }
         let active_webview = state.active_webview();
+        let device_pixels_per_css_pixel = active_webview.as_ref().map_or(1.0, |view| {
+            view.page_zoom() * view.hidpi_scale_factor().get() * view.pinch_zoom()
+        });
         let offscreen = state.rendering_context.clone();
         let mut ui_output = None;
 
@@ -1324,6 +1334,19 @@ impl RunningApp {
         if self.egui_glow.egui_ctx.theme() != widget_theme {
             self.egui_glow.egui_ctx.set_theme(widget_theme);
         }
+        #[cfg(target_os = "macos")]
+        if let Some(overlays) = &self.glass_overlays {
+            let size = state.window.inner_size();
+            let enabled = glass_available
+                && palette.translucency == theme::Translucency::LiquidGlass
+                && state.rendering_context.make_current().is_ok();
+            overlays.prepare(
+                &self.egui_glow.egui_ctx,
+                &state.window_rendering_context.glow_gl_api(),
+                [size.width, size.height],
+                enabled,
+            );
+        }
         self.egui_glow.run(&state.window, |root| {
             let mut browser = state.browser.borrow_mut();
             let mut controls = state.controls.borrow_mut();
@@ -1356,6 +1379,7 @@ impl RunningApp {
                 settings: &mut settings,
                 palette,
                 window_controls,
+                device_pixels_per_css_pixel,
                 native_glass: ui::NativeGlass {
                     sidebar_available: native_available,
                     glass_available,
@@ -1580,7 +1604,7 @@ impl RunningApp {
         {
             let toasts = state.toasts.borrow();
             let mut due = toasts.next_deadline(frame_now);
-            if toasts.morphing(frame_now) {
+            if palette.material.animation > 0.0 && toasts.morphing(frame_now) {
                 let frame = frame_now + std::time::Duration::from_millis(16);
                 due = Some(due.map_or(frame, |at| at.min(frame)));
             }
@@ -1640,6 +1664,10 @@ impl RunningApp {
             }
         }
         self.egui_glow.paint(&state.window);
+        #[cfg(target_os = "macos")]
+        if let Some(overlays) = &mut self.glass_overlays {
+            overlays.present(self.egui_glow.egui_ctx.zoom_factor());
+        }
         // The picture of a page on its way out, taken in the one moment it can
         // be: the chrome has just been painted, the framebuffer still holds the
         // page the reader is leaving, and the buffers have not swapped. The
@@ -2654,6 +2682,10 @@ fn install_fonts(ctx: &egui::Context) {
 impl Drop for RunningApp {
     fn drop(&mut self) {
         let _ = self.state.rendering_context.make_current();
+        #[cfg(target_os = "macos")]
+        if let Some(overlays) = &self.glass_overlays {
+            overlays.destroy(&self.state.window_rendering_context.glow_gl_api());
+        }
         self.egui_glow.destroy();
     }
 }

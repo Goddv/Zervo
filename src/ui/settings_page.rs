@@ -863,14 +863,8 @@ pub(crate) fn settings_appearance(
             {
                 tr("settings-native-docked-sidebar")
             },
-            theme::Translucency::LiquidGlass
-                if chrome.native_glass.sidebar_available && chrome.native_glass.glass_available =>
-            {
-                if chrome.settings.layout.is_sidebar() {
-                    tr("settings-native-docked-sidebar-and-address-field")
-                } else {
-                    tr("settings-dock-sidebar-for-liquid-glass")
-                }
+            theme::Translucency::LiquidGlass if chrome.native_glass.glass_available => {
+                tr("settings-liquid-glass-native")
             },
             theme::Translucency::LiquidGlass => {
                 tr("settings-zervo-s-frosted-material-is-used-here")
@@ -1181,7 +1175,7 @@ fn accent_swatches(
                 .fixed_pos(response.rect.left_bottom() + vec2(0.0, 6.0))
                 .constrain(true)
                 .show(ui.ctx(), |ui| {
-                    Frame::popup(ui.style()).show(ui, |ui| {
+                    crate::overlay_glass::popup_frame(ui, |ui| {
                         if egui::color_picker::color_picker_color32(
                             ui,
                             &mut colour,
@@ -1401,7 +1395,7 @@ pub(crate) fn settings_general(
         egui::ComboBox::from_id_salt("search_engine")
             .selected_text(chrome.settings.search_engine.label())
             .width(200.0)
-            .show_ui(ui, |ui| {
+            .show_glass(ui, |ui| {
                 for engine in SearchEngine::ALL {
                     if ui
                         .selectable_value(
@@ -1497,7 +1491,7 @@ pub(crate) fn gesture_row(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             egui::ComboBox::from_id_salt(("gesture", label))
                 .selected_text(slot.label())
-                .show_ui(ui, |ui| {
+                .show_glass(ui, |ui| {
                     for option in crate::gestures::GestureAction::ALL {
                         if ui
                             .selectable_label(*slot == option, option.label())
@@ -1631,7 +1625,7 @@ pub(crate) fn settings_layout(
         egui::ComboBox::from_id_salt("zervo_world_clock_add")
             .selected_text(tr("settings-add-a-city"))
             .width(220.0)
-            .show_ui(ui, |ui| {
+            .show_glass(ui, |ui| {
                 for (label, name) in crate::newtab::Zone::CATALOGUE {
                     let already = chrome
                         .settings
@@ -1711,7 +1705,7 @@ pub(crate) fn settings_layout(
         egui::ComboBox::from_id_salt("zervo_wallpaper_source")
             .selected_text(selected)
             .width(260.0)
-            .show_ui(ui, |ui| {
+            .show_glass(ui, |ui| {
                 for (label, source) in sources {
                     if ui
                         .selectable_label(chrome.settings.wallpaper_source == source, label)

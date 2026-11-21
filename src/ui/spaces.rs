@@ -19,7 +19,7 @@ pub(super) fn switcher(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<Ui
             .selected_text(&space.name)
             .truncate()
             .width(button_width)
-            .show_ui(ui, |ui| {
+            .show_glass(ui, |ui| {
                 ui.label(RichText::new(tr("sidebar-spaces")).strong().size(12.0));
                 for (index, entry) in browser.workspaces.iter().enumerate() {
                     if ui.selectable_label(index == active, &entry.name).clicked() {
@@ -133,7 +133,7 @@ fn favourites(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) 
                         &site.title,
                     )
                 });
-                response.context_menu(|ui| {
+                crate::overlay_glass::context_menu(&response, |ui| {
                     if ui.button(tr("chrome-remove-from-favourites")).clicked() {
                         actions.push(UiAction::RemoveFavourite(site.url.clone()));
                         ui.close();

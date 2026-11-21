@@ -60,7 +60,7 @@ impl Vibrancy {
 }
 
 /// winit's `ns_view` *is* the window's `contentView`.
-fn content_view(window: &impl HasWindowHandle) -> Option<Retained<NSView>> {
+pub(crate) fn content_view(window: &impl HasWindowHandle) -> Option<Retained<NSView>> {
     let handle = window.window_handle().ok()?;
     match handle.as_raw() {
         RawWindowHandle::AppKit(h) => {
@@ -246,12 +246,10 @@ pub struct LiquidGlass {
 impl LiquidGlass {
     pub fn install(window: &impl HasWindowHandle) -> Option<Self> {
         let _mtm = MainThreadMarker::new()?;
-        let class = AnyClass::get(c"NSGlassEffectView")?;
         let content = content_view(window)?;
         // SAFETY: the content view is live and we're on AppKit's main thread.
         let frame = unsafe { content.superview() }?;
-        // SAFETY: this is AppKit's public glass class, on the main thread.
-        let view: Retained<NSGlassEffectView> = unsafe { msg_send![class, new] };
+        let view = new_glass_view()?;
         view.setStyle(NSGlassEffectViewStyle::Regular);
         view.setHidden(true);
         frame.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(&content));
@@ -272,6 +270,17 @@ impl LiquidGlass {
             zoom,
         );
     }
+}
+
+pub(crate) fn glass_class() -> Option<&'static AnyClass> {
+    AnyClass::get(c"NSGlassEffectView")
+}
+
+pub(crate) fn new_glass_view() -> Option<Retained<NSGlassEffectView>> {
+    let _mtm = MainThreadMarker::new()?;
+    let class = glass_class()?;
+    // SAFETY: this is AppKit's public glass class, on the main thread.
+    unsafe { msg_send![class, new] }
 }
 
 pub fn accessibility_preferences() -> (bool, bool) {

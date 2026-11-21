@@ -96,9 +96,9 @@ It controls the window backdrop, chrome and overlay materials:
   `Frosted`),
 - the tint over the window's own chrome,
 - the tint on everything the material draws over that chrome,
-- the use of AppKit glass in the address field with `LiquidGlass`
-  on macOS 26 and later. In-page overlays and other operating systems use
-  Zervo’s frosted material.
+- the use of AppKit glass for dialogs, menus, popovers, and floating controls
+  with `LiquidGlass` on macOS 26 and later. Earlier macOS versions and other
+  operating systems use Zervo’s frosted material.
 
 A material can opt out (`translucency: false`) and then the setting does
 nothing, which is what a flat desktop toolkit wants.
@@ -203,7 +203,7 @@ prose. `Preset::appearance` is the whole definition of each.
 | `Zervo` | The one that is finished: the chrome laid on the page, favicons down the spine, every motion on, and the accent taken from the space you are in. **The colours are still the ones that shipped** — `candy` is the only field the palette reads for them and it has not moved — and there is a test pinning them for all ten accents in both themes. |
 | `Candy` | The accent as a light source, no seam, everything glowing. The default. |
 | `Flat` | Solid, a small radius, no sheen — a flat desktop toolkit. |
-| `Liquid Glass` | Native AppKit glass for docked chrome on macOS 26 and later, with restrained borders, a card seam and a frosted fallback. |
+| `Liquid Glass` | Native AppKit glass for dialogs, menus and floating chrome on macOS 26 and later, with restrained borders, a card seam and a frosted fallback. |
 | `Material` | A generous radius, a longer shadow, no sheen, and glow standing in for the ripple's resting state. |
 
 Beside them sit whatever the reader has kept: "Save as a preset…" names the
@@ -283,10 +283,13 @@ same place, so nothing jumps when the kind of page changes.
 ## macOS-specific pieces
 
 The docked sidebar uses AppKit’s `NSVisualEffectView.Material.sidebar` for
-translucency and its active-window tint. The **Liquid Glass** preset adds
-`NSGlassEffectView` behind the address field on supported Macs. Both views sit
-behind winit’s layer-hosting content view. Zervo draws and handles the sidebar
-items in egui. Reduce Transparency and the Solid setting use opaque surfaces.
+translucency and its active-window tint. The **Liquid Glass** preset uses
+AppKit’s regular glass for dialogs, menus, popovers, the revealed sidebar, and
+the docked address field. Each floating surface places egui’s controls inside an
+`NSGlassEffectView` so AppKit samples the live page underneath. Egui handles
+input, focus, and accessibility. Related glass views share an
+`NSGlassEffectContainerView`. Settings cards and page content use standard
+surfaces. Reduce Transparency and the Solid setting use opaque surfaces.
 
 **The window's own backdrop** is an `NSVisualEffectView` behind a transparent
 framebuffer. The chrome paints a thin tint over it. That is why the chrome's

@@ -5,6 +5,7 @@
 //! content (or the zervo://settings tab). Pure UI — emits `UiAction`s.
 
 use crate::l10n::text as tr;
+use crate::overlay_glass::ComboBoxGlassExt;
 use std::collections::HashMap;
 
 use egui::epaint::Mesh;
@@ -183,6 +184,7 @@ pub struct ChromeContext<'a> {
     pub settings: &'a mut Settings,
     pub palette: Palette,
     pub window_controls: Option<Rect>,
+    pub device_pixels_per_css_pixel: f32,
     pub native_glass: NativeGlass,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
     pub downloads: &'a crate::downloads::DownloadManager,
@@ -232,7 +234,7 @@ fn language_picker(ui: &mut Ui, settings: &mut Settings, actions: &mut Vec<UiAct
     let label = ui.label(tr("ui-language"));
     let picker = egui::ComboBox::from_id_salt("interface-language")
         .selected_text(selected)
-        .show_ui(ui, |ui| {
+        .show_glass(ui, |ui| {
             if ui
                 .selectable_label(settings.language.is_empty(), tr("language-system"))
                 .clicked()
@@ -516,8 +518,11 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     chrome.controls.draw(
         root,
         &chrome.palette,
-        content_rect,
-        scale,
+        crate::controls::PageCoordinates {
+            bounds: content_rect,
+            points_per_device_pixel: scale.recip(),
+            points_per_css_pixel: chrome.device_pixels_per_css_pixel / scale,
+        },
         &origin,
         chrome.vault,
     );
@@ -1106,7 +1111,11 @@ fn hover_card(
     });
     ctx.data_mut(|data| data.insert_temp(id, open));
 
-    let grow = glass::ease_out(ctx.animate_bool_with_time(id.with("grow"), open, 0.13));
+    let grow = glass::ease_out(ctx.animate_bool_with_time(
+        id.with("grow"),
+        open,
+        palette.material.animation.min(0.13),
+    ));
     if grow <= 0.0 {
         return None;
     }
@@ -1127,18 +1136,17 @@ fn hover_card(
             // corner — the second corner that kept showing up in screenshots.
             ui.set_clip_rect(drawn.expand(glass::room(palette.radius(Tier::Panel))));
             let painter = ui.painter();
-            // Drawn at `drawn`, not `card`: while it grows it is a whole
-            // rounded card of its current height, rather than a full-height
-            // one cut off square at the bottom.
-            for shape in glass::shapes(
-                drawn,
-                &palette.reaching(PANEL_REACH),
-                Glass::of(Surface::Menu)
-                    .radius(Tier::Panel)
-                    .opaque(palette.bg)
-                    .border(palette.border),
-            ) {
-                painter.add(shape);
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            if !surface.is_native() {
+                glass::paint(
+                    painter,
+                    drawn,
+                    &palette.reaching(PANEL_REACH),
+                    Glass::of(Surface::Menu)
+                        .radius(Tier::Panel)
+                        .opaque(palette.bg)
+                        .border(palette.border),
+                );
             }
             // The contents keep the tight clip, so a half-grown card shows the
             // top of a whole one rather than a squashed one — and so its
@@ -1148,7 +1156,13 @@ fn hover_card(
             // palette down rather than letting the closure capture the outer
             // one is what lets pale text turn dark when this card opens over a
             // white page in dark mode.
-            add(ui, card, palette.reaching(PANEL_REACH).over(drawn));
+            let ink = if surface.is_native() {
+                *palette
+            } else {
+                palette.reaching(PANEL_REACH).over(drawn)
+            };
+            add(ui, card, ink);
+            surface.finish(ui, drawn, 18.0);
             ui.advance_cursor_after_rect(drawn);
         });
     Some(drawn)
@@ -1170,7 +1184,6 @@ fn popup_menu<T: Clone>(
         Rect::from_min_size(at, vec2(width, rows.len() as f32 * ROW + 12.0)),
         ctx.content_rect(),
     );
-    let palette = &palette.reaching(PANEL_REACH).over(rect);
     let mut chosen = None;
     egui::Area::new(key)
         .order(egui::Order::Foreground)
@@ -1178,14 +1191,22 @@ fn popup_menu<T: Clone>(
         .constrain(false)
         .show(ctx, |ui| {
             let painter = ui.painter();
-            for shape in glass::shapes(
-                rect,
-                palette,
-                Glass::of(Surface::Menu)
-                    .opaque(palette.bg)
-                    .border(palette.border),
-            ) {
-                painter.add(shape);
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            let fallback = palette.reaching(PANEL_REACH).over(rect);
+            let palette = if surface.is_native() {
+                palette
+            } else {
+                &fallback
+            };
+            if !surface.is_native() {
+                glass::paint(
+                    painter,
+                    rect,
+                    palette,
+                    Glass::of(Surface::Menu)
+                        .opaque(palette.bg)
+                        .border(palette.border),
+                );
             }
             for (index, (label, value)) in rows.iter().enumerate() {
                 let row = Rect::from_min_size(
@@ -1211,6 +1232,7 @@ fn popup_menu<T: Clone>(
                     chosen = Some(value.clone());
                 }
             }
+            surface.finish(ui, rect, 14.0);
             ui.advance_cursor_after_rect(rect);
         });
     chosen
@@ -2107,23 +2129,8 @@ fn draw_sidebar_peek(
         .constrain(false)
         .show(&ctx, |ui| {
             ui.set_clip_rect(ctx.content_rect());
-            // This used to be opaque, on the grounds that it floats over the
-            // page and any translucency would let the page's own text read
-            // through the tabs. That was a fair call when there was nothing to
-            // frost against — but `backdrop.rs` already hands the palette a
-            // blurred copy of exactly the page this is floating over, and
-            // `tint_over` already thickens a surface as far as it must to hold
-            // its theme against whatever is behind it. Frost against that and
-            // the panel belongs to the window it is over rather than covering
-            // it up, with the same guarantee about legibility that every other
-            // menu in the application has.
-            //
-            // Solid keeps the old behaviour, because under Solid there is no
-            // blurred copy and opaque is the whole point of the setting.
-            if chrome.palette.translucency.is_translucent() {
-                // The chrome's own tint first, so the panel is the chrome
-                // rather than a menu that happens to be sidebar-shaped, and
-                // the glass on top of it.
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            if !surface.is_native() {
                 paint_chrome_fill(
                     ui.painter(),
                     drawn,
@@ -2132,29 +2139,23 @@ fn draw_sidebar_peek(
                     chrome.settings.top_glow,
                     chrome.palette.chrome_tint(),
                 );
-                ui.painter().extend(glass::shapes(
-                    drawn,
-                    &chrome.palette.reaching(PANEL_REACH),
-                    Glass::of(Surface::Menu).radius_exact(0).no_shadow(),
-                ));
-            } else {
-                paint_chrome_fill(
+                if chrome.palette.translucency.is_translucent() {
+                    glass::paint(
+                        ui.painter(),
+                        drawn,
+                        &chrome.palette.reaching(PANEL_REACH),
+                        Glass::of(Surface::Menu).radius_exact(0).no_shadow(),
+                    );
+                }
+                paint_edge_shadow(
                     ui.painter(),
-                    drawn,
-                    ctx.content_rect().top(),
-                    &chrome.palette,
-                    chrome.settings.top_glow,
-                    1.0,
+                    Rect::from_min_max(
+                        pos2(drawn.max.x, drawn.min.y),
+                        pos2(drawn.max.x + 12.0, drawn.max.y),
+                    ),
+                    chrome.palette.shadow,
                 );
             }
-            paint_edge_shadow(
-                ui.painter(),
-                Rect::from_min_max(
-                    pos2(drawn.max.x, drawn.min.y),
-                    pos2(drawn.max.x + 12.0, drawn.max.y),
-                ),
-                chrome.palette.shadow,
-            );
 
             let inner = Rect::from_min_max(
                 drawn.min + vec2(SIDEBAR_MARGIN.left as f32, SIDEBAR_MARGIN.top as f32),
@@ -2165,15 +2166,13 @@ fn draw_sidebar_peek(
                     .max_rect(inner)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
-            // The palette is handed down `over` the panel, the same as every
-            // other floating surface: now that this is glass rather than an
-            // opaque slab, its ink has to follow whatever it is floating over
-            // rather than the theme. A pale label on a dark panel opened over
-            // a white page is the exact case that rule exists for.
             let restore = chrome.palette;
-            chrome.palette = chrome.palette.reaching(PANEL_REACH).over(drawn);
+            if !surface.is_native() {
+                chrome.palette = chrome.palette.reaching(PANEL_REACH).over(drawn);
+            }
             sidebar_body(&mut body, chrome, actions);
             chrome.palette = restore;
+            surface.finish(ui, drawn, 14.0);
             // Claim the whole overlay, so the pointer over it resolves to this
             // layer rather than the chrome underneath.
             ui.advance_cursor_after_rect(drawn);
@@ -2228,7 +2227,7 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
                 .clone()
                 .on_hover_text(tr("chrome-widgets-click-to-open-drag-to-size"));
 
-            response.context_menu(|ui| {
+            crate::overlay_glass::context_menu(&response, |ui| {
                 if let Some(kind) =
                     crate::dashboard::widget_menu(ui, &chrome.settings.sidebar_widgets)
                 {
@@ -2710,7 +2709,7 @@ fn workspace_header(
         ink,
     );
     // Renaming any workspace, not only a freshly made one.
-    response.clone().context_menu(|ui| {
+    crate::overlay_glass::context_menu(&response, |ui| {
         if ui.button(tr("common-rename")).clicked() {
             *rename = Some((index, WorkspaceName::Typing(name.to_owned())));
             ui.close();
@@ -3138,7 +3137,7 @@ fn tab_row(
         }
     }
 
-    response.context_menu(|ui| {
+    crate::overlay_glass::context_menu(&response, |ui| {
         if style.pinnable
             && ui
                 .button(if style.pinned {
@@ -3152,7 +3151,7 @@ fn tab_row(
             ui.close();
         }
         if style.spaces.len() > 1 {
-            ui.menu_button(tr("sidebar-move-to-space"), |ui| {
+            crate::overlay_glass::submenu(ui, tr("sidebar-move-to-space"), |ui| {
                 for (index, space) in style
                     .spaces
                     .iter()
@@ -3609,10 +3608,14 @@ fn draw_toasts(
                 // ramp never runs and every toast snaps to its resting place
                 // fully drawn. The id here is new every time by construction,
                 // so that is the only thing that would ever have happened.
-                let grow = glass::ease_out(
-                    (toast.age.as_secs_f32() / crate::notifications::MORPH.as_secs_f32())
-                        .clamp(0.0, 1.0),
-                );
+                let grow = if palette.material.animation > 0.0 {
+                    glass::ease_out(
+                        (toast.age.as_secs_f32() / crate::notifications::MORPH.as_secs_f32())
+                            .clamp(0.0, 1.0),
+                    )
+                } else {
+                    1.0
+                };
                 let rect = anchor.map_or(rect, |from| lerp_rect(from, rect, grow));
 
                 // Claim the space. An `Area` whose contents are only painted
@@ -3636,17 +3639,17 @@ fn draw_toasts(
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                 }
 
-                // The same glass every other floating panel is made of, so a
-                // theme that changes what a menu looks like changes this too.
-                for shape in glass::shapes(
-                    rect,
-                    palette,
-                    Glass::of(Surface::Menu)
-                        .radius(Tier::Panel)
-                        .opaque(palette.bg)
-                        .border(palette.border),
-                ) {
-                    painter.add(shape);
+                let surface = crate::overlay_glass::Surface::begin(ui);
+                if !surface.is_native() {
+                    glass::paint(
+                        &painter,
+                        rect,
+                        palette,
+                        Glass::of(Surface::Menu)
+                            .radius(Tier::Panel)
+                            .opaque(palette.bg)
+                            .border(palette.border),
+                    );
                 }
 
                 // Text only once there is somewhere to put it — at the start of
@@ -3670,6 +3673,7 @@ fn draw_toasts(
                     }
                 }
 
+                surface.finish(ui, rect.intersect(content_rect), 16.0);
                 top = rect.bottom() + GAP;
             }
 
@@ -3695,15 +3699,17 @@ fn draw_toasts(
                         response.hovered(),
                         0.12,
                     ));
-                    for shape in glass::shapes(
-                        rect,
-                        palette,
-                        Glass::of(Surface::Menu)
-                            .radius(Tier::Panel)
-                            .opaque(palette.bg)
-                            .border(palette.border),
-                    ) {
-                        painter.add(shape);
+                    let surface = crate::overlay_glass::Surface::begin(ui);
+                    if !surface.is_native() {
+                        glass::paint(
+                            &painter,
+                            rect,
+                            palette,
+                            Glass::of(Surface::Menu)
+                                .radius(Tier::Panel)
+                                .opaque(palette.bg)
+                                .border(palette.border),
+                        );
                     }
                     painter.text(
                         rect.center(),
@@ -3712,6 +3718,7 @@ fn draw_toasts(
                         FontId::proportional(11.5),
                         theme::mix(palette.text_muted, palette.text, lit),
                     );
+                    surface.finish(ui, rect, 13.0);
                 }
             }
         });

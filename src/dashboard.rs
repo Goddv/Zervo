@@ -484,8 +484,9 @@ pub fn draw(
     {
         let slot = widget_rect(inner, row, 1);
         let response = root.put(slot, egui::Button::new(tr("chrome-add-a-widget")));
-        if let Some(menu) = egui::Popup::menu(&response).show(|ui| widget_menu(ui, placed))
-            && let Some(kind) = menu.inner
+        if let Some(menu) = crate::overlay_glass::popup(egui::Popup::menu(&response), &ctx, |ui| {
+            widget_menu(ui, placed)
+        }) && let Some(kind) = menu.inner
         {
             changes.push(Change::Add(kind));
         }
@@ -579,22 +580,28 @@ pub fn menu<T: Copy>(
         ctx.content_rect(),
     );
     ctx.data_mut(|data| data.insert_temp(Id::new("zervo_menu_rect"), rect));
-    let palette = &palette.reaching(crate::ui::PANEL_REACH).over(rect);
     let mut chosen = None;
     egui::Area::new(Id::new(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            let painter = ui.painter();
-            for shape in glass::shapes(
-                rect,
-                palette,
-                Glass::of(crate::theme::Surface::Menu)
-                    .opaque(palette.bg)
-                    .border(palette.border),
-            ) {
-                painter.add(shape);
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            let fallback = palette.reaching(crate::ui::PANEL_REACH).over(rect);
+            let palette = if surface.is_native() {
+                palette
+            } else {
+                &fallback
+            };
+            if !surface.is_native() {
+                glass::paint(
+                    ui.painter(),
+                    rect,
+                    palette,
+                    Glass::of(crate::theme::Surface::Menu)
+                        .opaque(palette.bg)
+                        .border(palette.border),
+                );
             }
             let mut y = rect.min.y + 6.0;
             for (index, entry) in rows.iter().enumerate() {
@@ -650,6 +657,7 @@ pub fn menu<T: Copy>(
                     },
                 }
             }
+            surface.finish(ui, rect, 14.0);
             ui.advance_cursor_after_rect(rect);
         });
     chosen

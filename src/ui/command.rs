@@ -53,97 +53,105 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
         } else {
             53
         }))
-        .frame(
-            Frame::NONE
-                .fill(palette.surface)
-                .stroke(Stroke::new(1.0_f32, palette.border))
-                .corner_radius(16)
-                .inner_margin(14)
-                .shadow(egui::epaint::Shadow {
-                    offset: [0, 14],
-                    blur: 38,
-                    spread: 0,
-                    color: Color32::from_black_alpha(95),
-                }),
-        )
+        .frame(Frame::NONE)
         .show(ctx, |ui| {
-            ui.set_width(width);
-            ui.spacing_mut().item_spacing.y = 5.0;
-            let down =
-                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
-            let up = ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
-            let enter = ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter));
-            let caption = match bar.mode {
-                CommandMode::NewTab => tr("common-new-tab"),
-                CommandMode::CurrentTab => tr("command-current-tab"),
-            };
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(caption)
-                        .size(12.0)
-                        .strong()
-                        .color(palette.text_muted),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::icon_button(ui, Icon::Close, 13.0, &palette, true)
-                        .on_hover_text(tr("common-close"))
-                        .clicked()
-                    {
-                        ui.close();
-                    }
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            let mut frame = Frame::NONE.inner_margin(14);
+            if !surface.is_native() {
+                frame = frame
+                    .fill(palette.surface)
+                    .stroke(Stroke::new(1.0_f32, palette.border))
+                    .corner_radius(16)
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 14],
+                        blur: 38,
+                        spread: 0,
+                        color: Color32::from_black_alpha(95),
+                    });
+            }
+            let card = frame.show(ui, |ui| {
+                ui.set_width(width);
+                ui.spacing_mut().item_spacing.y = 5.0;
+                let down =
+                    ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
+                let up =
+                    ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
+                let enter =
+                    ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter));
+                let caption = match bar.mode {
+                    CommandMode::NewTab => tr("common-new-tab"),
+                    CommandMode::CurrentTab => tr("command-current-tab"),
+                };
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(caption)
+                            .size(12.0)
+                            .strong()
+                            .color(palette.text_muted),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if icons::icon_button(ui, Icon::Close, 13.0, &palette, true)
+                            .on_hover_text(tr("common-close"))
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    });
                 });
-            });
-            let mut editor = TextEdit::singleline(&mut bar.query)
-                .id(id.with("query"))
-                .font(FontId::proportional(19.0))
-                .text_color(palette.text)
-                .hint_text(tr("command-search-placeholder"))
-                .desired_width(width)
-                .margin(Margin::symmetric(12, 11))
-                .show(ui);
-            editor.response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::TextEdit,
-                    true,
-                    tr("command-search-placeholder"),
-                )
-            });
-            if std::mem::take(&mut bar.select_all) {
-                editor.response.request_focus();
-                editor
-                    .state
-                    .cursor
-                    .set_char_range(Some(egui::text::CCursorRange::two(
-                        egui::text::CCursor::new(0),
-                        egui::text::CCursor::new(bar.query.chars().count()),
-                    )));
-                editor.state.store(ctx, editor.response.id);
-            }
-            if editor.response.changed() {
-                bar.selection = 0;
-            }
-
-            let rows = results(bar.query.trim(), bar.mode, chrome);
-            ui.add_space(5.0);
-            if rows.is_empty() {
-                ui.label(RichText::new(tr("command-no-matches")).color(palette.text_muted));
-                return None;
-            }
-            let max = rows.len();
-            bar.selection = match (down, up) {
-                (true, _) => (bar.selection + 1) % max,
-                (_, true) => (bar.selection + max - 1) % max,
-                _ => bar.selection.min(max - 1),
-            };
-            let mut chosen = None;
-            for (index, row) in rows.into_iter().enumerate() {
-                let selected = index == bar.selection;
-                let response = result_row(ui, &row, selected, &palette);
-                if response.clicked() || (enter && selected && editor.response.has_focus()) {
-                    chosen = Some(row.action);
+                let mut editor = TextEdit::singleline(&mut bar.query)
+                    .id(id.with("query"))
+                    .font(FontId::proportional(19.0))
+                    .text_color(palette.text)
+                    .hint_text(tr("command-search-placeholder"))
+                    .desired_width(width)
+                    .margin(Margin::symmetric(12, 11))
+                    .show(ui);
+                editor.response.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::TextEdit,
+                        true,
+                        tr("command-search-placeholder"),
+                    )
+                });
+                if std::mem::take(&mut bar.select_all) {
+                    editor.response.request_focus();
+                    editor
+                        .state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(bar.query.chars().count()),
+                        )));
+                    editor.state.store(ctx, editor.response.id);
                 }
-            }
-            chosen
+                if editor.response.changed() {
+                    bar.selection = 0;
+                }
+
+                let rows = results(bar.query.trim(), bar.mode, chrome);
+                ui.add_space(5.0);
+                if rows.is_empty() {
+                    ui.label(RichText::new(tr("command-no-matches")).color(palette.text_muted));
+                    return None;
+                }
+                let max = rows.len();
+                bar.selection = match (down, up) {
+                    (true, _) => (bar.selection + 1) % max,
+                    (_, true) => (bar.selection + max - 1) % max,
+                    _ => bar.selection.min(max - 1),
+                };
+                let mut chosen = None;
+                for (index, row) in rows.into_iter().enumerate() {
+                    let selected = index == bar.selection;
+                    let response = result_row(ui, &row, selected, &palette);
+                    if response.clicked() || (enter && selected && editor.response.has_focus()) {
+                        chosen = Some(row.action);
+                    }
+                }
+                chosen
+            });
+            surface.finish(ui, card.response.rect, 20.0);
+            card.inner
         });
 
     if let Some(action) = modal.inner {
