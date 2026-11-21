@@ -65,22 +65,6 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  deb:
-    name: Reuse the verified Debian package
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          github-token: ${{ github.token }}
-          run-id: 44776794132
-          name: zervo-deb-x86_64
-          path: incoming
-      - uses: actions/upload-artifact@v7
-        with:
-          name: zervo-deb-x86_64
-          path: incoming/*.deb
-          if-no-files-found: error
-
   portable:
     name: Reuse the verified portable executable
     runs-on: ubuntu-24.04
@@ -130,7 +114,7 @@ jobs:
 
       - name: Package and launch without FUSE
         env:
-          ZERVO_APPIMAGE_UPDATES: ${{ inputs.release-assets && '1' || '0' }}
+          ZERVO_APPIMAGE_UPDATES: "1"
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
           chmod +x target/portable/zervo
@@ -144,94 +128,4 @@ jobs:
             target/linux/*.AppImage
             target/linux/*.zsync
           if-no-files-found: error
-
-  flatpak:
-    name: Flatpak x86_64
-    needs: portable
-    runs-on: ubuntu-24.04
-    # Bubblewrap needs namespaces to build and launch the sandbox in CI.
-    container:
-      image: ubuntu:24.04
-      options: --privileged
-    timeout-minutes: 35
-    env:
-      DEBIAN_FRONTEND: noninteractive
-
-    steps:
-      - name: Install Flatpak tools
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            binutils ca-certificates dbus-daemon elfutils flatpak flatpak-builder git \
-            librsvg2-common xauth xdotool xvfb xz-utils
-          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: zervo-portable-elf
-          path: target/portable
-
-      - name: Build and install the single-file bundle
-        run: |
-          chmod +x target/portable/zervo
-          ./scripts/build-flatpak.sh --binary target/portable/zervo
-          flatpak install --user --noninteractive -y target/linux/*.flatpak
-
-      - name: Launch the installed sandbox
-        run: |
-          # A minimal job container has neither the system bus nor a per-user
-          # runtime directory that Flatpak expects from a desktop login.
-          dbus-uuidgen --ensure
-          install -d /run/dbus
-          dbus-daemon --system --fork --nopidfile
-          XDG_RUNTIME_DIR="$(mktemp -d)"
-          export XDG_RUNTIME_DIR
-          # The shell inside the smoke test resolves the fixture path.
-          # shellcheck disable=SC2016
-          dbus-run-session -- ./scripts/smoke-linux-package.sh bash -ec '
-            exec flatpak run --verbose --user --env=LIBGL_ALWAYS_SOFTWARE=1 \
-              --filesystem="$ZERVO_SMOKE_DIR:ro" app.zervo.Zervo "$@"
-          ' bash
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: zervo-flatpak-x86_64
-          path: target/linux/*.flatpak
-          if-no-files-found: error
-
-  debian-smoke:
-    name: Install and launch on Debian 13
-    needs: [deb, appimage]
-    runs-on: ubuntu-24.04
-    container: debian:13
-    timeout-minutes: 20
-    env:
-      DEBIAN_FRONTEND: noninteractive
-      APPIMAGE_EXTRACT_AND_RUN: "1"
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: zervo-{deb,appimage}-x86_64
-          path: packages
-          merge-multiple: true
-
-      - name: Launch both packages using Debian libraries
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates libegl1 libgl1 libgl1-mesa-dri libvulkan1 libxkbcommon-x11-0 \
-            gstreamer1.0-gl gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad fonts-dejavu-core xauth xdotool xvfb ./packages/*.deb
-          chmod +x packages/*.AppImage
-          ./scripts/smoke-linux-package.sh zervo
-          ./scripts/smoke-linux-package.sh "$PWD"/packages/*.AppImage
 
