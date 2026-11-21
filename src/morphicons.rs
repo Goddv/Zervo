@@ -49,56 +49,6 @@ macro_rules! polyline {
     };
 }
 
-// ── Sidebar ⇄ bar ─────────────────────────────────────────────────────────
-//
-// The same frame either way, and a divider that rotates inside it. The button
-// shows the layout you are moving to, and shows it moving — which is the
-// whole difference between a button that reports a state and one that just
-// happens to be lit.
-
-static FRAME: Path<'static> = polygon!(
-    pos2(4.0, 5.0),
-    pos2(20.0, 5.0),
-    pos2(20.0, 19.0),
-    pos2(4.0, 19.0),
-);
-
-static DIVIDER_UPRIGHT: Path<'static> = polygon!(
-    pos2(9.0, 5.0),
-    pos2(10.2, 5.0),
-    pos2(10.2, 19.0),
-    pos2(9.0, 19.0)
-);
-
-static DIVIDER_FLAT: Path<'static> = polygon!(
-    pos2(4.0, 9.0),
-    pos2(20.0, 9.0),
-    pos2(20.0, 10.2),
-    pos2(4.0, 10.2)
-);
-
-pub static SIDEBAR: [Part<'static>; 2] = [
-    Part {
-        path: FRAME,
-        filled: false,
-    },
-    Part {
-        path: DIVIDER_UPRIGHT,
-        filled: true,
-    },
-];
-
-pub static BAR: [Part<'static>; 2] = [
-    Part {
-        path: FRAME,
-        filled: false,
-    },
-    Part {
-        path: DIVIDER_FLAT,
-        filled: true,
-    },
-];
-
 // ── Play ⇄ pause ──────────────────────────────────────────────────────────
 //
 // Two bars fold into a triangle. The play is drawn as two halves of one rather

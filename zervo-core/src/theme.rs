@@ -674,38 +674,6 @@ impl Spine {
     }
 }
 
-/// Where the widget shelf is reachable from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum ShelfHome {
-    Bar,
-    Sidebar,
-    /// Wherever the chrome happens to be — the bar, the sidebar, or the panel
-    /// full-page mode reveals.
-    Wherever,
-}
-
-impl ShelfHome {
-    pub const ALL: [ShelfHome; 3] = [ShelfHome::Bar, ShelfHome::Sidebar, ShelfHome::Wherever];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ShelfHome::Bar => tr("theme-bar-only"),
-            ShelfHome::Sidebar => tr("theme-sidebar-only"),
-            ShelfHome::Wherever => tr("theme-wherever-the-chrome-is"),
-        }
-    }
-
-    /// Whether the shelf should be offered in the expanded sidebar.
-    pub fn in_sidebar(self) -> bool {
-        matches!(self, ShelfHome::Sidebar | ShelfHome::Wherever)
-    }
-
-    /// Whether the shelf should be offered in the navigation bar.
-    pub fn in_bar(self) -> bool {
-        matches!(self, ShelfHome::Bar | ShelfHome::Wherever)
-    }
-}
-
 /// What Zervo's surfaces are made of.
 ///
 /// A theme is a palette and a material: the palette says what colour things
@@ -940,10 +908,8 @@ impl Preset {
                 candy: 0.045,
                 workspace_accent: true,
                 sweep: true,
-                liquid: true,
                 pill_progress: true,
                 spine: Spine::Favicons,
-                shelf: ShelfHome::Wherever,
                 align_nav: false,
             },
             Preset::Candy => Appearance {
@@ -965,10 +931,8 @@ impl Preset {
                 // one lavender room rather than five.
                 workspace_accent: true,
                 sweep: true,
-                liquid: true,
                 pill_progress: true,
                 spine: Spine::TabTicks,
-                shelf: ShelfHome::Wherever,
                 align_nav: true,
             },
             Preset::Flat => Appearance {
@@ -986,10 +950,8 @@ impl Preset {
                 candy: 0.02,
                 workspace_accent: false,
                 sweep: false,
-                liquid: false,
                 pill_progress: false,
                 spine: Spine::Nothing,
-                shelf: ShelfHome::Bar,
                 align_nav: false,
             },
             Preset::LiquidGlass => Appearance {
@@ -1007,10 +969,8 @@ impl Preset {
                 candy: 0.045,
                 workspace_accent: false,
                 sweep: false,
-                liquid: true,
                 pill_progress: true,
                 spine: Spine::TabTicks,
-                shelf: ShelfHome::Wherever,
                 align_nav: false,
             },
             Preset::Material => Appearance {
@@ -1028,10 +988,8 @@ impl Preset {
                 candy: 0.1,
                 workspace_accent: false,
                 sweep: false,
-                liquid: true,
                 pill_progress: false,
                 spine: Spine::Favicons,
-                shelf: ShelfHome::Sidebar,
                 align_nav: false,
             },
         }
@@ -1082,9 +1040,6 @@ pub struct Appearance {
     pub motion: f32,
     /// One pass of light across any surface that changes size.
     pub sweep: bool,
-    /// One highlight that travels and stretches, rather than two rows half-lit
-    /// for the settle time.
-    pub liquid: bool,
     /// Progress inside the address pill, which gives it back the points it
     /// reserves for a spinner.
     pub pill_progress: bool,
@@ -1099,7 +1054,6 @@ pub struct Appearance {
 
     // ── What shape it is
     pub spine: Spine,
-    pub shelf: ShelfHome,
     /// Centre the sidebar's nav row on the window controls. macOS only; there
     /// is nothing to centre on anywhere else.
     pub align_nav: bool,

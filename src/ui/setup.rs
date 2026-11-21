@@ -452,10 +452,10 @@ fn layout(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, 
         theme::workspace_color_from(0, chrome.settings.space_colour),
         tr("setup-step-3-of-4"),
         tr("setup-where-should-the-chrome-live"),
-        tr("setup-all-three-are-always-available-s-switches"),
+        tr("setup-switch-between-layouts"),
     );
     ui.horizontal(|ui| {
-        let width = 170.0 * 3.0 + ui.spacing().item_spacing.x * 2.0;
+        let width = 170.0 * Layout::ALL.len() as f32 + ui.spacing().item_spacing.x;
         ui.add_space(((ui.available_width() - width) * 0.5).max(0.0));
         for option in Layout::ALL {
             let chosen = chrome.settings.layout == option;
@@ -501,8 +501,7 @@ fn layout(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, 
     });
 }
 
-/// Three rectangles that say where the chrome is. Anything more detailed at
-/// this size is a picture of a browser rather than a diagram of one.
+/// Sketch the layout at the size of an onboarding card.
 fn layout_sketch(ui: &Ui, palette: &Palette, rect: Rect, option: Layout) {
     let painter = ui.painter();
     let radius = CornerRadius::same(palette.radius(Tier::Control));
@@ -511,11 +510,6 @@ fn layout_sketch(ui: &Ui, palette: &Palette, rect: Rect, option: Layout) {
     match option {
         Layout::Sidebar => painter.rect_filled(
             Rect::from_min_max(rect.min, pos2(rect.min.x + 40.0, rect.max.y)),
-            radius,
-            ink,
-        ),
-        Layout::Bar => painter.rect_filled(
-            Rect::from_min_max(rect.min, pos2(rect.max.x, rect.min.y + 14.0)),
             radius,
             ink,
         ),

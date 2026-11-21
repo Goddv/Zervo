@@ -583,35 +583,7 @@ fn paint_photo(
     // all. A frame that draws nothing still has to ask for the next one.
     *ambient |= fade < 1.0;
 
-    // The picture is fitted to the page at its *full* height and then cropped
-    // as the widget shelf takes space off the top, rather than refitted to
-    // whatever is left. Refitting rescales the photograph on every frame of
-    // the drag, which reads as the wallpaper breathing in and out; cropping
-    // holds it still.
-    //
-    // Between held-still and moving-with-the-page, it drifts down at half the
-    // rate the page does. That is what makes opening the shelf read as a bar
-    // sliding down over a wallpaper that is behind it, rather than the whole
-    // page moving as one sheet.
-    const PARALLAX: f32 = 0.5;
-    let reveal = crate::ui::shelf_reveal(chrome.settings).max(0.0);
-    let full = Rect::from_min_max(
-        pos2(content_rect.min.x, content_rect.min.y - reveal),
-        content_rect.max,
-    );
-    let fitted = cover(texture.size_vec2(), full);
-    let hidden = if full.height() > 1.0 {
-        (reveal / full.height()).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    // The band's height is the visible fraction of the full page, so the
-    // points-per-pixel of the picture never changes — only which part shows.
-    let top = fitted.min.y + fitted.height() * hidden * PARALLAX;
-    let uv = Rect::from_min_max(
-        pos2(fitted.min.x, top),
-        pos2(fitted.max.x, top + fitted.height() * (1.0 - hidden)),
-    );
+    let uv = cover(texture.size_vec2(), content_rect);
     backdrop.add(
         egui::epaint::RectShape::filled(content_rect, radius, Color32::WHITE.gamma_multiply(fade))
             .with_texture(texture.id(), uv),

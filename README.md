@@ -30,36 +30,6 @@
 </td>
 <td width="50%" valign="top">
 
-<a href="assets/screenshots/zervo-bar-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-bar-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-bar-light.png">
-  <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred, over servo.org rendered by Servo" src="assets/screenshots/zervo-bar-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-</tr>
-<tr>
-<td align="center"><sub><b>Sidebar</b> — navigation, workspaces, tabs and widgets in one column<br>
-<a href="assets/screenshots/zervo-newtab-light.png">light</a> · <a href="assets/screenshots/zervo-newtab-dark.png">dark</a>, full size</sub></td>
-<td align="center"><sub><b>Collapsed</b> — navigation moves into a bar across the top<br>
-<a href="assets/screenshots/zervo-bar-light.png">light</a> · <a href="assets/screenshots/zervo-bar-dark.png">dark</a>, full size</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-<a href="assets/screenshots/zervo-float-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-float-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-float-light.png">
-  <img alt="The window with no sidebar and no bar: the address pill floats near the bottom edge over the new tab page, and the chrome is otherwise out of the way" src="assets/screenshots/zervo-float-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-<td width="50%" valign="top">
-
 <a href="assets/screenshots/zervo-page-light.png">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-page-dark.png">
@@ -71,14 +41,14 @@
 </td>
 </tr>
 <tr>
-<td align="center"><sub><b>Floating</b> — put the bar wherever you like, including nowhere<br>
-<a href="assets/screenshots/zervo-float-light.png">light</a> · <a href="assets/screenshots/zervo-float-dark.png">dark</a>, full size</sub></td>
+<td align="center"><sub><b>Sidebar</b> — navigation, workspaces, tabs and widgets in one column<br>
+<a href="assets/screenshots/zervo-newtab-light.png">light</a> · <a href="assets/screenshots/zervo-newtab-dark.png">dark</a>, full size</sub></td>
 <td align="center"><sub><b>Glass</b> — the sidebar takes its light from what is behind it<br>
 <a href="assets/screenshots/zervo-page-light.png">light</a> · <a href="assets/screenshots/zervo-page-dark.png">dark</a>, full size</sub></td>
 </tr>
 </table>
 
-<sub>All four are the same theme — <b>Zervo</b>, the default — in light and dark.</sub>
+<sub>The Zervo preset in light and dark.</sub>
 
 <br><br>
 
@@ -113,12 +83,11 @@ so some sites will not work. See [Limitations](#limitations).
   Use ⌘L or Ctrl+L to edit the current address. Search open tabs, favourites,
   and recent history, or start with `>` to filter browser actions.
 - **Compact mode.** Use ⌘S or Ctrl+S to hide or show the sidebar. Move the
-  pointer to the left edge to reveal it temporarily. The top-bar layout is
-  available under Settings → Layout.
+  pointer to the left edge to reveal it temporarily in Full Page mode.
 - **Customizable chrome.** Open Settings → Layout or click the sliders in the
   sidebar. Show or hide sections and reorder them by dragging or using the
-  arrow buttons. Choose which tools appear before and after the top bar’s
-  address field. Restore defaults independently for the sidebar and top bar.
+  arrow buttons. Toggle sidebar tools and the widget shelf, or restore the
+  sidebar defaults.
 - **Workspaces.** Tabs are grouped into named spaces, each with its own colour.
 - **Favourites and history.** The star saves a page and hovering it opens the
   list; history is searchable and grouped by how long ago.

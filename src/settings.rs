@@ -92,28 +92,22 @@ impl AppIcon {
     }
 }
 
-/// Where the chrome lives.
-///
-/// Three, not two. All three are always reachable — ⇧⌘S walks them — so what
-/// first run asks for, and what this setting holds, is only where somebody
-/// starts rather than what they are stuck with.
+/// Where the sidebar lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
-    /// Everything in one column down the side.
+    /// The sidebar is docked alongside the page.
+    #[serde(alias = "Bar")]
     Sidebar,
-    /// The address pill centred across the top; tabs hidden.
-    Bar,
-    /// Nothing but the page. The chrome is what the edge reveals.
+    /// The sidebar is revealed from the edge.
     FullPage,
 }
 
 impl Layout {
-    pub const ALL: [Layout; 3] = [Layout::Sidebar, Layout::Bar, Layout::FullPage];
+    pub const ALL: [Layout; 2] = [Layout::Sidebar, Layout::FullPage];
 
     pub fn label(self) -> &'static str {
         match self {
             Layout::Sidebar => tr("common-sidebar"),
-            Layout::Bar => tr("options-top-bar"),
             Layout::FullPage => tr("options-full-page"),
         }
     }
@@ -121,31 +115,18 @@ impl Layout {
     pub fn note(self) -> &'static str {
         match self {
             Layout::Sidebar => tr("options-everything-in-one-column"),
-            Layout::Bar => tr("options-address-pill-centred-tabs-hidden"),
             Layout::FullPage => tr("options-nothing-but-the-page-hover-the-edge"),
         }
     }
 
-    /// Whether the sidebar is the docked chrome. False for both of the others,
-    /// which is what makes the left edge hot.
     pub fn is_sidebar(self) -> bool {
         self == Layout::Sidebar
     }
 
-    /// The next one along, for the shortcut that walks all three.
-    pub fn next(self) -> Layout {
-        match self {
-            Layout::Sidebar => Layout::Bar,
-            Layout::Bar => Layout::FullPage,
-            Layout::FullPage => Layout::Sidebar,
-        }
-    }
-
-    /// Toggle between the workspace sidebar and the compact page view.
     pub fn toggled(self) -> Layout {
         match self {
             Layout::Sidebar => Layout::FullPage,
-            Layout::Bar | Layout::FullPage => Layout::Sidebar,
+            Layout::FullPage => Layout::Sidebar,
         }
     }
 }
@@ -347,32 +328,15 @@ pub struct Settings {
     pub space_colour: usize,
     /// Arrangements the reader saved, in the order they saved them.
     pub saved: Vec<Saved>,
-    /// Reveal a collapsed sidebar when the pointer nears the window edge.
-    ///
-    /// Full-page mode ignores this and always reveals: there is no other
-    /// chrome, so an edge that did nothing would be a browser with no way back.
-    pub sidebar_autohide: bool,
     /// Sidebar width in points, remembered across restarts when resized.
     pub sidebar_width: f32,
     /// Show favourites as tiles rather than a list — shorter, and it copes
     /// with a lot of them.
     pub favourites_grid: bool,
-    /// Width of the centred address pill in the navigation bar, in points.
-    pub address_pill_width: f32,
-    /// What sits left and right of the address pill, in order.
-    pub navbar_left: Vec<crate::ui::NavItem>,
-    pub navbar_right: Vec<crate::ui::NavItem>,
-    /// Widgets placed in the navigation bar's shelf, in order.
-    pub navbar_widgets: Vec<crate::dashboard::Placed>,
-    /// Height of the navigation bar, in points. Anything above the row the
-    /// controls need is free space, kept for widgets that will live there.
-    pub navbar_height: f32,
-    /// Height of the sidebar's own widget shelf, in points. Zero is shut.
-    ///
-    /// Its own number rather than the bar's: the two shelves hold the same
-    /// widgets at the same cell, but one is twelve columns across the top of
-    /// the window and the other is one column down the side, so how far open
-    /// each is left is not the same question.
+    /// Widgets in the sidebar shelf. Older versions shared this list with the top bar.
+    #[serde(alias = "navbar_widgets")]
+    pub sidebar_widgets: Vec<crate::dashboard::Placed>,
+    /// Height of the sidebar widget shelf, in points. Zero is shut.
     pub sidebar_shelf_height: f32,
     /// Present as plain Firefox rather than as Servo. Servo's own user agent
     /// already claims Firefox 140, but keeps a `Servo/x.y` token and omits the
@@ -454,7 +418,6 @@ fn sidebar_default_appearance() -> crate::theme::Appearance {
         translucency: Translucency::Solid,
         gap: 9.0,
         corners: 0.8,
-        liquid: false,
         candy: 0.025,
         workspace_accent: true,
         spine: Spine::Nothing,
@@ -489,15 +452,10 @@ impl Default for Settings {
             first_space: String::new(),
             space_colour: 0,
             saved: Vec::new(),
-            sidebar_autohide: true,
             sidebar_width: crate::ui::SIDEBAR_DEFAULT_WIDTH,
             favourites_grid: false,
-            address_pill_width: crate::ui::ADDRESS_PILL_DEFAULT_WIDTH,
-            navbar_height: crate::ui::NAVBAR_DEFAULT_HEIGHT,
             sidebar_shelf_height: 0.0,
-            navbar_left: crate::ui::NavItem::default_left(),
-            navbar_right: crate::ui::NavItem::default_right(),
-            navbar_widgets: crate::dashboard::Placed::defaults(),
+            sidebar_widgets: crate::dashboard::Placed::defaults(),
             user_agent_compat: true,
             downloads_auto: true,
             top_glow: 0.20,
@@ -581,11 +539,7 @@ fn migrate(settings: &mut Settings) {
         settings.appearance = Preset::LiquidGlass.appearance();
     }
 
-    // The engine has no extension commands. Accept older toolbar layouts
-    // without keeping a permanently disabled control among their actions.
-    for items in [&mut settings.navbar_left, &mut settings.navbar_right] {
-        items.retain(|item| *item != crate::ui::NavItem::Extensions);
-    }
+    crate::dashboard::normalize_layout(&mut settings.sidebar_widgets);
 
     let Some(translucency) = settings.legacy_translucency.take() else {
         return;
@@ -686,6 +640,29 @@ mod tests {
         assert_eq!(appearance.translucency, Translucency::Solid);
         assert!(appearance.workspace_accent);
         assert!(Preset::ALL.contains(&Preset::Zervo));
+    }
+
+    #[test]
+    fn legacy_bar_profiles_use_sidebar_and_keep_widget_settings() {
+        let mut settings: Settings = serde_json::from_str(r#"{
+            "layout": "Bar",
+            "sidebar_width": 280.0,
+            "appearance": { "shelf": "Bar", "liquid": true },
+            "navbar_widgets": [
+                { "kind": "Clock", "size": { "w": { "Cells": 2 }, "h": { "Cells": 1 } }, "col": 1 },
+                { "kind": "Transport", "size": { "w": { "Cells": 1 }, "h": { "Cells": 1 } }, "col": 0 }
+            ]
+        }"#).unwrap();
+        migrate(&mut settings);
+        assert_eq!(settings.layout, Layout::Sidebar);
+        assert_eq!(settings.sidebar_width, 280.0);
+        assert_eq!(settings.sidebar_widgets.len(), 2);
+        assert_eq!(settings.sidebar_widgets[0].row, 1);
+        assert_eq!(settings.sidebar_widgets[1].row, 0);
+        let written = serde_json::to_value(settings).unwrap();
+        assert!(written.get("navbar_widgets").is_none());
+        assert!(written["appearance"].get("shelf").is_none());
+        assert!(written["appearance"].get("liquid").is_none());
     }
 
     #[test]

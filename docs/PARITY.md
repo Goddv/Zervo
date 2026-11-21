@@ -93,8 +93,7 @@ Each of these is a delegate method or a `WebView` call away.
   `clear_session_cookies` and `clear_site_data`, and nothing in Settings calls
   them. Now that cookies persist, there is no way to get rid of them.
 - **Dropped files.** Dragging a file onto the window should open it.
-- **Extensions.** The button in the navigation bar is deliberately dead: the
-  engine has no extension support at all.
+- **Extensions.** Servo has no extension support.
 - **`screen.availWidth`/`availHeight`** report the whole display rather than
   subtracting the menu bar and Dock.
 - **Offering to save a login from a form.** There is no embedder hook for a

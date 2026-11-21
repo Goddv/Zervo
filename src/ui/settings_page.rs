@@ -1024,21 +1024,6 @@ pub(crate) fn settings_appearance(
         ui.add_space(8.0);
         if widgets::toggle(
             ui,
-            &mut chrome.settings.appearance.liquid,
-            tr("settings-move-the-selection-instead-of-cross-fading"),
-            palette,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(
-            ui,
-            palette,
-            tr("settings-one-highlight-that-travels-and-stretches-rather"),
-        );
-
-        ui.add_space(8.0);
-        if widgets::toggle(
-            ui,
             &mut chrome.settings.appearance.pill_progress,
             tr("settings-load-in-the-address-pill-not-a"),
             palette,
@@ -1049,26 +1034,6 @@ pub(crate) fn settings_appearance(
     });
 
     settings_section(ui, palette, tr("settings-chrome"), |ui| {
-        subhead(ui, palette, tr("settings-where-the-chrome-lives"));
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.layout,
-            &crate::settings::Layout::ALL,
-            crate::settings::Layout::label,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(
-            ui,
-            palette,
-            format!(
-                "{} All three are always available — ⌘S walks them at any time.",
-                chrome.settings.layout.note()
-            ),
-        );
-
-        ui.add_space(14.0);
         subhead(
             ui,
             palette,
@@ -1084,23 +1049,6 @@ pub(crate) fn settings_appearance(
             actions.push(UiAction::SettingsChanged);
         }
         note(ui, palette, chrome.settings.appearance.spine.note());
-
-        ui.add_space(12.0);
-        subhead(ui, palette, tr("settings-where-the-widget-shelf-lives"));
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.appearance.shelf,
-            &theme::ShelfHome::ALL,
-            zervo_core::theme::ShelfHome::label,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(
-            ui,
-            palette,
-            tr("settings-the-bar-alone-is-what-shipped-and"),
-        );
 
         if cfg!(target_os = "macos") {
             ui.add_space(12.0);
@@ -1596,10 +1544,6 @@ pub(crate) fn settings_layout(
                 &mut chrome.settings.compact_sidebar,
                 tr("settings-compact-rows"),
             ),
-            (
-                &mut chrome.settings.sidebar_autohide,
-                tr("settings-reveal-a-hidden-sidebar-on-hover"),
-            ),
         ] {
             if widgets::toggle(ui, value, label, palette) {
                 actions.push(UiAction::SettingsChanged);
@@ -1860,7 +1804,7 @@ pub(crate) fn settings_layout(
             changed |= gesture_row(
                 ui,
                 tr("settings-swipe-down"),
-                tr("settings-over-the-bar-above-the-page-everywhere"),
+                "",
                 &mut chrome.settings.gestures.down,
                 palette,
             );
@@ -1879,16 +1823,12 @@ pub(crate) fn settings_layout(
 
     settings_section(ui, palette, tr("settings-arrangement"), |ui| {
         ui.label(
-            RichText::new(tr("settings-the-navigation-bar-its-widgets-and-the"))
+            RichText::new(tr("settings-reset-sidebar-widgets-and-new-tab"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
         ui.add_space(8.0);
-        if ui
-            .button(tr("settings-reset-to-defaults"))
-            .on_hover_text(tr("settings-puts-every-bar-button-widget-and-width"))
-            .clicked()
-        {
+        if ui.button(tr("settings-reset-to-defaults")).clicked() {
             actions.push(UiAction::ResetLayout);
         }
     });

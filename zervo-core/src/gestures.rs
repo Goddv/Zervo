@@ -66,7 +66,7 @@ pub enum GestureAction {
     Back,
     Forward,
     ToggleSidebar,
-    /// Pull the navigation bar open over its widget shelf, or put it away.
+    /// Open or close the sidebar widget shelf.
     ToggleShelf,
     NextWorkspace,
     PreviousWorkspace,

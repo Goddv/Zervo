@@ -276,11 +276,7 @@ pub(crate) fn paint_chrome_fill(
     }
 }
 
-/// Compute the inset card rect. (Nothing is painted here — see the note.)
-/// `top` is separate because the navigation bar already ends in the space the
-/// card would otherwise add for itself. Applying both put 14pt under the
-/// address pill against 6pt above it, which is the card sitting lower than it
-/// needs to rather than a margin anyone chose.
+/// Compute the inset card rect. Full Page mode leaves the top edge clear.
 pub(crate) fn paint_content_backdrop(root: &Ui, outer: Rect, palette: &Palette, top: f32) -> Rect {
     // No background fill here: the window-wide chrome base already covers
     // this area, and filling it again would cut the gradient off at the

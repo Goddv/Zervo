@@ -1079,9 +1079,6 @@ impl RunningApp {
             .shortcut(CMD_OR_CONTROL, 'S', || {
                 self.apply_action(UiAction::ToggleSidebar);
             })
-            .shortcut(CMD_OR_CONTROL_SHIFT, 'S', || {
-                self.apply_action(UiAction::CycleLayout);
-            })
             .shortcut(CMD_OR_CONTROL, 'L', || {
                 self.apply_action(UiAction::OpenCommand(ui::CommandMode::CurrentTab));
             })
@@ -1534,7 +1531,7 @@ impl RunningApp {
             }
             if self.shot.as_ref().is_some_and(crate::shot::Shot::cycle) {
                 self.draining = true;
-                self.apply_action(UiAction::CycleLayout);
+                self.apply_action(UiAction::ToggleSidebar);
                 self.draining = false;
             }
             self.draining = true;
@@ -1945,11 +1942,6 @@ impl RunningApp {
                 self.settings.save();
                 state.window.request_redraw();
             },
-            UiAction::CycleLayout => {
-                self.settings.layout = self.settings.layout.next();
-                self.settings.save();
-                state.window.request_redraw();
-            },
             UiAction::SavePassword => {
                 let (site, username, password) = {
                     let browser = state.browser.borrow();
@@ -1998,71 +1990,39 @@ impl RunningApp {
                 }
                 state.window.request_redraw();
             },
-            UiAction::MoveNavItem { item, side, index } => {
-                let settings = &mut self.settings;
-                settings.navbar_left.retain(|placed| *placed != item);
-                settings.navbar_right.retain(|placed| *placed != item);
-                let list = match side {
-                    ui::NavSide::Left => &mut settings.navbar_left,
-                    ui::NavSide::Right => &mut settings.navbar_right,
-                };
-                let at = index.min(list.len());
-                list.insert(at, item);
-                settings.save();
-                state.window.request_redraw();
-            },
-            UiAction::RemoveNavItem(item) => {
-                self.settings.navbar_left.retain(|placed| *placed != item);
-                self.settings.navbar_right.retain(|placed| *placed != item);
-                self.settings.save();
-                state.window.request_redraw();
-            },
-            UiAction::AddNavItem(item) => {
-                if !self.settings.navbar_left.contains(&item)
-                    && !self.settings.navbar_right.contains(&item)
-                {
-                    self.settings.navbar_right.push(item);
+            UiAction::AddWidget(kind) => {
+                let mut widget = dashboard::Placed::new(kind);
+                if let Some(row) = dashboard::free_row(&self.settings.sidebar_widgets) {
+                    widget.row = row;
+                    self.settings.sidebar_widgets.push(widget);
+                    self.settings.sidebar_shelf_height =
+                        dashboard::open_height(&self.settings.sidebar_widgets);
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
-            UiAction::AddWidget(kind) => {
-                let mut widget = dashboard::Placed::new(kind);
-                (widget.col, widget.row) = dashboard::free_cell(
-                    &self.settings.navbar_widgets,
-                    widget.size,
-                    dashboard::COLUMNS,
-                );
-                self.settings.navbar_widgets.push(widget);
-                self.settings.save();
-                state.window.request_redraw();
-            },
             UiAction::RemoveWidget(index) => {
-                if index < self.settings.navbar_widgets.len() {
-                    self.settings.navbar_widgets.remove(index);
+                if index < self.settings.sidebar_widgets.len() {
+                    self.settings.sidebar_widgets.remove(index);
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
             UiAction::SwapWidgets(a, b) => {
-                let widgets = &mut self.settings.navbar_widgets;
-                if a < widgets.len() && b < widgets.len() && a != b {
-                    widgets.swap(a, b);
+                if dashboard::swap_widgets(&mut self.settings.sidebar_widgets, a, b) {
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
-            UiAction::PlaceWidget { index, col, row } => {
-                if let Some(widget) = self.settings.navbar_widgets.get_mut(index) {
-                    widget.col = col;
+            UiAction::PlaceWidget { index, row } => {
+                if let Some(widget) = self.settings.sidebar_widgets.get_mut(index) {
                     widget.row = row;
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
             UiAction::ResizeWidget(index, size) => {
-                if let Some(widget) = self.settings.navbar_widgets.get_mut(index) {
-                    widget.size = size;
+                if dashboard::resize_widget(&mut self.settings.sidebar_widgets, index, size) {
                     self.settings.save();
                 }
                 state.window.request_redraw();
@@ -2162,14 +2122,10 @@ impl RunningApp {
             },
             UiAction::ResetLayout => {
                 let settings = &mut self.settings;
-                settings.navbar_left = ui::NavItem::default_left();
-                settings.navbar_right = ui::NavItem::default_right();
-                settings.navbar_widgets = dashboard::Placed::defaults();
+                settings.sidebar_widgets = dashboard::Placed::defaults();
                 settings.reset_sidebar_sections();
                 settings.newtab_tiles = newtab::Tile::defaults();
                 settings.newtab_world_clocks = newtab::Zone::defaults();
-                settings.navbar_height = ui::NAVBAR_DEFAULT_HEIGHT;
-                settings.address_pill_width = ui::ADDRESS_PILL_DEFAULT_WIDTH;
                 settings.sidebar_width = ui::SIDEBAR_DEFAULT_WIDTH;
                 settings.save();
                 // egui remembers the panel's width itself, and would otherwise
@@ -2406,13 +2362,14 @@ impl RunningApp {
                 }
             },
             Action::ToggleShelf => {
-                let uncovered = ui::shelf_uncovered_height(&self.settings.navbar_widgets);
-                self.settings.navbar_height =
-                    if self.settings.navbar_height > ui::NAVBAR_DEFAULT_HEIGHT + 10.0 {
-                        ui::NAVBAR_DEFAULT_HEIGHT
-                    } else {
-                        uncovered
-                    };
+                if !self.settings.show_sidebar_widgets {
+                    return;
+                }
+                self.settings.sidebar_shelf_height = if self.settings.sidebar_shelf_height > 1.0 {
+                    0.0
+                } else {
+                    dashboard::open_height(&self.settings.sidebar_widgets)
+                };
                 self.settings.save();
             },
         }

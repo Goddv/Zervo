@@ -104,52 +104,6 @@ pub(super) fn draw(
             actions.push(UiAction::PersistSettings);
         }
     });
-
-    settings_section(ui, palette, tr("layout-top-bar-tools"), |ui| {
-        let left = &settings.navbar_left;
-        let right = &settings.navbar_right;
-        tool_group(
-            ui,
-            actions,
-            NavSide::Left,
-            left,
-            right.len(),
-            tr("layout-before-address"),
-        );
-        ui.add_space(8.0);
-        tool_group(
-            ui,
-            actions,
-            NavSide::Right,
-            right,
-            left.len(),
-            tr("layout-after-address"),
-        );
-        ui.add_space(8.0);
-        egui::ComboBox::from_id_salt("add_top_bar_tool")
-            .selected_text(tr("layout-add-tool"))
-            .show_ui(ui, |ui| {
-                let mut found = false;
-                for item in NavItem::ALL {
-                    if left.contains(&item) || right.contains(&item) {
-                        continue;
-                    }
-                    found = true;
-                    if ui.button(item.label()).clicked() {
-                        actions.push(UiAction::AddNavItem(item));
-                        ui.close();
-                    }
-                }
-                if !found {
-                    ui.weak(tr("layout-all-tools-visible"));
-                }
-            });
-        if ui.button(tr("layout-reset-top-bar")).clicked() {
-            settings.navbar_left = NavItem::default_left();
-            settings.navbar_right = NavItem::default_right();
-            actions.push(UiAction::PersistSettings);
-        }
-    });
 }
 
 fn move_button(ui: &mut Ui, earlier: bool, enabled: bool, name: &str) -> egui::Response {
@@ -167,62 +121,4 @@ fn move_button(ui: &mut Ui, earlier: bool, enabled: bool, name: &str) -> egui::R
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &label));
     response.on_hover_text(label)
-}
-
-fn tool_group(
-    ui: &mut Ui,
-    actions: &mut Vec<UiAction>,
-    side: NavSide,
-    items: &[NavItem],
-    other_count: usize,
-    title: &str,
-) {
-    ui.label(RichText::new(title).strong());
-    if items.is_empty() {
-        ui.weak(tr("layout-empty-tools"));
-    }
-    let other = match side {
-        NavSide::Left => NavSide::Right,
-        NavSide::Right => NavSide::Left,
-    };
-    for (index, item) in items.iter().copied().enumerate() {
-        ui.push_id(item, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(item.label());
-                if move_button(ui, true, index > 0, item.label()).clicked() {
-                    actions.push(UiAction::MoveNavItem {
-                        item,
-                        side,
-                        index: index - 1,
-                    });
-                }
-                if move_button(ui, false, index + 1 < items.len(), item.label()).clicked() {
-                    actions.push(UiAction::MoveNavItem {
-                        item,
-                        side,
-                        index: index + 1,
-                    });
-                }
-                ui.menu_button(tr("layout-tool-options"), |ui| {
-                    let placement = if side == NavSide::Left {
-                        tr("layout-after-address")
-                    } else {
-                        tr("layout-before-address")
-                    };
-                    if ui.button(placement).clicked() {
-                        actions.push(UiAction::MoveNavItem {
-                            item,
-                            side: other,
-                            index: other_count,
-                        });
-                        ui.close();
-                    }
-                    if ui.button(tr("layout-hide-tool")).clicked() {
-                        actions.push(UiAction::RemoveNavItem(item));
-                        ui.close();
-                    }
-                });
-            });
-        });
-    }
 }
