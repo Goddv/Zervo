@@ -41,7 +41,7 @@ mod downloads;
 // and the tests can run on a pull request without compiling Servo first.
 // Re-exported at the root rather than referred to by its own name, so every
 // `crate::theme::…` in the tree carries on resolving and nothing had to move.
-pub use zervo_core::{gestures, glass, grid, net, store, theme};
+pub use zervo_core::{gestures, glass, grid, l10n, net, store, theme};
 // Stays here rather than in the core crate: it reads the window's live GL
 // context, which is the half of the browser the core crate exists to avoid.
 mod gpu;
@@ -78,7 +78,7 @@ use egui_glow::{CallbackFn, EguiGlow};
 use euclid::{Point2D, Rect, Scale, Size2D};
 use keyboard_types::ShortcutMatcher;
 use servo::{
-    DeviceIndependentPixel, DevicePixel, EditingActionEvent, EventLoopWaker, InputEvent, Key,
+    ClipboardAction, DeviceIndependentPixel, DevicePixel, EventLoopWaker, InputEvent, Key,
     MouseButton as ServoMouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
     MouseMoveEvent, NamedKey, RenderingContext, ServoBuilder, WheelDelta, WheelEvent, WheelMode,
     WindowRenderingContext,
@@ -309,6 +309,8 @@ struct RunningApp {
     /// Retained frosted-glass backdrop, kept so its material can be retuned.
     #[cfg(target_os = "macos")]
     _vibrancy: Option<vibrancy::Vibrancy>,
+    #[cfg(target_os = "macos")]
+    liquid_glass: Option<vibrancy::LiquidGlass>,
 }
 
 impl ApplicationHandler<WakerEvent> for App {
@@ -320,6 +322,7 @@ impl ApplicationHandler<WakerEvent> for App {
         let attributes = Window::default_attributes()
             .with_title("Zervo")
             .with_inner_size(LogicalSize::new(1200.0, 800.0))
+            .with_min_inner_size(LogicalSize::new(600.0, 400.0))
             // Shown further down, once the AccessKit adapter exists — it
             // refuses to be created for a window that has already been made
             // visible, and aborts the process saying so. Waiting also means the
@@ -352,6 +355,8 @@ impl ApplicationHandler<WakerEvent> for App {
         // an erased corner would be a hole onto nothing.
         #[cfg(target_os = "macos")]
         let translucent_window = vibrancy.is_some();
+        #[cfg(target_os = "macos")]
+        let liquid_glass = vibrancy::LiquidGlass::install(&window);
         #[cfg(not(target_os = "macos"))]
         let translucent_window = false;
 
@@ -407,6 +412,7 @@ impl ApplicationHandler<WakerEvent> for App {
         }
 
         let settings = settings::load();
+        l10n::select(&settings.language);
         let system_dark = matches!(window.theme(), Some(winit::window::Theme::Dark));
         theme::apply(
             &egui_glow.egui_ctx,
@@ -484,10 +490,8 @@ impl ApplicationHandler<WakerEvent> for App {
             dom_adoptedstylesheet_enabled: true,
             // `@container`, and multi-column layout. Both fall back to
             // something wrong-looking rather than something absent.
-            layout_container_queries_enabled: true,
-            layout_columns_enabled: true,
-            // Variable fonts, which most modern type on the web now is.
-            layout_variable_fonts_enabled: true,
+            layout_css_container_queries_enabled: true,
+            layout_css_columns_enabled: true,
             dom_visual_viewport_enabled: true,
 
             // ── Permissions ─────────────────────────────────────────────
@@ -638,6 +642,8 @@ impl ApplicationHandler<WakerEvent> for App {
             wallpaper_frost: None,
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
+            #[cfg(target_os = "macos")]
+            liquid_glass,
         });
 
         if let (Self::Running(app), Some(url)) = (&mut *self, internal) {
@@ -797,8 +803,13 @@ impl RunningApp {
                 PointerOwner::Chrome
             };
         }
-        if matches!(&event, WindowEvent::Focused(false)) {
-            self.pointer_owner = PointerOwner::Free;
+        if let WindowEvent::Focused(focused) = &event {
+            if !focused {
+                self.pointer_owner = PointerOwner::Free;
+            }
+            if let Some(webview) = state.active_webview() {
+                webview.set_focused(*focused);
+            }
         }
         if let WindowEvent::MouseWheel { delta, phase, .. } = &event
             && self.settings.gestures.enabled
@@ -858,10 +869,11 @@ impl RunningApp {
                 });
             },
             WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..)
-                if !self
-                    .egui_glow
-                    .egui_ctx
-                    .memory(|memory| memory.focused().is_some()) => {},
+                if state.active_webview().is_some()
+                    && !self
+                        .egui_glow
+                        .egui_ctx
+                        .memory(|memory| memory.focused().is_some()) => {},
             event => {
                 let response = self.egui_glow.on_window_event(&state.window, event);
                 if response.repaint {
@@ -1076,18 +1088,17 @@ impl RunningApp {
             })
             .shortcut(CMD_OR_CONTROL, 'X', || {
                 if let Some(webview) = &active_webview {
-                    webview.notify_input_event(InputEvent::EditingAction(EditingActionEvent::Cut));
+                    webview.notify_input_event(InputEvent::EditingAction(ClipboardAction::Cut));
                 }
             })
             .shortcut(CMD_OR_CONTROL, 'C', || {
                 if let Some(webview) = &active_webview {
-                    webview.notify_input_event(InputEvent::EditingAction(EditingActionEvent::Copy));
+                    webview.notify_input_event(InputEvent::EditingAction(ClipboardAction::Copy));
                 }
             })
             .shortcut(CMD_OR_CONTROL, 'V', || {
                 if let Some(webview) = &active_webview {
-                    webview
-                        .notify_input_event(InputEvent::EditingAction(EditingActionEvent::Paste));
+                    webview.notify_input_event(InputEvent::EditingAction(ClipboardAction::Paste));
                 }
             })
             .shortcut(CMD_OR_ALT, Key::Named(NamedKey::ArrowLeft), || {
@@ -1200,6 +1211,21 @@ impl RunningApp {
         self.space = self.state.browser.borrow().active_workspace;
 
         let palette = self.palette();
+        #[cfg(target_os = "macos")]
+        let (palette, native_available) = {
+            let (reduce_transparency, reduce_motion) = vibrancy::accessibility_preferences();
+            let mut palette = if reduce_transparency {
+                palette.with_translucency(theme::Translucency::Solid)
+            } else {
+                palette
+            };
+            if reduce_motion {
+                palette.material.animation = 0.0;
+            }
+            (palette, self.liquid_glass.is_some() && !reduce_transparency)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let native_available = false;
         if self.theme_fade.is_some() {
             // egui's own style has to follow the crossfade frame by frame:
             // stock widgets take their colors from there rather than from the
@@ -1228,7 +1254,7 @@ impl RunningApp {
         // Nothing shows through a solid surface, so nothing needs copying:
         // under Solid this whole path — the readback, the blur, the upload —
         // costs nothing at all rather than costing a little.
-        let frosting = palette.translucency == theme::Translucency::Frosted;
+        let frosting = palette.translucency.is_translucent();
         // Handed to the paint callback, which runs inside `run` and so cannot
         // borrow `self`.
         // The frost is a copy of one page. When that is no longer the page on
@@ -1308,6 +1334,10 @@ impl RunningApp {
                 media: &media,
                 settings: &mut settings,
                 palette,
+                native_glass: ui::NativeGlass {
+                    available: native_available,
+                    ..Default::default()
+                },
                 favicons: &favicons,
                 downloads: &self.downloads,
                 wallpaper,
@@ -1321,6 +1351,7 @@ impl RunningApp {
                 },
             };
             let output = ui::draw(root, &mut chrome);
+            let native_chrome = chrome.uses_native_glass();
             drop(browser);
             drop(controls);
             drop(library);
@@ -1413,9 +1444,10 @@ impl RunningApp {
                 root,
                 content_rect,
                 &palette,
-                if !blitted {
-                    // An internal page rounds itself.
-                    ui::Corners::AlreadyRounded
+                if !blitted || (translucent_window && native_chrome) {
+                    // Internal pages round themselves. Native chrome can show
+                    // directly through the already-cut webview corners.
+                    ui::Corners::NoMask
                 } else if translucent_window {
                     ui::Corners::Cut
                 } else {
@@ -1445,19 +1477,27 @@ impl RunningApp {
         #[cfg(feature = "engine-downloads")]
         {
             let accepted = state.controls.borrow_mut().take_accepted();
-            for offer in accepted {
-                if self
-                    .downloads
-                    .accept_from_engine(offer.request_id, &offer.url, &offer.filename)
-                {
+            for mut offer in accepted {
+                if self.downloads.accept_from_engine(
+                    offer.response.request_id,
+                    offer.response.url.as_str(),
+                    &offer.filename,
+                ) {
+                    offer.response.accept();
                     let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
                     state.activate_tab(tab_id);
+                } else {
+                    offer.response.decline();
                 }
             }
         }
 
         let mut ambient = false;
         if let Some(output) = ui_output {
+            #[cfg(target_os = "macos")]
+            if let Some(glass) = &self.liquid_glass {
+                glass.update(&output.native_glass, self.egui_glow.egui_ctx.zoom_factor());
+            }
             self.content_rect_points = output.content_rect;
             self.page_rect_points = output.page_rect;
             state
@@ -2222,6 +2262,12 @@ impl RunningApp {
             UiAction::PersistSettings => {
                 self.settings.save();
             },
+            UiAction::ChangeLanguage => {
+                l10n::select(&self.settings.language);
+                state.browser.borrow_mut().refresh_internal_titles();
+                self.settings.save();
+                self.state.window.request_redraw();
+            },
             UiAction::SettingsChanged => {
                 self.settings.save();
                 // Only redo the parts whose input actually changed — see the
@@ -2426,7 +2472,9 @@ impl RunningApp {
                 let rgba: Vec<u8> = match favicon.format {
                     servo::PixelFormat::RGBA8 => bytes[..width * height * 4].to_vec(),
                     servo::PixelFormat::BGRA8 => bytes[..width * height * 4]
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .flat_map(|px| [px[2], px[1], px[0], px[3]])
                         .collect(),
                     _ => continue,
@@ -2539,6 +2587,19 @@ fn install_fonts(ctx: &egui::Context) {
         if let Some(proportional) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
             proportional.insert(0, "SF Pro".to_owned());
         }
+    }
+
+    // Egui supplies no CJK glyphs in its default fonts. Register a fallback
+    // for Japanese translations and page titles on all three platforms.
+    let noto = "Noto Sans JP".to_owned();
+    fonts.font_data.insert(
+        noto.clone(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansJP.ttf"
+        ))),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push(noto.clone());
     }
 
     // The display family: one real light face, for the handful of runs set

@@ -28,6 +28,7 @@
 //! scrolling almost everywhere, so it is recognised only over the strip above
 //! the web page, where there is nothing to scroll.
 
+use crate::l10n::text as tr;
 use std::time::{Duration, Instant};
 
 use egui::Vec2;
@@ -86,14 +87,14 @@ impl GestureAction {
 
     pub fn label(&self) -> &'static str {
         match self {
-            GestureAction::None => "Nothing",
-            GestureAction::Back => "Back",
-            GestureAction::Forward => "Forward",
-            GestureAction::ToggleSidebar => "Toggle sidebar",
-            GestureAction::ToggleShelf => "Widget shelf",
-            GestureAction::NextWorkspace => "Next workspace",
-            GestureAction::PreviousWorkspace => "Previous workspace",
-            GestureAction::NewTab => "New tab",
+            GestureAction::None => tr("common-none"),
+            GestureAction::Back => tr("common-back"),
+            GestureAction::Forward => tr("common-forward"),
+            GestureAction::ToggleSidebar => tr("gesture-toggle-sidebar"),
+            GestureAction::ToggleShelf => tr("gesture-widget-shelf"),
+            GestureAction::NextWorkspace => tr("gesture-next-workspace"),
+            GestureAction::PreviousWorkspace => tr("gesture-previous-workspace"),
+            GestureAction::NewTab => tr("common-new-tab-action"),
         }
     }
 }

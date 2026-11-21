@@ -62,14 +62,14 @@ env:
   # Servo pins this, and it is the only GStreamer build for Windows that Servo
   # supports. There is no arm64 equivalent published anywhere.
   GSTREAMER_VERSION: "1.22.8"
+  LLVM_VERSION: "22.1.8"
   # Cargo's own git implementation ignores core.longpaths; the command line git
   # honours it.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   # windows-2025 moved to Visual Studio 2026 in June 2026 and with it CMake
   # 4.4, which removed every policy older than 3.5 and so refuses to configure
   # a good many of the vendored C++ projects in this dependency graph. The
-  # Fedora 44 and Ubuntu 26.04 jobs set the same escape hatch for the same
-  # reason.
+  # The Fedora job sets the same compatibility override.
   CMAKE_POLICY_VERSION_MINIMUM: "3.5"
   # A very short target directory. Windows caps relative paths at 260
   # characters no matter what the registry says, and the engine's build tree is
@@ -99,6 +99,28 @@ jobs:
             -Name "LongPathsEnabled" -Value 1 -Type DWord -Force
           git config --system core.longpaths true
           git config --global core.longpaths true
+
+      - name: Install LLVM for ANGLE bindgen
+        # Visual Studio 18.2's STL requires Clang 22+. The runner's clang and
+        # clang-sys's default libclang can otherwise come from different LLVMs.
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm-installer.exe'
+          $root = Join-Path $env:RUNNER_TEMP 'zervo-llvm'
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/LLVM-$env:LLVM_VERSION-win64.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $expected = '16e5709785fef73c854646241c4a92c5cd574318d1b33c63330dd7721903e55c'
+          if ((Get-FileHash -Algorithm SHA256 $installer).Hash -ne $expected) {
+            throw "LLVM installer checksum mismatch"
+          }
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$root") -Wait -PassThru
+          $bin = Join-Path $root 'bin'
+          if ($install.ExitCode -ne 0 -or -not (Test-Path "$bin\libclang.dll")) {
+            throw "LLVM installation failed: $($install.ExitCode)"
+          }
+          "LIBCLANG_PATH=$bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & "$bin\clang.exe" --version
 
       - name: Show environment
         run: |

@@ -253,7 +253,12 @@ jobs:
         run: |
           FEATURES=""
           if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
-          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
+          if [ "$FEATURES_MEDIA" = "true" ]; then
+            FEATURES="${FEATURES:+$FEATURES,}media"
+            GSTREAMER_ROOT=/Library/Frameworks/GStreamer.framework/Versions/1.0
+            export PATH="$GSTREAMER_ROOT/bin:$PATH"
+            export DYLD_LIBRARY_PATH="$GSTREAMER_ROOT/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          fi
           ARGS=(--locked)
           if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
           cargo clippy --all-targets "${ARGS[@]}" -- -D warnings

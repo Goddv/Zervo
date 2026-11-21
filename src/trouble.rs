@@ -28,6 +28,7 @@
 //! It is also how the engine will hand over the detail on the day it can: the
 //! page reads its own address rather than a side channel.
 
+use crate::l10n::text as tr;
 use egui::{Align2, Color32, FontId, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
@@ -92,11 +93,11 @@ impl Trouble {
     /// not the tab.
     pub fn title(self) -> &'static str {
         match self {
-            Trouble::Unsupported => "Can't render this",
-            Trouble::Offline => "Offline",
-            Trouble::Certificate => "Not private",
-            Trouble::NotFound => "No such site",
-            Trouble::Crashed => "Page stopped",
+            Trouble::Unsupported => tr("error-can-t-render-this"),
+            Trouble::Offline => tr("error-offline"),
+            Trouble::Certificate => tr("error-not-private"),
+            Trouble::NotFound => tr("error-no-such-site"),
+            Trouble::Crashed => tr("error-page-stopped"),
         }
     }
 
@@ -143,11 +144,11 @@ impl Trouble {
 
     fn headline(self) -> &'static str {
         match self {
-            Trouble::Unsupported => "Servo can't render this page yet",
-            Trouble::Offline => "You're offline",
-            Trouble::Certificate => "This connection isn't private",
-            Trouble::NotFound => "No such site",
-            Trouble::Crashed => "This page stopped",
+            Trouble::Unsupported => tr("error-servo-can-t-render-this-page-yet"),
+            Trouble::Offline => tr("error-you-re-offline"),
+            Trouble::Certificate => tr("error-this-connection-isn-t-private"),
+            Trouble::NotFound => tr("error-no-such-site"),
+            Trouble::Crashed => tr("error-this-page-stopped"),
         }
     }
 
@@ -413,14 +414,14 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
                 });
                 out.push(Press {
                     icon: Icon::Reload,
-                    label: "Try again".to_owned(),
+                    label: tr("error-try-again").to_owned(),
                     lead: false,
                     action: Deed::Go(url.clone()),
                 });
             }
             out.push(Press {
                 icon: Icon::Info,
-                label: "What's missing".to_owned(),
+                label: tr("error-what-s-missing").to_owned(),
                 lead: site.is_none(),
                 action: Deed::Read(
                     "https://github.com/Goddv/Zervo/blob/main/docs/PARITY.md".to_owned(),
@@ -435,7 +436,7 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
         // text under the card, which is 7b's own instruction.
         Trouble::Certificate => vec![Press {
             icon: Icon::Close,
-            label: "Back to safety".to_owned(),
+            label: tr("error-back-to-safety").to_owned(),
             lead: true,
             action: Deed::Leave,
         }],
@@ -444,14 +445,14 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
             if let Some(url) = &site {
                 out.push(Press {
                     icon: Icon::Reload,
-                    label: "Load it again".to_owned(),
+                    label: tr("error-load-it-again").to_owned(),
                     lead: true,
                     action: Deed::Go(url.clone()),
                 });
             }
             out.push(Press {
                 icon: Icon::Info,
-                label: "Report it".to_owned(),
+                label: tr("error-report-it").to_owned(),
                 lead: site.is_none(),
                 action: Deed::Read("https://github.com/servo/servo/issues".to_owned()),
             });
@@ -473,7 +474,7 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
             if let Some(url) = site {
                 out.push(Press {
                     icon: Icon::Reload,
-                    label: "Try again".to_owned(),
+                    label: tr("error-try-again").to_owned(),
                     lead: out.is_empty(),
                     action: Deed::Go(url),
                 });
@@ -1140,9 +1141,7 @@ fn draw_message(
         // engine to accept it, and this Servo has no hook for that — offering
         // a link that appeared to work and did not would be worse on this page
         // than on any other in the browser.
-        response.on_hover_text(
-            "Not yet: the engine offers no way to accept a certificate it has rejected.",
-        );
+        response.on_hover_text(tr("error-not-yet-the-engine-offers-no-way"));
     }
 }
 
@@ -1232,7 +1231,7 @@ fn draw_game(root: &mut Ui, palette: &Palette, panel: Rect, tab: crate::state::T
     root.painter().text(
         pos2(panel.min.x + 16.0, panel.min.y + 18.0),
         Align2::LEFT_CENTER,
-        "WHILE YOU WAIT — FEATURE CREEP",
+        tr("error-while-you-wait-feature-creep"),
         FontId::proportional(10.5),
         ink.text_muted,
     );
@@ -1338,11 +1337,11 @@ fn draw_game(root: &mut Ui, palette: &Palette, panel: Rect, tab: crate::state::T
     }
 
     let hint = if shipped >= GAPS.len() {
-        "That's the whole list. Ship it."
+        tr("error-that-s-the-whole-list-ship-it")
     } else if state.started {
-        "Knock one out — the paddle follows the pointer."
+        tr("error-knock-one-out-the-paddle-follows-the")
     } else {
-        "Knock one out — move the pointer in here, or just press a brick."
+        tr("error-knock-one-out-move-the-pointer-in")
     };
     root.painter().text(
         pos2(panel.min.x + 16.0, panel.max.y - 12.0),

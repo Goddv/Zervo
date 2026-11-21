@@ -11,9 +11,10 @@ pkgrel=1
 pkgdesc='A sidebar-first browser built on the Servo engine'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Goddv/Zervo'
-license=('MPL-2.0')
+license=('MPL-2.0' 'OFL-1.1')
 
 depends=(
+    'ca-certificates'
     'fontconfig'
     'freetype2'
     'glib2'
@@ -98,12 +99,9 @@ sha256sums=('@SHA256_SRC@')
 prepare() {
     cd "$pkgname-$pkgver"
 
-    # Zervo pins rustc 1.97.1 to match the engine's own toolchain file. Arch
-    # ships `rust` 1.98, and its packaging guidelines build against the
-    # distribution's compiler; leaving the pin in place would make rustup (if
-    # the user has it) download a second toolchain in the middle of the build,
-    # which breaks the offline guarantee `--frozen` is there to give. The pin
-    # is a floor, not a ceiling — Cargo.toml's rust-version is 1.97.
+    # Arch packages build with the distribution's compiler. Remove the
+    # toolchain pin so rustup cannot download a compiler during an offline
+    # build. Cargo.toml declares the minimum supported Rust version.
     rm -f rust-toolchain.toml
 
     # Populates ~/.cargo from the lockfile, so build() can run offline. The
@@ -150,4 +148,6 @@ package() {
         "$pkgdir/usr/share/metainfo/app.zervo.Zervo.metainfo.xml"
     install -Dm644 assets/linux/zervo.1 "$pkgdir/usr/share/man/man1/zervo.1"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 assets/licenses/NotoSansJP-OFL.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/NotoSansJP-OFL.txt"
 }

@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Datelike, Local, TimeZone};
+use jiff::{Timestamp, ZonedDateTime, tz::TimeZone};
 use serde::{Deserialize, Serialize};
 
 /// How many visits to keep. Roughly a year of ordinary browsing.
@@ -48,9 +48,15 @@ pub struct Visit {
 }
 
 impl Visit {
-    pub fn local_time(&self) -> DateTime<Local> {
-        Local.timestamp_opt(self.at, 0).single().unwrap_or_default()
+    pub fn local_time(&self) -> ZonedDateTime {
+        local_time(self.at)
     }
+}
+
+fn local_time(seconds: i64) -> ZonedDateTime {
+    Timestamp::new(seconds, 0)
+        .unwrap_or(Timestamp::UNIX_EPOCH)
+        .to_zoned_datetime(TimeZone::system())
 }
 
 /// How far back a group of visits reaches.
@@ -238,7 +244,7 @@ impl Library {
     /// can be removed without a second lookup.
     pub fn browse(&self, query: &str, now: i64) -> Vec<(Bucket, Vec<(usize, &Visit)>)> {
         let needle = query.trim().to_lowercase();
-        let today = Local.timestamp_opt(now, 0).single().unwrap_or_default();
+        let today = local_time(now).date();
 
         let mut grouped: HashMap<Bucket, Vec<(usize, &Visit)>> = HashMap::new();
         for (index, visit) in self.history.iter().enumerate().rev() {
@@ -248,8 +254,8 @@ impl Library {
             {
                 continue;
             }
-            let when = visit.local_time();
-            let days = (today.date_naive() - when.date_naive()).num_days();
+            let when = visit.local_time().date();
+            let days = today.duration_since(when).as_secs() / 86_400;
             let bucket = if days <= 0 {
                 Bucket::Today
             } else if days == 1 {

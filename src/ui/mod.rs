@@ -4,6 +4,7 @@
 //! bottom utility bar — around a floating rounded card holding the web
 //! content (or the zervo://settings tab). Pure UI — emits `UiAction`s.
 
+use crate::l10n::text as tr;
 use std::collections::HashMap;
 
 use egui::epaint::Mesh;
@@ -136,12 +137,30 @@ pub enum UiAction {
     DragWindow,
     /// A setting changed: persist and re-apply (theme, etc.).
     SettingsChanged,
+    ChangeLanguage,
     /// A setting changed that needs nothing re-applied — just write it out.
     PersistSettings,
 }
 
+/// Window-space backplates requested from AppKit for this frame.
+#[derive(Default)]
+pub struct NativeGlass {
+    pub available: bool,
+    pub surfaces: [Option<(Rect, f32)>; Self::SURFACES],
+}
+
+impl NativeGlass {
+    pub const SURFACES: usize = 4;
+    const SIDEBAR: usize = 0;
+    const NAVIGATION: usize = 1;
+    const ADDRESS: usize = 2;
+    const UTILITIES: usize = 3;
+}
+
 pub struct UiOutput {
     pub actions: Vec<UiAction>,
+    #[cfg(target_os = "macos")]
+    pub native_glass: NativeGlass,
     /// Window-space rect of the web-content card, in logical points,
     /// snapped to the physical pixel grid so the blit and masks align.
     pub content_rect: egui::Rect,
@@ -175,6 +194,7 @@ pub struct ChromeContext<'a> {
     pub media: &'a crate::dashboard::Media,
     pub settings: &'a mut Settings,
     pub palette: Palette,
+    pub native_glass: NativeGlass,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
     pub downloads: &'a crate::downloads::DownloadManager,
     /// The new tab page's photograph, and whatever is known about it.
@@ -193,21 +213,67 @@ pub struct ChromeContext<'a> {
     pub notifications: crate::notifications::View<'a>,
 }
 
+impl ChromeContext<'_> {
+    pub(crate) fn uses_native_glass(&self) -> bool {
+        self.native_glass.available
+            && self.palette.translucency == theme::Translucency::LiquidGlass
+            && self.settings.seen_setup
+            && self.settings.layout != crate::settings::Layout::FullPage
+    }
+}
+
 /// Draw the chrome into the root `Ui` handed to us by `EguiGlow::run`. The
 /// caller registers the webview blit at `content_rect` (unless an internal
 /// page is open), then calls [`finish_content_frame`].
+fn language_picker(ui: &mut Ui, settings: &mut Settings, actions: &mut Vec<UiAction>) {
+    let languages = crate::l10n::languages();
+    let selected = languages
+        .iter()
+        .find(|(locale, _)| *locale == settings.language)
+        .map_or_else(|| tr("language-system"), |(_, name)| *name);
+    let mut chosen = None;
+    let label = ui.label(tr("ui-language"));
+    let picker = egui::ComboBox::from_id_salt("interface-language")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(settings.language.is_empty(), tr("language-system"))
+                .clicked()
+            {
+                chosen = Some("");
+            }
+            for (locale, name) in languages {
+                if ui
+                    .selectable_label(settings.language == locale, name)
+                    .clicked()
+                {
+                    chosen = Some(locale);
+                }
+            }
+        });
+    picker.response.labelled_by(label.id);
+    if let Some(locale) = chosen
+        && locale != settings.language
+    {
+        settings.language = locale.to_owned();
+        actions.push(UiAction::ChangeLanguage);
+    }
+}
+
 pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     let mut actions = Vec::new();
 
     // One continuous chrome base for the whole window, painted before the
     // panels so the top gradient runs unbroken from the sidebar across to
     // the right edge instead of stopping at the sidebar boundary.
-    paint_chrome_base(
-        root,
-        &chrome.palette,
-        chrome.settings.top_glow,
-        chrome.palette.chrome_tint(),
-    );
+    if !chrome.uses_native_glass() {
+        paint_chrome_base(
+            root,
+            &chrome.palette,
+            chrome.settings.top_glow,
+            chrome.palette.chrome_tint(),
+        );
+    }
 
     // First run takes the whole frame, chrome and page both. There is nothing
     // behind it worth clicking on by accident, and a half-configured browser
@@ -217,12 +283,20 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         let window = root.ctx().content_rect();
         return UiOutput {
             actions,
+            #[cfg(target_os = "macos")]
+            native_glass: std::mem::take(&mut chrome.native_glass),
             content_rect: window,
             page_rect: window,
             settings_open: true,
             controls_open: false,
             ambient: false,
         };
+    }
+
+    if chrome.controls.is_empty()
+        && root.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::L))
+    {
+        chrome.browser.focus_address = true;
     }
 
     // Autohide reveal: decided before the sidebar is drawn, but painted last
@@ -265,6 +339,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     // reserves its space here and paints its contents later, above the page.
     let active_kind = chrome.browser.active_tab().map(|tab| tab.kind);
     let will_float = layout.is_sidebar()
+        && !chrome.uses_native_glass()
         && chrome.palette.appearance.seam.chrome_floats()
         && peek.is_none()
         && matches!(active_kind, Some(TabKind::NewTab));
@@ -515,7 +590,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         .active_tab()
         .and_then(|tab| url::Url::parse(&tab.url).ok())
         .and_then(|url| url.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "This page".to_owned());
+        .unwrap_or_else(|| tr("chrome-this-page").to_owned());
     let scale = root.pixels_per_point();
     chrome.controls.draw(
         root,
@@ -539,6 +614,8 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
 
     UiOutput {
         actions,
+        #[cfg(target_os = "macos")]
+        native_glass: std::mem::take(&mut chrome.native_glass),
         content_rect,
         page_rect,
         settings_open,
@@ -647,6 +724,14 @@ fn draw_sidebar(
                 return;
             }
             if settled {
+                if chrome.uses_native_glass() {
+                    let bounds = ui.ctx().content_rect();
+                    let panel = Rect::from_min_max(
+                        bounds.min + vec2(5.0, 5.0),
+                        pos2(ui.max_rect().right() + 5.0, bounds.bottom() - 5.0),
+                    );
+                    chrome.native_glass.surfaces[NativeGlass::SIDEBAR] = Some((panel, 20.0));
+                }
                 sidebar_body(ui, chrome, actions, SidebarHost::DOCKED);
                 return;
             }
@@ -755,20 +840,12 @@ fn sidebar_body(
         .show_separator_line(false)
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                // The bar's own right-hand group, in the bar's own order —
-                // Extensions and History used to be reachable only when the
-                // sidebar was collapsed. They sit in the navigation bar when
-                // it is up, so the sidebar does not show them twice; in
-                // full-page mode nothing else is showing them at all.
+                // The docked sidebar and full-page reveal own their utilities.
+                // In the top-bar layout these controls stay in the toolbar.
                 if utilities {
                     let active = chrome.downloads.active_count();
                     let mut tray = None;
-                    for item in [
-                        NavItem::Extensions,
-                        NavItem::History,
-                        NavItem::Downloads,
-                        NavItem::Settings,
-                    ] {
+                    for item in [NavItem::History, NavItem::Downloads, NavItem::Settings] {
                         let (rect, _) = ui.allocate_exact_size(
                             vec2(nav_item_width(), NAVBAR_ICON + 8.0),
                             Sense::hover(),
@@ -796,7 +873,7 @@ fn sidebar_body(
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if icons::icon_button(ui, Icon::Plus, 15.0, &palette, true)
-                        .on_hover_text("New workspace")
+                        .on_hover_text(tr("chrome-new-workspace"))
                         .clicked()
                     {
                         actions.push(UiAction::NewWorkspace);
@@ -808,7 +885,7 @@ fn sidebar_body(
                     // worse than one that is not there.
                     if chrome.settings.layout == crate::settings::Layout::FullPage
                         && icons::icon_button(ui, Icon::Browser, 16.0, &palette, true)
-                            .on_hover_text("Leave full-page mode (⌘S)")
+                            .on_hover_text(tr("chrome-leave-full-page-mode-s"))
                             .clicked()
                     {
                         actions.push(UiAction::ToggleSidebar);
@@ -837,9 +914,13 @@ fn sidebar_body(
         // Half a point up, and the same half point back into the gap under the
         // row — see `NAV_ROW_TOP`. Only where there are window controls to
         // line up with.
-        let align = cfg!(target_os = "macos") && chrome.settings.appearance.align_nav;
+        let align = cfg!(target_os = "macos")
+            && chrome.settings.appearance.align_nav
+            && ui.max_rect().width() >= 58.0 + 5.0 * nav_item_width();
         let nudge = if align {
             NAV_ROW_TOP - f32::from(SIDEBAR_MARGIN.top)
+        } else if cfg!(target_os = "macos") {
+            32.0 - f32::from(SIDEBAR_MARGIN.top)
         } else {
             0.0
         };
@@ -855,8 +936,8 @@ fn sidebar_body(
         // points out over the page. Nothing in the sidebar had asked to be
         // wider; one row had simply not fitted.
         //
-        // Boxed and clipped, the miss stays local: the last icon is cut off,
-        // which is visible and true, instead of every widget below it moving.
+        // The width check above places the whole row below the traffic lights
+        // when the sidebar is too narrow for both to fit on one line.
         let row = Rect::from_min_size(
             pos2(ui.max_rect().min.x, ui.cursor().min.y),
             vec2(ui.max_rect().width(), NAVBAR_ICON + 8.0),
@@ -873,8 +954,9 @@ fn sidebar_body(
         nav.spacing_mut().item_spacing.x = 0.0;
         {
             let ui = &mut nav;
-            #[cfg(target_os = "macos")]
-            ui.add_space(58.0);
+            if align {
+                ui.add_space(58.0);
+            }
 
             let (can_go_back, can_go_forward, is_settings) = chrome
                 .browser
@@ -910,9 +992,9 @@ fn sidebar_body(
                 !chrome.settings.layout.is_sidebar(),
             )
             .on_hover_text(if chrome.settings.layout.is_sidebar() {
-                "Hide sidebar (⌘S)"
+                tr("chrome-hide-sidebar-s")
             } else {
-                "Show sidebar (⌘S)"
+                tr("chrome-show-sidebar-s")
             })
             .clicked()
             {
@@ -929,7 +1011,7 @@ fn sidebar_body(
             }
             if chrome.settings.show_reload_button
                 && icons::icon_button(ui, Icon::Reload, 17.0, &palette, !is_settings)
-                    .on_hover_text("Reload (⌘R)")
+                    .on_hover_text(tr("chrome-reload-r"))
                     .clicked()
             {
                 actions.push(UiAction::Reload);
@@ -944,10 +1026,10 @@ fn sidebar_body(
             star = rect;
         }
         ui.advance_cursor_after_rect(row);
-        ui.add_space(NAV_ROW_GAP - nudge);
+        ui.add_space(NAV_ROW_GAP);
 
         // ── Search / address pill.
-        draw_address_pill(ui, chrome, actions, 36.0);
+        draw_address_pill(ui, chrome, actions, 36.0, false);
         ui.add_space(12.0);
         draw_favourites_card(ui, chrome, actions, star);
     } else {
@@ -1103,7 +1185,7 @@ fn sidebar_body(
                 ui.painter().text(
                     pos2(rect.min.x + 32.0, rect.center().y),
                     Align2::LEFT_CENTER,
-                    "New Tab",
+                    tr("common-new-tab"),
                     FontId::proportional(13.5),
                     palette.text_muted,
                 );
@@ -1201,7 +1283,7 @@ fn sidebar_body(
                         data.insert_temp(id, Liquid { from: to, ..state });
                     });
                 }
-                let mut shapes = glass::shapes(at, &palette, selection_glass(&palette, 1.0));
+                let mut shapes = selection_shapes(at, &palette, 1.0);
                 ui.painter().set(
                     slot,
                     if shapes.len() == 1 {
@@ -1288,11 +1370,15 @@ fn draw_history_page(
     );
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("History").size(24.0).color(palette.text));
+        ui.label(
+            RichText::new(tr("common-history"))
+                .size(24.0)
+                .color(palette.text),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if !chrome.library.history.is_empty()
                 && icons::icon_button(ui, Icon::Trash, 15.0, &palette, true)
-                    .on_hover_text("Clear all history")
+                    .on_hover_text(tr("chrome-clear-all-history"))
                     .clicked()
             {
                 actions.push(UiAction::ClearHistory);
@@ -1323,7 +1409,7 @@ fn draw_history_page(
             .frame(Frame::NONE)
             .font(FontId::proportional(13.5))
             .text_color(palette.text)
-            .hint_text(RichText::new("Search history").color(palette.text_muted))
+            .hint_text(RichText::new(tr("chrome-search-history")).color(palette.text_muted))
             .desired_width(editor.available_width()),
     );
     ui.advance_cursor_after_rect(field);
@@ -1334,9 +1420,9 @@ fn draw_history_page(
     if groups.is_empty() {
         ui.label(
             RichText::new(if chrome.library.history.is_empty() {
-                "Nothing here yet."
+                tr("chrome-nothing-here-yet")
             } else {
-                "No pages match that search."
+                tr("chrome-no-pages-match-that-search")
             })
             .size(13.5)
             .color(palette.text_muted),
@@ -1396,7 +1482,7 @@ fn draw_history_page(
                     ui.painter().text(
                         pos2(row.max.x - 34.0, row.center().y),
                         Align2::RIGHT_CENTER,
-                        visit.local_time().format("%H:%M").to_string(),
+                        visit.local_time().strftime("%H:%M").to_string(),
                         FontId::proportional(11.5),
                         palette.text_muted,
                     );
@@ -1441,6 +1527,18 @@ fn draw_favourite_star(
     let saved = !url.is_empty() && chrome.library.is_favourite(&url);
 
     let response = icons::icon_button(ui, Icon::Star, NAVBAR_ICON, &palette, !url.is_empty());
+    let label = if saved {
+        tr("chrome-remove-from-favourites")
+    } else {
+        tr("chrome-add-to-favourites")
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            response.enabled() && !url.is_empty(),
+            label,
+        )
+    });
     let rect = response.rect;
     let lit = glass::ease_out(ui.ctx().animate_bool_with_time(
         ui.id().with("favourite_lit"),
@@ -1469,14 +1567,7 @@ fn draw_favourite_star(
             palette.accent.gamma_multiply(lit),
         );
     }
-    if response
-        .on_hover_text(if saved {
-            "Remove from favourites"
-        } else {
-            "Add to favourites"
-        })
-        .clicked()
-    {
+    if response.on_hover_text(label).clicked() {
         actions.push(UiAction::ToggleFavourite);
     }
     rect
@@ -1680,7 +1771,7 @@ fn draw_favourites_card(
             ui.painter().text(
                 header.left_center(),
                 Align2::LEFT_CENTER,
-                "Favourites",
+                tr("common-favourites"),
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
@@ -1697,9 +1788,9 @@ fn draw_favourites_card(
             if ui
                 .interact(switch, id.with("layout"), Sense::click())
                 .on_hover_text(if grid {
-                    "Show as a list"
+                    tr("chrome-show-as-a-list")
                 } else {
-                    "Show as tiles"
+                    tr("chrome-show-as-tiles")
                 })
                 .on_hover_cursor(CursorIcon::PointingHand)
                 .clicked()
@@ -1715,7 +1806,7 @@ fn draw_favourites_card(
                 ui.painter().text(
                     body.left_top() + vec2(4.0, 12.0),
                     Align2::LEFT_TOP,
-                    "Nothing saved yet — the star adds this page.",
+                    tr("chrome-nothing-saved-yet-the-star-adds-this"),
                     FontId::proportional(12.0),
                     palette.text_muted,
                 );
@@ -1853,7 +1944,7 @@ fn draw_favourites_card(
                     icons::draw_icon(ui.painter(), save.shrink(3.0), Icon::Check, palette.accent);
                     let saved = ui
                         .interact(save, id.with(("save", index)), Sense::click())
-                        .on_hover_text("Save")
+                        .on_hover_text(tr("common-save"))
                         .on_hover_cursor(CursorIcon::PointingHand)
                         .clicked();
                     let cancel = Rect::from_center_size(
@@ -1868,7 +1959,7 @@ fn draw_favourites_card(
                     );
                     let cancelled = ui
                         .interact(cancel, id.with(("cancelrename", index)), Sense::click())
-                        .on_hover_text("Discard")
+                        .on_hover_text(tr("chrome-discard"))
                         .clicked();
 
                     if saved || entered {
@@ -1902,7 +1993,7 @@ fn draw_favourites_card(
                     );
                     if ui
                         .interact(rename, id.with(("edit", index)), Sense::click())
-                        .on_hover_text("Rename")
+                        .on_hover_text(tr("common-rename"))
                         .clicked()
                     {
                         edit = Some(Some((url.clone(), title.clone())));
@@ -1919,7 +2010,7 @@ fn draw_favourites_card(
                     );
                     if ui
                         .interact(close, id.with(("x", index)), Sense::click())
-                        .on_hover_text("Remove")
+                        .on_hover_text(tr("common-remove"))
                         .clicked()
                     {
                         actions.push(UiAction::RemoveFavourite(url.clone()));
@@ -1986,7 +2077,7 @@ fn draw_downloads_card(
             ui.painter().text(
                 header.left_center(),
                 Align2::LEFT_CENTER,
-                "Downloads",
+                tr("common-downloads"),
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
@@ -2003,7 +2094,7 @@ fn draw_downloads_card(
                 );
                 if ui
                     .interact(clear, id.with("clear"), Sense::click())
-                    .on_hover_text("Clear finished")
+                    .on_hover_text(tr("chrome-clear-finished"))
                     .on_hover_cursor(CursorIcon::PointingHand)
                     .clicked()
                 {
@@ -2019,7 +2110,7 @@ fn draw_downloads_card(
                 ui.painter().text(
                     body.left_top() + vec2(4.0, 12.0),
                     Align2::LEFT_TOP,
-                    "Nothing downloaded yet.",
+                    tr("common-no-downloads"),
                     FontId::proportional(12.0),
                     palette.text_muted,
                 );
@@ -2100,7 +2191,7 @@ fn draw_downloads_card(
                         None => format_bytes(*received),
                     },
                     DownloadState::Complete => format_bytes(*received),
-                    DownloadState::Cancelled => "Stopped".to_owned(),
+                    DownloadState::Cancelled => tr("chrome-stopped").to_owned(),
                     DownloadState::Failed(why) => ellipsize(why, 34),
                 };
                 ui.painter().text(
@@ -2159,25 +2250,31 @@ fn draw_downloads_card(
                         };
 
                     if running {
-                        if control(ui, Icon::Close, "Stop", true, "stop") {
+                        if control(ui, Icon::Close, tr("chrome-stop"), true, "stop") {
                             actions.push(UiAction::CancelDownload(*download));
                         }
                         control(
                             ui,
                             Icon::Pause,
-                            "Pause — the engine cannot suspend a transfer",
+                            tr("chrome-pause-the-engine-cannot-suspend-a-transfer"),
                             false,
                             "pause",
                         );
                     } else {
-                        if control(ui, Icon::Reload, "Start again", true, "restart") {
+                        if control(ui, Icon::Reload, tr("chrome-start-again"), true, "restart") {
                             actions.push(UiAction::RestartDownload(*download));
                         }
                         if *state == DownloadState::Complete {
-                            if control(ui, Icon::Folder, "Show in folder", true, "reveal") {
+                            if control(
+                                ui,
+                                Icon::Folder,
+                                tr("chrome-show-in-folder"),
+                                true,
+                                "reveal",
+                            ) {
                                 actions.push(UiAction::RevealDownload(*download));
                             }
-                            if control(ui, Icon::ExternalLink, "Open", true, "open") {
+                            if control(ui, Icon::ExternalLink, tr("common-open"), true, "open") {
                                 actions.push(UiAction::OpenDownload(*download));
                             }
                         }
@@ -2206,12 +2303,12 @@ fn draw_downloads_card(
                     .map(|entry| entry.filename.clone())
                     .unwrap_or_default();
                 let rows = [
-                    ("Copy download link".to_owned(), 0u8),
-                    ("Copy file name".to_owned(), 1),
-                    ("Show in folder".to_owned(), 2),
-                    ("Open".to_owned(), 3),
-                    ("Start again".to_owned(), 4),
-                    ("Remove from list".to_owned(), 5),
+                    (tr("chrome-copy-download-link").to_owned(), 0u8),
+                    (tr("chrome-copy-file-name").to_owned(), 1),
+                    (tr("chrome-show-in-folder").to_owned(), 2),
+                    (tr("common-open").to_owned(), 3),
+                    (tr("chrome-start-again").to_owned(), 4),
+                    (tr("chrome-remove-from-list").to_owned(), 5),
                 ];
                 match popup_menu(&ctx, &palette, menu_id.with("area"), at, &rows) {
                     Some(choice) => {
@@ -2242,7 +2339,7 @@ fn draw_downloads_card(
 /// room above and below.
 /// The row the controls themselves need: a 36pt pill with 2pt of air above and
 /// below it. The bar is never shorter than this.
-const NAVBAR_ROW: f32 = 40.0;
+const NAVBAR_ROW: f32 = 48.0;
 /// Default bar height: exactly the row, so nothing is wasted until someone
 /// asks for the space by dragging.
 pub const NAVBAR_DEFAULT_HEIGHT: f32 = NAVBAR_ROW;
@@ -2254,10 +2351,14 @@ const SHELF_BOTTOM: f32 = 6.0;
 const NAVBAR_MAX_HEIGHT: f32 =
     NAVBAR_ROW + crate::dashboard::height_for_rows(crate::dashboard::MAX_ROWS) + SHELF_BOTTOM;
 /// Room the macOS traffic lights need before the first button.
-const TRAFFIC_LIGHTS: f32 = 78.0;
+const TRAFFIC_LIGHTS: f32 = if cfg!(target_os = "macos") {
+    80.0
+} else {
+    12.0
+};
 /// Sized against the buttons rather than the row, so the pill has about as
 /// much air around it as they do.
-const NAVBAR_PILL_HEIGHT: f32 = 28.0;
+const NAVBAR_PILL_HEIGHT: f32 = 34.0;
 /// One size for every button in the bar. `icon_button` derives the whole
 /// button from the glyph size, so mixing sizes gives visibly different hit
 /// areas and hover shapes sitting on the same line.
@@ -2294,13 +2395,12 @@ pub enum NavSide {
 }
 
 impl NavItem {
-    pub const ALL: [NavItem; 9] = [
+    pub const ALL: [NavItem; 8] = [
         NavItem::Sidebar,
         NavItem::Back,
         NavItem::Forward,
         NavItem::Reload,
         NavItem::Favourite,
-        NavItem::Extensions,
         NavItem::History,
         NavItem::Downloads,
         NavItem::Settings,
@@ -2317,12 +2417,7 @@ impl NavItem {
     }
 
     pub fn default_right() -> Vec<NavItem> {
-        vec![
-            NavItem::Extensions,
-            NavItem::History,
-            NavItem::Downloads,
-            NavItem::Settings,
-        ]
+        vec![NavItem::History, NavItem::Downloads, NavItem::Settings]
     }
 
     fn icon(self) -> Icon {
@@ -2341,15 +2436,15 @@ impl NavItem {
 
     pub fn label(self) -> &'static str {
         match self {
-            NavItem::Sidebar => "Sidebar",
-            NavItem::Back => "Back",
-            NavItem::Forward => "Forward",
-            NavItem::Reload => "Reload",
-            NavItem::Favourite => "Favourites",
-            NavItem::Extensions => "Extensions",
-            NavItem::History => "History",
-            NavItem::Downloads => "Downloads",
-            NavItem::Settings => "Settings",
+            NavItem::Sidebar => tr("common-sidebar"),
+            NavItem::Back => tr("common-back"),
+            NavItem::Forward => tr("common-forward"),
+            NavItem::Reload => tr("common-reload"),
+            NavItem::Favourite => tr("common-favourites"),
+            NavItem::Extensions => tr("common-extensions"),
+            NavItem::History => tr("common-history"),
+            NavItem::Downloads => tr("common-downloads"),
+            NavItem::Settings => tr("common-settings"),
         }
     }
 }
@@ -2406,6 +2501,7 @@ fn draw_navbar(
         placed.push((NavSide::Left, index, *item, rect));
         x += nav_item_width() + spacing;
     }
+    let left_edge_end = x;
     let count = chrome.settings.navbar_right.len() as f32;
     let mut x =
         window.right() - 10.0 - (count * nav_item_width() + (count - 1.0).max(0.0) * spacing);
@@ -2416,6 +2512,28 @@ fn draw_navbar(
         x += nav_item_width() + spacing;
     }
 
+    if !config && reveal >= 1.0 {
+        let left = &placed[..chrome.settings.navbar_left.len()];
+        let right = &placed[chrome.settings.navbar_left.len()..];
+        for (slot, side) in [
+            (NativeGlass::NAVIGATION, left),
+            (NativeGlass::UTILITIES, right),
+        ] {
+            if let (Some((_, _, _, first)), Some((_, _, _, last))) = (side.first(), side.last()) {
+                let backplate = first.union(*last).expand2(vec2(4.0, 4.5));
+                if chrome.uses_native_glass() {
+                    chrome.native_glass.surfaces[slot] =
+                        Some((backplate, backplate.height() / 2.0));
+                } else {
+                    root.painter().rect_filled(
+                        backplate,
+                        CornerRadius::same(17),
+                        palette.surface_hover.gamma_multiply(0.62),
+                    );
+                }
+            }
+        }
+    }
     if config {
         draw_navbar_config(root, chrome, actions, &placed, row);
     } else {
@@ -2435,6 +2553,7 @@ fn draw_navbar(
         extras.push(Icon::Arrange);
     }
     let mut add_widget = None;
+    let mut right_limit = right_edge_start;
     if !extras.is_empty() {
         let width = extras.len() as f32 * nav_item_width() + (extras.len() - 1) as f32 * spacing;
         let tray = Rect::from_min_size(
@@ -2444,6 +2563,7 @@ fn draw_navbar(
             ),
             vec2(width, item_size.y),
         );
+        right_limit = tray.left();
         let mut group = root.new_child(
             egui::UiBuilder::new()
                 .max_rect(tray)
@@ -2453,7 +2573,7 @@ fn draw_navbar(
         for icon in extras {
             let response = icons::icon_button(&mut group, icon, NAVBAR_ICON, &palette, true);
             if icon == Icon::Plus {
-                let response = response.on_hover_text("Add a widget");
+                let response = response.on_hover_text(tr("chrome-add-a-widget"));
                 if response.clicked() {
                     let open = Id::new("zervo_navbar_add_widget");
                     let was = root_data_flag(&ctx, open);
@@ -2462,9 +2582,9 @@ fn draw_navbar(
                 add_widget = Some(response.rect);
             } else if response
                 .on_hover_text(if config {
-                    "Done arranging"
+                    tr("chrome-done-arranging")
                 } else {
-                    "Arrange the bar"
+                    tr("chrome-arrange-the-bar")
                 })
                 .clicked()
             {
@@ -2474,15 +2594,26 @@ fn draw_navbar(
         }
     }
 
-    // ── Centre: the address pill, centred on the window rather than on the
-    // space left between the two groups, so it does not drift as they change.
-    let width = navbar_pill_width(root, chrome, actions, row);
-    let pill = Rect::from_center_size(
-        pos2(window.center().x, row.center().y),
-        vec2(width, NAVBAR_PILL_HEIGHT),
+    let pill = navbar_pill_rect(
+        root,
+        chrome,
+        actions,
+        row.center(),
+        left_edge_end + 8.0,
+        right_limit - 8.0,
     );
+    let native_address = chrome.uses_native_glass() && reveal >= 1.0;
+    if native_address {
+        chrome.native_glass.surfaces[NativeGlass::ADDRESS] = Some((pill, pill.height() / 2.0));
+    }
     let mut host = root.new_child(egui::UiBuilder::new().max_rect(pill));
-    draw_address_pill(&mut host, chrome, actions, NAVBAR_PILL_HEIGHT);
+    draw_address_pill(
+        &mut host,
+        chrome,
+        actions,
+        NAVBAR_PILL_HEIGHT,
+        native_address,
+    );
 
     // ── The shelf the extra height uncovers.
     if shelf_open {
@@ -2664,7 +2795,10 @@ fn draw_navbar_config(
         if !held
             && root
                 .interact(close, drag_id.with(("off", slot)), Sense::click())
-                .on_hover_text(format!("Remove {}", item.label()))
+                .on_hover_text(crate::l10n::message(
+                    "chrome-remove-item",
+                    [("item", item.label().into())],
+                ))
                 .clicked()
         {
             actions.push(UiAction::RemoveNavItem(*item));
@@ -2717,9 +2851,9 @@ fn draw_navbar_config(
                 pos2(tray.min.x + 12.0, tray.center().y),
                 Align2::LEFT_CENTER,
                 if hidden.is_empty() {
-                    "Drag to rearrange"
+                    tr("chrome-drag-to-rearrange")
                 } else {
-                    "Drag to rearrange, or add back:"
+                    tr("chrome-drag-to-rearrange-or-add-back")
                 },
                 FontId::proportional(12.0),
                 palette.text_muted,
@@ -2795,21 +2929,28 @@ fn draw_nav_item(
         _ => true,
     };
     let response = icons::icon_button(&mut host, item.icon(), NAVBAR_ICON, &palette, enabled);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            response.enabled() && enabled,
+            item.label(),
+        )
+    });
     let active = chrome.downloads.active_count();
     let response = match item {
-        NavItem::Sidebar => response.on_hover_text("Show sidebar"),
-        NavItem::Reload => response.on_hover_text("Reload (⌘R)"),
-        NavItem::Settings => response.on_hover_text("Settings (⌘,)"),
-        NavItem::History => response.on_hover_text("History"),
+        NavItem::Sidebar => response.on_hover_text(tr("chrome-show-sidebar")),
+        NavItem::Reload => response.on_hover_text(tr("chrome-reload-r")),
+        NavItem::Settings => response.on_hover_text(tr("chrome-settings")),
+        NavItem::History => response.on_hover_text(tr("common-history")),
         NavItem::Extensions => {
-            response.on_hover_text("Extensions — not supported by the engine yet")
+            response.on_hover_text(tr("chrome-extensions-not-supported-by-the-engine-yet"))
         },
         NavItem::Downloads => response.on_hover_text(if active > 0 {
-            format!("Downloads ({active} active)")
+            crate::l10n::message("chrome-downloads-active", [("count", active.into())])
         } else {
-            "Downloads".to_owned()
+            tr("common-downloads").to_owned()
         }),
-        _ => response,
+        _ => response.on_hover_text(item.label()),
     };
     if response.clicked() {
         actions.push(match item {
@@ -2865,9 +3006,23 @@ fn navbar_resize(
     if response.hovered() || response.dragged() {
         root.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
     }
-    response
-        .clone()
-        .on_hover_text("Widgets — click to open, drag to size");
+    let label = if stored > NAVBAR_ROW + 1.0 {
+        tr("chrome-hide-toolbar-widgets")
+    } else {
+        tr("chrome-show-toolbar-widgets")
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
+    });
+    response.clone().on_hover_text(label);
+    if response.has_focus() {
+        icons::paint_focus(
+            root,
+            &chrome.palette,
+            grip.shrink2(vec2(8.0, 0.0)),
+            Tier::Control,
+        );
+    }
     // Drawn whether or not it is hovered: an affordance nobody can see is not
     // an affordance, and there is nothing else to say the widgets are down
     // there.
@@ -2915,48 +3070,71 @@ fn root_data_flag(ctx: &egui::Context, id: Id) -> bool {
     ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false)
 }
 
-/// The pill's width, draggable by either edge. Dragging one edge moves the
-/// other by the same amount, since the pill stays centred.
-fn navbar_pill_width(
+/// Keep the pill centred wherever the toolbar groups leave enough room.
+fn navbar_pill_rect(
     root: &mut Ui,
     chrome: &mut ChromeContext,
     actions: &mut Vec<UiAction>,
-    strip: Rect,
-) -> f32 {
+    centre: egui::Pos2,
+    left: f32,
+    right: f32,
+) -> Rect {
     let stored = chrome
         .settings
         .address_pill_width
         .clamp(ADDRESS_PILL_MIN_WIDTH, ADDRESS_PILL_MAX_WIDTH);
-    // Never let it grow into the button groups.
-    let room = (strip.width() - 2.0 * (TRAFFIC_LIGHTS + 170.0)).max(ADDRESS_PILL_MIN_WIDTH);
-    let mut width = stored.min(room);
+    let right = right.max(left + 1.0);
+    let max_width = (right - left).min(ADDRESS_PILL_MAX_WIDTH);
+    let base_width = stored.min(max_width);
+    let id = Id::new("zervo_pill_resize");
+    let mut width = root
+        .ctx()
+        .data(|data| data.get_temp::<f32>(id))
+        .unwrap_or(base_width)
+        .min(max_width);
+    let pill_rect = |width: f32| {
+        let half = width / 2.0;
+        let min_x = left + half;
+        let x = centre.x.clamp(min_x, (right - half).max(min_x));
+        Rect::from_center_size(pos2(x, centre.y), vec2(width, NAVBAR_PILL_HEIGHT))
+    };
 
-    let centre = strip.center();
-    for (index, side) in [(-1.0_f32), 1.0].iter().enumerate() {
-        let edge = Rect::from_center_size(
-            pos2(centre.x + side * width / 2.0, centre.y),
-            vec2(10.0, NAVBAR_PILL_HEIGHT),
-        );
-        let response = root.interact(
-            edge,
-            Id::new("zervo_pill_resize").with(index),
-            Sense::drag(),
-        );
-        if response.hovered() || response.dragged() {
-            root.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
-        }
-        if response.dragged() {
-            width = (width + side * response.drag_delta().x * 2.0)
-                .clamp(ADDRESS_PILL_MIN_WIDTH, ADDRESS_PILL_MAX_WIDTH.min(room));
+    if max_width > ADDRESS_PILL_MIN_WIDTH && root.is_enabled() {
+        let pill = pill_rect(width);
+        for (index, side) in [-1.0_f32, 1.0].into_iter().enumerate() {
+            let edge = Rect::from_center_size(
+                pos2(pill.center().x + side * width / 2.0, centre.y),
+                vec2(10.0, NAVBAR_PILL_HEIGHT),
+            );
+            let response = root
+                .interact(edge, id.with(index), Sense::drag())
+                .on_hover_cursor(CursorIcon::ResizeHorizontal);
+            if let Some(delta) = response.total_drag_delta()
+                && delta.x != 0.0
+            {
+                width =
+                    (base_width + side * delta.x * 2.0).clamp(ADDRESS_PILL_MIN_WIDTH, max_width);
+                root.ctx().data_mut(|data| data.insert_temp(id, width));
+                root.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+            }
+            if response.drag_stopped()
+                && let Some(dragged_width) = root.ctx().data_mut(|data| data.remove_temp(id))
+            {
+                chrome.settings.address_pill_width = dragged_width;
+                actions.push(UiAction::PersistSettings);
+            }
         }
     }
 
-    // Written once the drag ends rather than every frame of it.
-    if !root.ctx().egui_is_using_pointer() && (width - stored).abs() > 0.5 {
-        chrome.settings.address_pill_width = width;
-        actions.push(UiAction::PersistSettings);
+    if !root.input(|input| input.pointer.primary_down())
+        && root
+            .ctx()
+            .data_mut(|data| data.remove_temp::<f32>(id))
+            .is_some()
+    {
+        width = base_width;
     }
-    width
+    pill_rect(width)
 }
 
 // ── Autohide reveal ────────────────────────────────────────────────────────
@@ -3159,19 +3337,14 @@ fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
     // Never pull it away mid-gesture: a held button, a drag, or an open menu
     // keeps it up even if the pointer strays outside.
     let busy = state.open && (ctx.egui_is_using_pointer() || egui::Popup::is_any_open(ctx));
-    // ⌘L focuses the address pill, which lives in the sidebar — so reveal it,
-    // or the shortcut does nothing and the pending focus fires later, at
-    // whatever moment the pointer next happens to brush the edge.
-    //
-    // Except in full-page mode, where the pill is floating over the page and
-    // does not need the panel opened to be typed into. Revealing there would
-    // be the sidebar barging in on a shortcut that has nothing to do with it.
-    let owns_address = chrome.settings.layout != crate::settings::Layout::FullPage;
+    // The top bar has its own address field. In full-page mode the sidebar
+    // only owns the field while it is already revealed.
+    let owns_address = chrome.settings.layout == crate::settings::Layout::FullPage && visible;
     let wanted = crate::shot::peek_forced(ctx.cumulative_pass_nr())
         || in_trigger
         || in_panel
         || busy
-        || (owns_address && (chrome.browser.editing_address || chrome.browser.focus_address));
+        || (owns_address && chrome.browser.editing_address);
 
     if wanted {
         state.linger_until = now + PEEK_LINGER;
@@ -3230,7 +3403,7 @@ fn draw_sidebar_peek(
             //
             // Solid keeps the old behaviour, because under Solid there is no
             // blurred copy and opaque is the whole point of the setting.
-            if chrome.palette.translucency == theme::Translucency::Frosted {
+            if chrome.palette.translucency.is_translucent() {
                 // The chrome's own tint first, so the panel is the chrome
                 // rather than a menu that happens to be sidebar-shaped, and
                 // the glass on top of it.
@@ -3406,7 +3579,7 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
             crate::dashboard::draw_grabber(ui.painter(), &chrome.palette, grip, emphasis);
             response
                 .clone()
-                .on_hover_text("Widgets — click to open, drag to size");
+                .on_hover_text(tr("chrome-widgets-click-to-open-drag-to-size"));
 
             let mut height = open;
             if response.dragged() {
@@ -3483,7 +3656,7 @@ fn draw_floating_pill(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut V
             // follow whatever it is sitting on rather than the theme.
             let restore = chrome.palette;
             chrome.palette = chrome.palette.reaching(PANEL_REACH).over(rect);
-            draw_address_pill(&mut host, chrome, actions, HEIGHT);
+            draw_address_pill(&mut host, chrome, actions, HEIGHT, false);
             chrome.palette = restore;
             ui.advance_cursor_after_rect(rect);
         });
@@ -3572,6 +3745,7 @@ fn draw_address_pill(
     chrome: &mut ChromeContext,
     actions: &mut Vec<UiAction>,
     height: f32,
+    native: bool,
 ) {
     let palette = chrome.palette;
     let ctx = ui.ctx().clone();
@@ -3581,12 +3755,12 @@ fn draw_address_pill(
         .map(|tab| tab.loading)
         .unwrap_or_default();
 
-    let pill_id = Id::new("zervo_address_pill");
-    // Focus is the slowest transition — the glow should bloom, not pop.
+    // Outgoing chrome can still be painted while the new layout is interactive.
+    let pill_id = ui.id().with("zervo_address_pill");
     let focus_t = glass::ease_out(ui.ctx().animate_bool_with_time(
         pill_id,
         chrome.browser.editing_address,
-        0.22,
+        palette.material.animation,
     ));
 
     let (pill_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
@@ -3597,20 +3771,27 @@ fn draw_address_pill(
     // scale: at Candy's 1.35 every surface around it got rounder and the pill
     // stayed at eleven points, because a fraction of a height knows nothing
     // about the ladder.
-    let radius = f32::from(palette.radius(Tier::Panel)).min(height * 0.5) as u8;
-    glass::paint(
-        ui.painter(),
-        pill_rect,
-        &palette,
-        Glass::new(radius)
-            // 5a's address pill is lit whether or not it is focused: `0 0 0 1px
-            // accent(.28), 0 0 20px accent(.3)`. Focus adds to that rather than
-            // being the only moment the accent appears — on an arrangement that
-            // lights nothing, both of these come out at nothing and the focus
-            // ring below is the whole of it, as it always was.
-            .ring(palette.accent_ring(0.28 + 0.5 * focus_t))
-            .glow((0.55 + 0.45 * focus_t).min(1.0)),
-    );
+    let radius = if native {
+        (height * 0.5) as u8
+    } else {
+        f32::from(palette.radius(Tier::Panel)).min(height * 0.5) as u8
+    };
+    if !native {
+        let material = Glass::new(radius);
+        let material = if palette.translucency == theme::Translucency::LiquidGlass {
+            material.no_shadow()
+        } else {
+            material
+                // 5a's address pill is lit whether or not it is focused: `0 0 0 1px
+                // accent(.28), 0 0 20px accent(.3)`. Focus adds to that rather than
+                // being the only moment the accent appears — on an arrangement that
+                // lights nothing, both of these come out at nothing and the focus
+                // ring below is the whole of it, as it always was.
+                .ring(palette.accent_ring(0.28 + 0.5 * focus_t))
+                .glow(0.55 + 0.45 * focus_t)
+        };
+        glass::paint(ui.painter(), pill_rect, &palette, material);
+    }
     if focus_t > 0.0 {
         ui.painter().rect_stroke(
             pill_rect,
@@ -3631,7 +3812,9 @@ fn draw_address_pill(
     // What the leading icon says about the connection. While typing it goes
     // back to a magnifying glass, since it is describing the box and not a
     // page any more.
-    let (icon, tint, hint) = if chrome.browser.editing_address {
+    let (icon, tint, hint) = if chrome.browser.editing_address
+        || chrome.browser.address_bar.is_empty()
+    {
         (Icon::Search, palette.text_muted, "")
     } else {
         let tab = chrome.browser.active_tab();
@@ -3641,23 +3824,35 @@ fn draw_address_pill(
         // the opposite of the truth.
         if let Some(crate::state::TabKind::Trouble(trouble)) = tab.map(|tab| tab.kind) {
             let hint: &str = match trouble {
-                crate::trouble::Trouble::Unsupported => "The engine cannot render this page",
-                crate::trouble::Trouble::Offline => "No network",
-                crate::trouble::Trouble::Certificate => "The certificate does not match this site",
-                crate::trouble::Trouble::NotFound => "Nothing answered at this address",
-                crate::trouble::Trouble::Crashed => "The engine fell over on this page",
+                crate::trouble::Trouble::Unsupported => {
+                    tr("chrome-the-engine-cannot-render-this-page")
+                },
+                crate::trouble::Trouble::Offline => tr("common-offline"),
+                crate::trouble::Trouble::Certificate => {
+                    tr("chrome-the-certificate-does-not-match-this-site")
+                },
+                crate::trouble::Trouble::NotFound => tr("chrome-nothing-answered-at-this-address"),
+                crate::trouble::Trouble::Crashed => tr("chrome-the-engine-fell-over-on-this-page"),
             };
             (trouble.icon(), trouble.badge_tint(&palette), hint)
         } else {
             let url = tab.map(|tab| tab.url.as_str());
             match url.map(|url| url.split(':').next().unwrap_or("")) {
-                Some("https") => (Icon::Lock, palette.text_muted, "Encrypted connection"),
+                Some("https") => (
+                    Icon::Lock,
+                    palette.text_muted,
+                    tr("chrome-encrypted-connection"),
+                ),
                 Some("http") => (
                     Icon::Warning,
                     theme::mix(palette.text_muted, palette.warning, 0.75),
-                    "Not encrypted — anyone on the network can read this",
+                    tr("chrome-not-encrypted-anyone-on-the-network-can"),
                 ),
-                Some("file") => (Icon::Folder, palette.text_muted, "A file on this computer"),
+                Some("file") => (
+                    Icon::Folder,
+                    palette.text_muted,
+                    tr("chrome-a-file-on-this-computer"),
+                ),
                 _ => (Icon::Globe, palette.text_muted, ""),
             }
         }
@@ -3694,6 +3889,14 @@ fn draw_address_pill(
             &palette,
             true,
         );
+        let label = if chrome.notifications.open {
+            tr("chrome-hide-notifications").to_owned()
+        } else {
+            crate::l10n::message("chrome-notification-count", [("count", count.into())])
+        };
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &label)
+        });
         // Where the toasts grow from. Stashed rather than returned because the
         // stack is drawn much later, over the content, by which point this Ui
         // is long gone.
@@ -3724,16 +3927,7 @@ fn draw_address_pill(
             );
         }
 
-        if response
-            .on_hover_text(if chrome.notifications.open {
-                "Hide notifications"
-            } else if count == 1 {
-                "1 notification"
-            } else {
-                "Notifications"
-            })
-            .clicked()
-        {
+        if response.on_hover_text(label).clicked() {
             actions.push(UiAction::ToggleNotifications);
         }
     } else {
@@ -3742,37 +3936,56 @@ fn draw_address_pill(
         ctx.data_mut(|data| data.remove::<Rect>(Id::new(BELL_ANCHOR)));
     }
 
-    let hint = format!("Search with {}…", chrome.settings.search_engine.label());
-    // The spinner slot is always reserved so text never jumps when a load
-    // starts or finishes.
+    // Keep a slot for the spinner so the text stays put while a page loads.
+    let width = (inner.available_width()
+        - if chrome.settings.appearance.pill_progress {
+            0.0
+        } else {
+            24.0
+        })
+    .max(1.0);
+    let hint = if width >= 176.0 {
+        tr("chrome-search-or-enter-an-address")
+    } else {
+        tr("chrome-search-or-url")
+    };
+    inner.visuals_mut().weak_text_color = Some(palette.text_muted);
     let editor = TextEdit::singleline(&mut chrome.browser.address_bar)
+        .id(pill_id.with("editor"))
         .frame(Frame::NONE)
         .font(FontId::proportional(14.0))
         .text_color(palette.text)
         .vertical_align(egui::Align::Center)
-        .hint_text(RichText::new(hint).color(palette.text_muted))
-        // 24pt reserves the spinner's slot, so the text never jumps when a
-        // load starts or finishes — unless the light is in the glass instead,
-        // in which case there is no slot and the text gets the width back.
-        .desired_width(
-            inner.available_width()
-                - if chrome.settings.appearance.pill_progress {
-                    0.0
-                } else {
-                    24.0
-                },
-        );
-    let response = inner.add(editor);
-    if chrome.browser.focus_address {
+        .hint_text(hint)
+        .desired_width(width);
+    let mut output = editor.show(&mut inner);
+    let response = output.response;
+    if chrome.browser.focus_address && inner.is_enabled() {
         response.request_focus();
+        let end = egui::text::CCursor::new(chrome.browser.address_bar.chars().count());
+        output
+            .state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                end,
+            )));
+        output.state.store(&ctx, response.id);
         chrome.browser.focus_address = false;
+        ctx.request_repaint();
     }
-    chrome.browser.editing_address = response.has_focus();
-    if response.lost_focus() && inner.input(|input| input.key_pressed(Key::Enter)) {
-        actions.push(UiAction::Navigate(normalize_url(
-            &chrome.browser.address_bar,
-            chrome.settings.search_engine,
-        )));
+    if inner.is_enabled() {
+        chrome.browser.editing_address = response.has_focus();
+    }
+    if inner.is_enabled() && response.lost_focus() {
+        let address = chrome.browser.address_bar.trim();
+        if !address.is_empty() && inner.input(|input| input.key_pressed(Key::Enter)) {
+            actions.push(UiAction::Navigate(normalize_url(
+                address,
+                chrome.settings.search_engine,
+            )));
+        }
+        ctx.request_repaint();
     }
     if loading {
         if chrome.settings.appearance.pill_progress {
@@ -3916,11 +4129,11 @@ fn draw_essentials_grid(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut V
                     .on_hover_cursor(CursorIcon::PointingHand)
                     .on_hover_text(&essential.title);
                 response.clone().context_menu(|ui| {
-                    if ui.button("Unpin").clicked() {
+                    if ui.button(tr("chrome-unpin")).clicked() {
                         actions.push(UiAction::TogglePin(essential.tab_id));
                         ui.close();
                     }
-                    if ui.button("Close").clicked() {
+                    if ui.button(tr("common-close")).clicked() {
                         actions.push(UiAction::CloseTab(essential.tab_id));
                         ui.close();
                     }
@@ -3978,11 +4191,8 @@ fn workspace_header(
         );
     }
     let colour = theme::workspace_color_from(index, first);
-    // 5a's active space is a lit row, not a bolder label: `rgba(w,.26)` behind
-    // it, a white inset along the top and `0 0 16px rgba(w,.32)` around it.
-    // Which space you are in is the one thing that artboard is about, and a
-    // dot four points across was the whole of how it was said.
-    if active {
+    let glass_chrome = palette.translucency == theme::Translucency::LiquidGlass;
+    if active && !glass_chrome {
         glass::paint(
             ui.painter(),
             rect,
@@ -4066,32 +4276,49 @@ fn workspace_header(
         return rect;
     }
 
-    ui.painter().text(
-        pos2(rect.min.x + 26.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        name,
-        FontId::proportional(13.0),
-        if active {
-            palette.text
-        } else {
-            palette.text_muted
-        },
-    );
+    let mut right = rect.right() - 10.0;
     if show_count {
-        ui.painter().text(
-            pos2(rect.max.x - 10.0, rect.center().y),
+        let count = ui.painter().text(
+            pos2(right, rect.center().y),
             Align2::RIGHT_CENTER,
             tab_count.to_string(),
             FontId::proportional(11.5),
             palette.text_muted,
         );
+        right = count.left() - 8.0;
     }
+    let left = rect.left() + 26.0;
+    let ink = if active {
+        palette.text
+    } else {
+        palette.text_muted
+    };
+    let mut label =
+        egui::text::LayoutJob::simple_singleline(name.to_owned(), FontId::proportional(13.0), ink);
+    label.wrap = egui::text::TextWrapping::truncate_at_width((right - left).max(0.0));
+    let label = ui.painter().layout_job(label);
+    ui.painter().galley(
+        pos2(left, rect.center().y - label.size().y / 2.0),
+        label,
+        ink,
+    );
     // Renaming any workspace, not only a freshly made one.
     response.clone().context_menu(|ui| {
-        if ui.button("Rename").clicked() {
+        if ui.button(tr("common-rename")).clicked() {
             *rename = Some((index, WorkspaceName::Typing(name.to_owned())));
             ui.close();
         }
+    });
+    if response.has_focus() {
+        icons::paint_focus(ui, palette, rect, Tier::Row);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            response.enabled(),
+            active,
+            name,
+        )
     });
     response.on_hover_cursor(CursorIcon::PointingHand);
     rect
@@ -4184,21 +4411,29 @@ pub(crate) fn limitation(ui: &mut Ui, palette: &Palette, icon: Icon, text: &str)
     );
 }
 
-/// The accent-tinted glass that says which row you are on.
-///
-/// One recipe, because there are two callers now: the row painting its own,
-/// and the single highlight that travels between rows instead. Two copies of
-/// it would be two selections that could stop looking alike.
-fn selection_glass(palette: &Palette, strength: f32) -> Glass {
-    Glass::tier(Tier::Row)
-        // 5a's active tab is `accent(.34)` with `0 0 22px accent(.42)` around
-        // it — a lit row, not a slightly darker one. At 0.8 of a 0.42 fill the
-        // accent arrived at about a seventh of what the study asks for, and the
-        // selected tab read as the same glass as the address pill above it.
-        .strength(strength * 0.95)
-        .glow(strength * 0.75)
-        .tint(palette.active)
-        .no_shadow()
+/// Share the tab selection between the static row and the travelling highlight.
+fn selection_shapes(rect: Rect, palette: &Palette, strength: f32) -> Vec<Shape> {
+    if palette.translucency == theme::Translucency::LiquidGlass {
+        let marker =
+            Rect::from_center_size(pos2(rect.left() + 4.0, rect.center().y), vec2(2.0, 14.0));
+        return vec![
+            Shape::rect_filled(
+                rect,
+                palette.corner(Tier::Row),
+                palette.text.gamma_multiply(strength * 0.16),
+            ),
+            Shape::rect_filled(marker, 1, palette.accent.gamma_multiply(strength)),
+        ];
+    }
+    glass::shapes(
+        rect,
+        palette,
+        Glass::tier(Tier::Row)
+            .strength(strength * 0.95)
+            .glow(strength * 0.75)
+            .tint(palette.active)
+            .no_shadow(),
+    )
 }
 
 /// What stands in for the favicon a page with no webview will never have.
@@ -4235,7 +4470,7 @@ fn reloadable(kind: TabKind) -> bool {
 /// crossfades to it on the row's own clock, so the text does not change colour
 /// in a step halfway through the row arriving.
 fn row_ink(palette: &Palette, select_t: f32) -> (Color32, Color32) {
-    if select_t <= 0.0 {
+    if select_t <= 0.0 || palette.translucency == theme::Translucency::LiquidGlass {
         return (palette.text, palette.text_muted);
     }
     let (text, muted) = palette.ink_on(palette.active);
@@ -4366,6 +4601,21 @@ fn tab_row(
         ui.id().with(("tab_close", style.tab_id)),
         Sense::click(),
     );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            response.enabled(),
+            style.selected,
+            style.title,
+        )
+    });
+    close_response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            close_response.enabled(),
+            crate::l10n::message("chrome-close-tab", [("title", style.title.into())]),
+        )
+    });
 
     let hovered = response.hovered() || close_response.hovered();
     // Keyed by tab identity, not layout position, so closing a tab doesn't
@@ -4395,7 +4645,10 @@ fn tab_row(
         );
     }
     if select_t > 0.0 && !style.liquid {
-        glass::paint(painter, rect, palette, selection_glass(palette, select_t));
+        painter.extend(selection_shapes(rect, palette, select_t));
+    }
+    if response.has_focus() {
+        icons::paint_focus(ui, palette, rect, Tier::Row);
     }
 
     // Favicon slot: loading spinner arc, gear, favicon, or globe placeholder.
@@ -4441,15 +4694,22 @@ fn tab_row(
     } else {
         ink_muted
     };
-    painter.text(
-        pos2(rect.min.x + 34.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        truncate(style.title, 24),
+    let title_x = rect.min.x + 34.0;
+    let title_width = (close_rect.left() - title_x - 4.0).max(0.0);
+    let mut title = egui::text::LayoutJob::simple_singleline(
+        style.title.to_owned(),
         FontId::proportional(13.5),
         text_color,
     );
+    title.wrap = egui::text::TextWrapping::truncate_at_width(title_width);
+    let title = painter.layout_job(title);
+    painter.galley(
+        pos2(title_x, rect.center().y - title.size().y / 2.0),
+        title,
+        text_color,
+    );
 
-    if hovered || style.selected || style.always_show_close {
+    if hovered || style.selected || style.always_show_close || close_response.has_focus() {
         if close_response.hovered() {
             painter.rect_filled(
                 close_rect,
@@ -4468,15 +4728,18 @@ fn tab_row(
                 ink_muted
             },
         );
+        if close_response.has_focus() {
+            icons::paint_focus(ui, palette, close_rect, Tier::Control);
+        }
     }
 
     if !style.is_settings {
         response.clone().context_menu(|ui| {
-            if ui.button("Pin as Essential").clicked() {
+            if ui.button(tr("chrome-pin-as-essential")).clicked() {
                 actions.push(UiAction::TogglePin(style.tab_id));
                 ui.close();
             }
-            if ui.button("Close").clicked() {
+            if ui.button(tr("common-close")).clicked() {
                 actions.push(UiAction::CloseTab(style.tab_id));
                 ui.close();
             }
@@ -4577,7 +4840,7 @@ fn draw_downloads_page(
                     ui.add_space(16.0);
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("Downloads")
+                            RichText::new(tr("common-downloads"))
                                 .size(21.0)
                                 .strong()
                                 .color(palette.text),
@@ -4585,7 +4848,7 @@ fn draw_downloads_page(
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if !chrome.downloads.items.is_empty()
                                 && icons::icon_button(ui, Icon::Trash, 15.0, &palette, true)
-                                    .on_hover_text("Clear finished")
+                                    .on_hover_text(tr("chrome-clear-finished"))
                                     .clicked()
                             {
                                 actions.push(UiAction::ClearDownloads);
@@ -4608,9 +4871,7 @@ fn draw_downloads_page(
                             ui,
                             &palette,
                             Icon::Info,
-                            "Built without engine-downloads. Responses the engine cannot \
-                             render — an archive, an installer — are not offered for saving, \
-                             so they will not appear here.",
+                            tr("chrome-built-without-engine-downloads-responses-the-engine"),
                         );
                         ui.add_space(14.0);
                     }
@@ -4627,12 +4888,12 @@ fn draw_downloads_page(
                                 palette.text_muted.gamma_multiply(0.6),
                             );
                             ui.label(
-                                RichText::new("No downloads yet")
+                                RichText::new(tr("chrome-no-downloads-yet"))
                                     .size(14.0)
                                     .color(palette.text_muted),
                             );
                             ui.label(
-                                RichText::new("Files you download will appear here.")
+                                RichText::new(tr("chrome-files-you-download-will-appear-here"))
                                     .size(11.5)
                                     .color(palette.text_muted),
                             );
@@ -4682,8 +4943,11 @@ fn draw_downloads_page(
                                 None => format_bytes(item.received),
                             },
                             DownloadState::Complete => format_bytes(item.received),
-                            DownloadState::Cancelled => "Cancelled".to_owned(),
-                            DownloadState::Failed(error) => format!("Failed — {error}"),
+                            DownloadState::Cancelled => tr("chrome-cancelled").to_owned(),
+                            DownloadState::Failed(error) => crate::l10n::message(
+                                "chrome-download-failed",
+                                [("error", error.as_str().into())],
+                            ),
                         };
                         ui.painter().text(
                             pos2(rect.min.x + 48.0, rect.min.y + 40.0),
@@ -4751,7 +5015,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Cancel")
+                                .on_hover_text(tr("common-cancel"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::CancelDownload(item.id));
@@ -4765,7 +5029,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Reveal in Finder")
+                                .on_hover_text(tr("chrome-reveal-in-finder"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::RevealDownload(item.id));
@@ -4777,7 +5041,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Open")
+                                .on_hover_text(tr("common-open"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::OpenDownload(item.id));
@@ -4791,7 +5055,7 @@ fn draw_downloads_page(
                                     &palette,
                                     true,
                                 )
-                                .on_hover_text("Remove")
+                                .on_hover_text(tr("common-remove"))
                                 .clicked()
                                 {
                                     actions.push(UiAction::RemoveDownload(item.id));
@@ -5010,7 +5274,7 @@ fn draw_toasts(
                     painter.text(
                         rect.center(),
                         Align2::CENTER_CENTER,
-                        "Clear all",
+                        tr("chrome-clear-all"),
                         FontId::proportional(11.5),
                         theme::mix(palette.text_muted, palette.text, lit),
                     );

@@ -2,6 +2,7 @@
 //! transient state of the chrome (address bar text, which tab is active).
 //! Engine state (the `WebView` for each tab) is attached by `main.rs`.
 
+use crate::l10n::text as tr;
 use servo::WebView;
 
 pub type TabId = u64;
@@ -27,6 +28,19 @@ pub enum TabKind {
     /// `find_or_create_internal` compares kinds, and the payload is part of
     /// that comparison.
     Trouble(crate::trouble::Trouble),
+}
+
+impl TabKind {
+    fn internal_title(self) -> Option<&'static str> {
+        match self {
+            Self::Settings => Some(tr("common-settings")),
+            Self::History => Some(tr("common-history")),
+            Self::Downloads => Some(tr("common-downloads")),
+            Self::NewTab => Some(tr("common-new-tab")),
+            Self::Trouble(trouble) => Some(trouble.title()),
+            Self::Web => None,
+        }
+    }
 }
 
 pub struct Tab {
@@ -65,7 +79,10 @@ impl Tab {
             id,
             kind: TabKind::Settings,
             pinned: false,
-            title: "Settings".to_owned(),
+            title: TabKind::Settings
+                .internal_title()
+                .unwrap_or_default()
+                .to_owned(),
             url: "zervo://settings".to_owned(),
             webview: None,
             loading: false,
@@ -79,7 +96,10 @@ impl Tab {
             id,
             kind: TabKind::History,
             pinned: false,
-            title: "History".to_owned(),
+            title: TabKind::History
+                .internal_title()
+                .unwrap_or_default()
+                .to_owned(),
             url: "zervo://history".to_owned(),
             webview: None,
             loading: false,
@@ -93,7 +113,10 @@ impl Tab {
             id,
             kind: TabKind::Downloads,
             pinned: false,
-            title: "Downloads".to_owned(),
+            title: TabKind::Downloads
+                .internal_title()
+                .unwrap_or_default()
+                .to_owned(),
             url: "zervo://downloads".to_owned(),
             webview: None,
             loading: false,
@@ -124,7 +147,10 @@ impl Tab {
             id,
             kind: TabKind::NewTab,
             pinned: false,
-            title: "New Tab".to_owned(),
+            title: TabKind::NewTab
+                .internal_title()
+                .unwrap_or_default()
+                .to_owned(),
             url: "zervo://newtab".to_owned(),
             webview: None,
             loading: false,
@@ -135,7 +161,7 @@ impl Tab {
 }
 
 /// Categories in the settings page's left-hand navigation.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     Appearance,
     General,
@@ -155,11 +181,11 @@ impl SettingsSection {
 
     pub fn label(&self) -> &'static str {
         match self {
-            SettingsSection::Appearance => "Appearance",
-            SettingsSection::General => "General",
-            SettingsSection::Layout => "Layout",
-            SettingsSection::Passwords => "Passwords",
-            SettingsSection::About => "About",
+            SettingsSection::Appearance => tr("common-appearance"),
+            SettingsSection::General => tr("common-general"),
+            SettingsSection::Layout => tr("common-layout"),
+            SettingsSection::Passwords => tr("common-passwords"),
+            SettingsSection::About => tr("common-about"),
         }
     }
 }
@@ -204,10 +230,22 @@ pub struct BrowserState {
 }
 
 impl BrowserState {
+    pub fn refresh_internal_titles(&mut self) {
+        for tab in self
+            .workspaces
+            .iter_mut()
+            .flat_map(|workspace| &mut workspace.tabs)
+        {
+            if let Some(title) = tab.kind.internal_title() {
+                tab.title = title.to_owned();
+            }
+        }
+    }
+
     pub fn new(initial_url: &str) -> Self {
         let mut state = Self {
             workspaces: vec![Workspace {
-                name: "Home".to_owned(),
+                name: tr("common-home").to_owned(),
                 tabs: Vec::new(),
             }],
             active_workspace: 0,

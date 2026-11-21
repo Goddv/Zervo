@@ -21,7 +21,7 @@ use crate::dashboard::Media;
 use crate::keyboard::CMD_OR_CONTROL;
 use crate::library::Library;
 use crate::passwords::Vault;
-use crate::state::{BrowserState, TabId};
+use crate::state::{BrowserState, TabId, TabKind};
 
 /// Engine-driven download traffic, queued for the UI thread.
 #[cfg(feature = "engine-downloads")]
@@ -264,8 +264,7 @@ impl AppState {
         }
     }
 
-    /// Zervo tab switch: show + focus the target, hide + blur + throttle
-    /// every other webview (hidden tabs drop out of the WebRender scene).
+    /// Show the selected tab and hide the others. Servo throttles hidden views.
     pub fn activate_tab(&self, tab_id: TabId) {
         let mut browser = self.browser.borrow_mut();
         browser.active_tab = Some(tab_id);
@@ -274,14 +273,12 @@ impl AppState {
                 let Some(webview) = &tab.webview else {
                     continue;
                 };
-                if tab.id == tab_id {
+                let active = tab.id == tab_id;
+                webview.set_focused(active && self.window.has_focus());
+                if active {
                     webview.show();
-                    webview.focus();
-                    webview.set_throttled(false);
                 } else {
                     webview.hide();
-                    webview.blur();
-                    webview.set_throttled(true);
                 }
             }
         }
@@ -357,10 +354,13 @@ impl AppState {
                 tab.can_go_forward = webview.can_go_forward();
             }
         }
-        // The address bar mirrors the active tab (web or internal page).
-        let address = browser.active_tab().map(|tab| tab.url.clone());
-        if let (false, Some(address)) = (editing_address, address) {
-            browser.address_bar = address;
+        // Leave the new-tab field empty so it shows the search hint.
+        if !editing_address {
+            browser.address_bar = browser
+                .active_tab()
+                .filter(|tab| tab.kind != TabKind::NewTab)
+                .map(|tab| tab.url.clone())
+                .unwrap_or_default();
         }
 
         // Keep the OS window title in sync with the active page.

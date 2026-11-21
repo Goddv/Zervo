@@ -22,10 +22,11 @@ Each script takes `--help`.
 | --- | --- | --- |
 | `Zervo-<v>-arm64.dmg` | macOS 15, Apple Silicon | macOS 11 and later, Apple Silicon |
 | `Zervo-<v>-x86_64.dmg` | macOS 15, Intel | macOS 11 and later, Intel |
-| `zervo_<v>_amd64.deb` | Ubuntu 26.04 | Ubuntu 26.04 and later |
+| `zervo_<v>_amd64.deb` | Ubuntu 24.04 | Ubuntu 24.04 or Debian 13 and compatible distributions |
 | `zervo-<v>-1.fc44.x86_64.rpm` | Fedora 44 | Fedora 44 |
-| `Zervo-<v>-x86_64.AppImage` (+ `.zsync`) | Ubuntu 22.04 | any glibc 2.35 or newer |
-| `zervo-<v>-x86_64-linux-gnu.tar.gz` | Ubuntu 26.04 | anything the `.deb` runs on, unpacked anywhere |
+| `Zervo-<v>-x86_64.AppImage` (+ `.zsync`) | Ubuntu 22.04 | glibc 2.35+ and compatible host graphics and GStreamer libraries |
+| `Zervo-<v>-x86_64.flatpak` | Ubuntu 22.04 binary, GNOME 50 runtime | x86_64 Linux with Flatpak |
+| `zervo-<v>-x86_64-linux-gnu.tar.gz` | Ubuntu 24.04 | anything the `.deb` runs on, unpacked anywhere |
 | `Zervo-<v>-windows-x64.zip`, `-setup.exe` | Windows Server 2025 | Windows 10 1809 and later, x64 and ARM64 under Prism |
 | `zervo-aur-packages.tar.gz` | — | `PKGBUILD` + `.SRCINFO` for the AUR |
 | `SHA256SUMS` | — | every file above |
@@ -34,20 +35,9 @@ Everything except macOS is x86_64. There is no technical obstacle to arm64 on
 Linux — the runners are generally available and free — but nobody is asking for
 it, and each one is another hour of engine build.
 
-**The `.deb` requires Ubuntu 26.04 or newer, and that is the trade it makes.**
-glibc runs old binaries on new systems and never the reverse, so a package
-built on 26.04 acquires a `libc6 (>= 2.43)` dependency that 24.04 cannot
-satisfy. Building on the older LTS instead would cover both — it is the usual
-advice — but only one `.deb` is built, and it is built on the release Ubuntu
-currently ships. Anyone older is covered by the AppImage, which is built
-against glibc 2.35 precisely so that it reaches back further than any distro
-package can.
-
-Two things about that runner are worth knowing. `ubuntu-26.04` is **public
-preview**: GitHub excludes it from its service level agreement and warns about
-capacity, and it is the one runner a release artefact now depends on. And its
-toolchain is aggressive — CMake 4, GCC 15, clang 21 — which has already broken
-this build once (see below).
+The `.deb` links against Ubuntu 24.04 libraries, which keeps its glibc
+requirement below Debian 13’s version. The Linux workflow also installs and
+launches the `.deb` and AppImage inside a Debian 13 container.
 
 ---
 
@@ -246,7 +236,8 @@ GStreamer is on 1.28. Zervo cannot get ahead of the engine here.
 ./scripts/package-linux.sh --deb        # on Ubuntu or Debian
 ./scripts/package-linux.sh --rpm        # on Fedora
 ./scripts/package-linux.sh --tarball    # anywhere
-./scripts/package-linux.sh --appimage   # on the oldest glibc you can find
+./scripts/package-linux.sh --appimage   # with the host graphics and media libraries
+./scripts/package-linux.sh --flatpak    # with flatpak-builder and the Flathub remote
 ./scripts/package-linux.sh --pkgbuild   # PKGBUILDs for the AUR
 ./scripts/package-linux.sh --all        # every format this machine can produce
 ```
@@ -293,36 +284,38 @@ compatible and not forwards, so the oldest base still worth supporting reaches
 furthest — and a container outlives the `ubuntu-22.04` runner label, whose
 deprecation starts in September 2026.
 
-Two things are deliberately **not** bundled.
+The AppImage uses the host graphics and display libraries and the system CA certificate bundle. In media builds
+it also uses the host’s GStreamer 1.20+ and GLib as a unit, including the
+host’s plugin scanner and plugins. The packaging script checks the AppDir for
+copies of these libraries before building the image. On Debian-family systems
+with media enabled, install `gstreamer1.0-gl`,
+`gstreamer1.0-plugins-{base,good,bad,ugly}`, and `gstreamer1.0-libav`.
+The linked GL, base, and bad libraries are required to start a media build.
 
-**The graphics and display stack.** `libGL`, `libEGL`, `libGLdispatch`,
-`libglapi`, `libgbm`, `libdrm`, `libX11`, `libxcb` and `libwayland-client` are
-coupled to the host's video driver and its compositor. AppImage's own excludelist
-says so, and the failure is not subtle: a bundled `libwayland-client` against a
-newer host Mesa makes `eglGetDisplay` return `EGL_BAD_PARAMETER`, and the
-browser never draws a frame. `linuxdeploy` applies that excludelist; the script
-then checks that it did, and refuses to produce a file if anything slipped
-through.
+Tagged release AppImages include a `.zsync` file for delta updates. If FUSE is
+unavailable, run the image with `--appimage-extract-and-run`:
 
-**GStreamer.** Servo refuses to bootstrap GStreamer on Linux at all, the
-`linuxdeploy` plugin for it describes itself as experimental, and bundling it
-drags in glib, gio, gobject and `libwayland-client` — precisely the set above.
-Audio and video therefore come from the host's own GStreamer, and
-`GST_PLUGIN_SYSTEM_PATH_1_0` is left alone: pointing it at a directory that does
-not exist disables the host's plugin search and corrupts the user's GStreamer
-registry for *every other application on the machine*.
+```sh
+chmod +x Zervo-<version>-x86_64.AppImage
+./Zervo-<version>-x86_64.AppImage --appimage-extract-and-run
+```
 
-So the AppImage needs `gstreamer1.0-plugins-{base,good,bad,ugly}` and
-`gstreamer1.0-libav` from the distribution for media to play. Everything else
-works without them.
+### The Flatpak
 
-Each AppImage ships with a `.zsync` file beside it, so `AppImageUpdate` and
-`appimaged` can fetch a delta rather than the whole thing.
+Download the `.flatpak` next to the AppImage in GitHub Releases or a preview
+build. The bundle records Flathub as the source for its GNOME 50 runtime.
 
-If an AppImage will not start with *"Cannot mount AppImage, please check your
-FUSE setup"*, run it as `./Zervo-x.y.z-x86_64.AppImage --appimage-extract-and-run`.
-The runtime is statically linked against libfuse3, so there is no `libfuse2` to
-install any more, but it still needs `/dev/fuse` and a setuid `fusermount`.
+```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user ./Zervo-<version>-x86_64.flatpak
+flatpak run app.zervo.Zervo
+```
+
+Flatpak and AppImage reuse the same Linux executable and Cargo features. The
+Flatpak uses the runtime’s graphics and GStreamer libraries and packages
+Zenity for file dialogs. It grants write access to Downloads and uses the
+desktop’s Secret Service for saved passwords. CI tests the installed bundle
+inside its sandbox. The bundle is distributed through GitHub.
 
 ### Arch and the AUR
 
@@ -441,7 +434,7 @@ on, and it will either work or say exactly why not.
 a token that can write one.
 
 ```
-draft ──┬─ linux.yml   (deb, rpm, AppImage, PKGBUILD)
+draft ──┬─ linux.yml   (deb, rpm, AppImage, Flatpak, PKGBUILD)
         ├─ macos.yml   (.dmg ×2: arm64, x86_64)
         ├─ windows.yml (zip + installer)
         └─ source      (git archive)
@@ -450,13 +443,13 @@ draft ──┬─ linux.yml   (deb, rpm, AppImage, PKGBUILD)
                        ├─ publish: SHA256SUMS, provenance, upload, publish
 ```
 
-**A failing job inside a called workflow fails the caller's job**, whatever
-`continue-on-error` says about the matrix leg — and `publish` is guarded on no
-job having failed. So there is no such thing as a non-blocking leg inside
-`linux.yml`: anything in there that can fail can hold up a release. The only
-shape that reliably reports success for a job that did nothing is a gate step
-that every other step is `if:`-conditional on, which is what the Windows arm64
-leg used before it was removed outright.
+A tagged release publishes only after all required platform jobs pass.
+Both portable Linux formats are required and are included in `SHA256SUMS`.
+
+To build current source, open **Actions → Release → Run workflow**, select the
+branch, and leave **tag** blank. Download the packages from that run’s
+**Artifacts** section. This mode creates preview artifacts without creating
+or updating a GitHub Release.
 
 ### When clang moves under you
 

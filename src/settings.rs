@@ -1,6 +1,7 @@
 //! User settings, persisted as JSON in the platform config directory
 //! (`~/Library/Application Support/Zervo/settings.json` on macOS).
 
+use crate::l10n::text as tr;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -68,8 +69,8 @@ impl HaloTint {
 
     pub fn label(self) -> &'static str {
         match self {
-            HaloTint::Accent => "Accent",
-            HaloTint::Chrome => "Chrome",
+            HaloTint::Accent => tr("options-accent"),
+            HaloTint::Chrome => tr("options-chrome"),
         }
     }
 }
@@ -85,8 +86,8 @@ impl AppIcon {
 
     pub fn label(&self) -> &'static str {
         match self {
-            AppIcon::Default => "Default",
-            AppIcon::Transparent => "Transparent",
+            AppIcon::Default => tr("options-default"),
+            AppIcon::Transparent => tr("options-transparent"),
         }
     }
 }
@@ -111,17 +112,17 @@ impl Layout {
 
     pub fn label(self) -> &'static str {
         match self {
-            Layout::Sidebar => "Sidebar",
-            Layout::Bar => "Top bar",
-            Layout::FullPage => "Full page",
+            Layout::Sidebar => tr("common-sidebar"),
+            Layout::Bar => tr("options-top-bar"),
+            Layout::FullPage => tr("options-full-page"),
         }
     }
 
     pub fn note(self) -> &'static str {
         match self {
-            Layout::Sidebar => "Everything in one column.",
-            Layout::Bar => "Address pill centred, tabs hidden.",
-            Layout::FullPage => "Nothing but the page; hover the edge.",
+            Layout::Sidebar => tr("options-everything-in-one-column"),
+            Layout::Bar => tr("options-address-pill-centred-tabs-hidden"),
+            Layout::FullPage => tr("options-nothing-but-the-page-hover-the-edge"),
         }
     }
 
@@ -181,17 +182,15 @@ impl NewTabHome {
 
     pub fn label(self) -> &'static str {
         match self {
-            NewTabHome::Composed => "Composed",
-            NewTabHome::Board => "Board",
+            NewTabHome::Composed => tr("options-composed"),
+            NewTabHome::Board => tr("options-board"),
         }
     }
 
     pub fn note(self) -> &'static str {
         match self {
-            NewTabHome::Composed => {
-                "The clock, the field, and where you left off. The board is one press away."
-            },
-            NewTabHome::Board => "Every card on the grid, to arrange as you like.",
+            NewTabHome::Composed => tr("options-the-clock-the-field-and-where-you"),
+            NewTabHome::Board => tr("options-every-card-on-the-grid-to-arrange"),
         }
     }
 }
@@ -230,14 +229,14 @@ impl NewTabBackground {
 
     pub fn label(&self) -> &'static str {
         match self {
-            NewTabBackground::Photo => "Photo",
-            NewTabBackground::Aurora => "Aurora",
-            NewTabBackground::Waves => "Waves",
-            NewTabBackground::Particles => "Particles",
-            NewTabBackground::Mesh => "Mesh",
-            NewTabBackground::Grid => "Grid",
-            NewTabBackground::Gradient => "Gradient",
-            NewTabBackground::Plain => "Plain",
+            NewTabBackground::Photo => tr("options-photo"),
+            NewTabBackground::Aurora => tr("options-aurora"),
+            NewTabBackground::Waves => tr("options-waves"),
+            NewTabBackground::Particles => tr("options-particles"),
+            NewTabBackground::Mesh => tr("options-mesh"),
+            NewTabBackground::Grid => tr("options-grid"),
+            NewTabBackground::Gradient => tr("options-gradient"),
+            NewTabBackground::Plain => tr("options-plain"),
         }
     }
 
@@ -265,6 +264,8 @@ pub struct Saved {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// BCP 47 locale code. An empty value follows the OS language.
+    pub language: String,
     pub theme: ThemeMode,
     pub accent: AccentColor,
     pub homepage: String,
@@ -407,6 +408,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: String::new(),
             theme: ThemeMode::Auto,
             accent: AccentColor::Lavender,
             homepage: "https://servo.org".to_owned(),
@@ -488,12 +490,23 @@ pub fn load() -> Settings {
     settings
 }
 
-/// Carry across the one field that changed address.
-///
-/// Everything else in [`crate::theme::Appearance`] is new, so `serde(default)`
-/// is enough for it. This one already had a value somebody chose, and losing
-/// it would silently frost a window they had asked to be solid.
+/// Update built-in presets and carry forward older translucency settings.
 fn migrate(settings: &mut Settings) {
+    use crate::theme::{Preset, Translucency};
+
+    if settings.appearance.preset == Some(Preset::LiquidGlass)
+        && settings.appearance.translucency == Translucency::Frosted
+        && settings.appearance.blur == 0.0
+    {
+        settings.appearance = Preset::LiquidGlass.appearance();
+    }
+
+    // The engine has no extension commands. Accept older toolbar layouts
+    // without keeping a permanently disabled control among their actions.
+    for items in [&mut settings.navbar_left, &mut settings.navbar_right] {
+        items.retain(|item| *item != crate::ui::NavItem::Extensions);
+    }
+
     let Some(translucency) = settings.legacy_translucency.take() else {
         return;
     };
@@ -538,6 +551,30 @@ mod tests {
                 settings.appearance.preset.is_none(),
                 custom,
                 "{chose:?}: whether this counts as the reader's own arrangement"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_builtin_legacy_glass_preset_migrates() {
+        for (preset, expected) in [
+            (r#""LiquidGlass""#, Translucency::LiquidGlass),
+            ("null", Translucency::Frosted),
+        ] {
+            let old = format!(
+                r#"{{"appearance":{{"preset":{preset},"translucency":"Frosted","blur":0}}}}"#
+            );
+            let mut settings: Settings =
+                serde_json::from_str(&old).expect("legacy glass settings parse");
+            migrate(&mut settings);
+            assert_eq!(settings.appearance.translucency, expected);
+            assert_eq!(
+                settings.appearance.blur,
+                if expected == Translucency::LiquidGlass {
+                    Preset::LiquidGlass.appearance().blur
+                } else {
+                    0.0
+                }
             );
         }
     }

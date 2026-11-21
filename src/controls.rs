@@ -13,6 +13,7 @@
 //! cannot be mistaken for Zervo's own UI: labelled with the origin that raised
 //! them, and confined to the content card rather than floating over the chrome.
 
+use crate::l10n::text as tr;
 use egui::{
     Align2, Color32, CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind, TextEdit, Ui, pos2,
     vec2,
@@ -57,8 +58,7 @@ struct Offer {
 /// An offer the user accepted, waiting for the download manager to pick it up.
 #[cfg(feature = "engine-downloads")]
 pub struct Accepted {
-    pub request_id: servo::RequestId,
-    pub url: String,
+    pub response: servo::UnsupportedResponse,
     pub filename: String,
 }
 
@@ -138,13 +138,16 @@ impl Controls {
     /// Offer a download. Nothing is accepted and nothing is written until the
     /// user says so.
     #[cfg(feature = "engine-downloads")]
-    pub fn push_offer(&mut self, response: servo::UnsupportedResponse, filename: String) {
-        // One at a time; a second offer arriving while the first is on screen
-        // is dropped, and dropping declines.
+    pub fn push_offer(&mut self, mut response: servo::UnsupportedResponse, filename: String) {
         if self.offer.is_some() {
+            response.decline();
             return;
         }
-        let host = response.url.host_str().unwrap_or("This page").to_owned();
+        let host = response
+            .url
+            .host_str()
+            .unwrap_or(tr("dialog-this-page"))
+            .to_owned();
         self.offer = Some(Offer {
             response,
             host,
@@ -199,14 +202,14 @@ impl Controls {
                 ui.painter().text(
                     top,
                     Align2::LEFT_TOP,
-                    "Leave this page?",
+                    tr("dialog-leave-this-page"),
                     FontId::proportional(14.0),
                     palette.text,
                 );
                 ui.painter().text(
                     top + vec2(0.0, 26.0),
                     Align2::LEFT_TOP,
-                    "Anything you have typed and not sent will be lost.",
+                    tr("dialog-anything-you-have-typed-and-not-sent"),
                     FontId::proportional(12.5),
                     palette.text_muted,
                 );
@@ -222,9 +225,9 @@ impl Controls {
                 // Staying is the primary action: it is the one that cannot lose
                 // anything, and the page only asked because there is something to
                 // lose.
-                stay |= button(&mut child, "Stay", palette, true);
+                stay |= button(&mut child, tr("dialog-stay"), palette, true);
                 child.add_space(8.0);
-                leave = button(&mut child, "Leave", palette, false);
+                leave = button(&mut child, tr("dialog-leave"), palette, false);
             },
         );
         if !(stay || leave) {
@@ -266,14 +269,17 @@ impl Controls {
                 ui.painter().text(
                     top,
                     Align2::LEFT_TOP,
-                    format!("{host} wants {what}"),
+                    crate::l10n::message(
+                        "dialog-site-permission",
+                        [("host", host.into()), ("permission", what.into())],
+                    ),
                     FontId::proportional(14.0),
                     palette.text,
                 );
                 ui.painter().text(
                     top + vec2(0.0, 26.0),
                     Align2::LEFT_TOP,
-                    "You can change your mind later in Settings.",
+                    tr("dialog-you-can-change-your-mind-later-in"),
                     FontId::proportional(12.5),
                     palette.text_muted,
                 );
@@ -286,9 +292,9 @@ impl Controls {
                         .max_rect(row)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                allow = button(&mut child, "Allow", palette, true);
+                allow = button(&mut child, tr("dialog-allow"), palette, true);
                 child.add_space(8.0);
-                deny |= button(&mut child, "Block", palette, false);
+                deny |= button(&mut child, tr("dialog-block"), palette, false);
             },
         );
         if !(allow || deny) {
@@ -342,7 +348,7 @@ impl Controls {
                 ui.painter().text(
                     top,
                     Align2::LEFT_TOP,
-                    format!("{host} wants to save a file"),
+                    crate::l10n::message("dialog-site-download", [("host", host.into())]),
                     FontId::proportional(14.0),
                     palette.text,
                 );
@@ -356,7 +362,7 @@ impl Controls {
                 ui.painter().text(
                     top + vec2(0.0, 50.0),
                     Align2::LEFT_TOP,
-                    "It goes to your Downloads folder.",
+                    tr("dialog-it-goes-to-your-downloads-folder"),
                     FontId::proportional(11.5),
                     palette.text_muted,
                 );
@@ -370,9 +376,9 @@ impl Controls {
                         .max_rect(row)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                allow = button(&mut child, "Save", palette, true);
+                allow = button(&mut child, tr("common-save"), palette, true);
                 child.add_space(8.0);
-                deny |= button(&mut child, "Cancel", palette, false);
+                deny |= button(&mut child, tr("common-cancel"), palette, false);
             },
         );
 
@@ -382,18 +388,15 @@ impl Controls {
         let Some(offer) = self.offer.take() else {
             return;
         };
+        let mut response = offer.response;
         if !allow {
-            // Dropping the response declines it.
+            response.decline();
             return;
         }
-        let mut response = offer.response;
-        let record = Accepted {
-            request_id: response.request_id,
-            url: response.url.to_string(),
+        self.accepted.push(Accepted {
+            response,
             filename: offer.filename,
-        };
-        response.accept();
-        self.accepted.push(record);
+        });
     }
 
     /// The authentication prompt: who is asking, which login is on offer, and
@@ -430,7 +433,7 @@ impl Controls {
                 ui.painter().text(
                     top,
                     Align2::LEFT_TOP,
-                    format!("{asking} wants a password"),
+                    crate::l10n::message("dialog-http-auth", [("host", asking.as_str().into())]),
                     FontId::proportional(14.0),
                     palette.text,
                 );
@@ -438,9 +441,15 @@ impl Controls {
                 // saved for a domain is being offered to a host underneath it,
                 // and that is the case worth looking at twice.
                 let detail = if saved_for == asking {
-                    format!("Send your saved password for {username}?")
+                    crate::l10n::message(
+                        "dialog-http-saved-password",
+                        [("username", username.into())],
+                    )
                 } else {
-                    format!("Send the password saved for {username} at {saved_for}?")
+                    crate::l10n::message(
+                        "dialog-http-saved-origin",
+                        [("username", username.into()), ("host", saved_for.into())],
+                    )
                 };
                 ui.painter().text(
                     top + vec2(0.0, 26.0),
@@ -452,7 +461,7 @@ impl Controls {
                 ui.painter().text(
                     top + vec2(0.0, 50.0),
                     Align2::LEFT_TOP,
-                    "The page asked for this, not Zervo.",
+                    tr("dialog-the-page-asked-for-this-not-zervo"),
                     FontId::proportional(11.5),
                     palette.text_muted,
                 );
@@ -469,9 +478,9 @@ impl Controls {
                 // No Enter shortcut on the primary button here, unlike the page
                 // dialogs: a stray Return meant for the page should not be able
                 // to hand a password over.
-                allow = button(&mut child, "Sign in", palette, true);
+                allow = button(&mut child, tr("dialog-sign-in"), palette, true);
                 child.add_space(8.0);
-                deny |= button(&mut child, "Not now", palette, false);
+                deny |= button(&mut child, tr("dialog-not-now"), palette, false);
             },
         );
 
@@ -821,7 +830,7 @@ fn draw_dialog(
             ui.painter().text(
                 ui.max_rect().min,
                 Align2::LEFT_TOP,
-                format!("{origin} says"),
+                crate::l10n::message("dialog-site-says", [("origin", origin.into())]),
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
@@ -871,7 +880,7 @@ fn draw_dialog(
             let cancellable = !matches!(dialog, SimpleDialog::Alert(_));
             if cancellable {
                 child.add_space(8.0);
-                if button(&mut child, "Cancel", palette, false) || escape {
+                if button(&mut child, tr("common-cancel"), palette, false) || escape {
                     resolution = Some(Resolution::Cancel);
                 }
             } else if escape {
@@ -982,7 +991,7 @@ fn draw_select(
                     .max_rect(row)
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
             );
-            if button(&mut child, "Done", palette, true) {
+            if button(&mut child, tr("common-done"), palette, true) {
                 picked = Some(Picked::Done);
             }
         }

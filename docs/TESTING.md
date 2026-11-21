@@ -10,6 +10,13 @@ engine bump or a chrome change, walk this list.
 - [ ] Tabs: open (⌘T), close (⌘W), switch, right-click → Pin as Essential.
 - [ ] Workspaces: create, switch, tab counts update.
 - [ ] Address bar: ⌘L focuses; a URL navigates; a phrase searches.
+- [ ] Use ⌘L or Ctrl+L twice and type over the selection. Press Escape to
+      restore the page address. Press Enter on an empty new-tab field.
+- [ ] Shrink the window to its minimum size with the top bar and shelf open.
+      Keep the address field clear of both button groups. Widen the window
+      again and check that the saved field width returns.
+- [ ] With the shelf open above a short new-tab page, the clock and search
+      stay clear of the widget cards and recent sites.
 - [ ] Settings (⌘,): every section renders; toggles/sliders/segments respond.
       Changing one does not make the chrome or the page jolt.
 - [ ] Theme: Auto/Light/Dark switch cleanly, including the titlebar; accent
@@ -17,6 +24,18 @@ engine bump or a chrome change, walk this list.
 - [ ] New tab page: each of the eight backdrops; the animated ones do not pin
       the CPU when the window is idle. The page does not blink or flicker while
       it is simply sitting there.
+
+## Servo integration
+
+- [ ] Follow a redirect to a page. The address bar shows the final URL.
+- [ ] With `engine-downloads` enabled, save a redirected attachment and check
+      its filename and contents. Return to the original tab and follow
+      another link. Cancel an attachment and check that the original page
+      stays open.
+- [ ] Follow a same-origin link with a `download` attribute and check the
+      suggested filename.
+- [ ] Allow notifications from a test page. A notification with only a title
+      and body appears in the window and in the notification tray.
 
 ## Material
 - [ ] Solid and Frosted both apply to everything: the window, cards, menus,

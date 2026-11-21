@@ -135,7 +135,7 @@ so some sites will not work. See [Limitations](#limitations).
 
 ### How it is put together
 
-- **Every surface is drawn through one material.** Corner radii, fills, sheen,
+- **Portable surfaces share a material system.** Corner radii, fills, sheen,
   shadow reach and how far glass frosts are decided in one place and reach the
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
@@ -155,8 +155,9 @@ so some sites will not work. See [Limitations](#limitations).
 - **Frosted, over anything.** The chrome sits on real macOS vibrancy, and
   everything floating over a page frosts against a blurred copy of whatever that
   page is showing — so a menu over a website is the same glass as a card over a
-  photograph. Two steps, Solid and Frosted, drive the window and everything on
-  it together.
+  photograph. The Liquid Glass option uses AppKit for the docked sidebar and
+  toolbar on macOS 26 and later. In-page overlays and older systems use the
+  portable frosted material.
 - **Themed.** Light/dark/auto following the system, ten accent presets plus a
   colour of your own, and the accent is propagated into the engine so pages see
   the matching `prefers-color-scheme`.
@@ -187,33 +188,30 @@ The toolchain is pinned in `rust-toolchain.toml` and matches Servo's own.
 components, install it explicitly:
 
 ```bash
-rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
 ```
 
 ### Downloads
 
-File downloads need a small patch to the engine, because Servo has no download
-support of its own yet ([servo#40210][downloads-issue]). See
-[docs/SERVO.md](docs/SERVO.md) — it is one `git apply` and one Cargo line, and
-then:
+Zervo's pinned Servo fork includes support for file downloads
+([servo#40210][downloads-issue]). Enable the download prompt when building:
 
 ```bash
 cargo build --profile dev-fast --features engine-downloads
 ```
 
-Without the feature Zervo runs perfectly well; responses the engine cannot
-render simply are not offered for saving.
+See [docs/SERVO.md](docs/SERVO.md) for the engine pin and patch status.
 
 ### Packaging
 
 ```bash
 ./scripts/bundle-macos.sh --dmg                  # macOS, this machine's architecture
-./scripts/package-linux.sh --all                 # .deb, .rpm, AppImage, tarball, PKGBUILD
+./scripts/package-linux.sh --all                 # Linux packages, including AppImage and Flatpak
 pwsh scripts/package-windows.ps1 -Installer      # Windows, .zip and a setup .exe
 ```
 
 A release tag produces all of it: two `.dmg`s, one per Mac architecture; a
-`.deb`; an `.rpm` for Fedora 44; an AppImage; a portable tarball; `PKGBUILD`s
+`.deb`; an `.rpm` for Fedora 44; an AppImage and a Flatpak; a portable tarball; `PKGBUILD`s
 for the AUR; a Windows zip and installer; and a `SHA256SUMS` covering the lot.
 
 Nothing is signed. On macOS that means macOS will refuse to open the app until
@@ -249,15 +247,16 @@ another platform would be written against.
 
 ## Platforms
 
-Every release tag builds all of these. Only the first has been run.
+Every release tag builds these packages. For current builds, run **Release** in GitHub Actions with the tag field blank.
 
 | Platform | Package | State |
 | --- | --- | --- |
 | **macOS** 11+, Apple Silicon | `.dmg` (arm64), GStreamer bundled | ✅ Used daily by its author |
 | **macOS** 11+, Intel | `.dmg` (x86_64), GStreamer bundled | ⚠️ Builds — never started |
-| **Ubuntu 26.04+** x86_64 | `.deb` | ⚠️ Builds and installs — never started |
+| **Ubuntu 24.04+ / Debian 13** x86_64 | `.deb` | CI installs and smoke-tests |
 | **Fedora 44** x86_64 | `.rpm` | ⚠️ Builds and installs — never started |
-| **Any glibc 2.35+** x86_64 | `.AppImage` | ⚠️ Never run |
+| **glibc 2.35+** x86_64 | `.AppImage` | CI tests Ubuntu 22.04 and Debian 13 |
+| **Linux with Flatpak** x86_64 | `.flatpak` | CI installs and launches the sandbox |
 | **Arch** | `PKGBUILD` for the AUR, not yet published | ⚠️ Validated, never built |
 | **Windows** x64 | `.zip` and an installer | ⚠️ Builds — startup crash fixed in 0.4.1, unconfirmed |
 | **Windows** ARM64 | — | ⛔ Blocked upstream; the x64 build runs under Prism |
@@ -272,10 +271,9 @@ both. Both need macOS 11 or later rather than 13.
 Linux and Windows are x86_64 only. There is no technical obstacle to arm64 on
 Linux; there is simply nobody asking for it yet.
 
-The `.deb` is built on Ubuntu 26.04 and so needs 26.04 or newer — glibc runs
-old binaries on new systems and never the reverse. Anything older is what the
-AppImage is for: it is built against glibc 2.35 so that it reaches back
-further than any distribution package can.
+The AppImage links against glibc 2.35 and uses host graphics and GStreamer
+libraries. The Flatpak provides those dependencies through its runtime.
+See [Linux packaging and install instructions](docs/PACKAGING.md#linux).
 
 Windows on ARM has no build because Servo does not have one: a `float16_t`
 collision between MSVC's `<arm_fp16.h>` and the vendored `glsl-optimizer`, whose
@@ -284,9 +282,8 @@ machines through Prism, which emulates x64 user-mode code and does not emulate
 the GPU path. See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 **Still a macOS release first.** Every package comes from the same tag, and
-the material system itself is portable — it is drawn by egui and nothing else.
-But the window's frosted backdrop is an AppKit feature, and the corner
-compositing built on top of it has been tried nowhere else.
+egui draws the portable materials. AppKit supplies the native Liquid Glass and
+frosted window backdrops on macOS.
 
 0.4.1 fixes the one thing Windows was known to do: die on startup, before any
 window, reading `GL_VERSION` from a context surfman's WGL backend had never

@@ -11,6 +11,10 @@ publish = false
 
 [dependencies]
 egui = "0.34.3"
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
+sys-locale = "0.3"
+unic-langid = "0.9"
 log = "0.4"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }

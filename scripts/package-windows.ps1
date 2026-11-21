@@ -133,6 +133,7 @@ New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Say 'staging'
 Copy-Item $Exe (Join-Path $Stage 'Zervo.exe')
 Copy-Item LICENSE   (Join-Path $Stage 'LICENSE.txt')
+Copy-Item assets/licenses/NotoSansJP-OFL.txt $Stage
 Copy-Item README.md (Join-Path $Stage 'README.md')
 
 # Anything the build already dropped beside the binary. Most of the engine

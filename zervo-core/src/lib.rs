@@ -18,6 +18,7 @@
 pub mod gestures;
 pub mod glass;
 pub mod grid;
+pub mod l10n;
 pub mod morph;
 pub mod net;
 pub mod store;

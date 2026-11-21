@@ -17,6 +17,7 @@
 //! library beside the favourites, not in the settings, because it is the
 //! reader's writing rather than their preferences.
 
+use crate::l10n::text as tr;
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Key, Rect, RichText, Sense,
     Stroke, StrokeKind, TextEdit, Ui, pos2, vec2,
@@ -95,19 +96,19 @@ impl Card {
 
     pub fn label(self) -> &'static str {
         match self {
-            Card::Search => "Search",
-            Card::Clock => "Clock",
-            Card::WorldClocks => "World clocks",
-            Card::QuickLinks => "Quick links",
-            Card::TopSites => "Most visited",
-            Card::Recent => "Recent",
-            Card::Favourites => "Favourites",
-            Card::Downloads => "Downloads",
-            Card::NowPlaying => "Now playing",
-            Card::Notes => "Note",
-            Card::Tasks => "To-do",
-            Card::Workspaces => "Workspaces",
-            Card::Mark => "Zervo mark",
+            Card::Search => tr("common-search"),
+            Card::Clock => tr("newtab-clock"),
+            Card::WorldClocks => tr("common-world-clocks"),
+            Card::QuickLinks => tr("newtab-quick-links"),
+            Card::TopSites => tr("common-most-visited"),
+            Card::Recent => tr("newtab-recent"),
+            Card::Favourites => tr("common-favourites"),
+            Card::Downloads => tr("common-downloads"),
+            Card::NowPlaying => tr("common-now-playing"),
+            Card::Notes => tr("newtab-note"),
+            Card::Tasks => tr("newtab-to-do"),
+            Card::Workspaces => tr("newtab-workspaces"),
+            Card::Mark => tr("newtab-zervo-mark"),
         }
     }
 
@@ -337,7 +338,7 @@ pub fn draw(
     // and anything anyone adds later — without one of them being told to.
     let restore = chrome.palette;
     if let (Some((uv, arrival)), Some(frost)) = (painted, chrome.wallpaper.frost)
-        && chrome.palette.translucency == theme::Translucency::Frosted
+        && chrome.palette.translucency.is_translucent()
     {
         chrome.palette = chrome.palette.with_backdrop(Some(theme::Backdrop {
             texture: frost.id(),
@@ -681,12 +682,11 @@ fn greeting(settings: &crate::settings::Settings) -> String {
     if !settings.newtab_message.trim().is_empty() {
         return settings.newtab_message.trim().to_owned();
     }
-    use chrono::Timelike as _;
-    match chrono::Local::now().hour() {
-        5..=11 => "Good morning",
-        12..=17 => "Good afternoon",
-        18..=21 => "Good evening",
-        _ => "Good night",
+    match jiff::ZonedDateTime::now().hour() {
+        5..=11 => tr("newtab-good-morning"),
+        12..=17 => tr("newtab-good-afternoon"),
+        18..=21 => tr("newtab-good-evening"),
+        _ => tr("newtab-good-night"),
     }
     .to_owned()
 }
@@ -729,7 +729,11 @@ fn draw_header(
         &mut cursor,
         header,
         if composed { Icon::Sliders } else { Icon::Home },
-        if composed { "Customise" } else { "Home" },
+        if composed {
+            tr("newtab-customise")
+        } else {
+            tr("common-home")
+        },
         false,
     );
     if switch.clicked() {
@@ -748,7 +752,7 @@ fn draw_header(
             &mut cursor,
             header,
             Icon::Mountains,
-            "Backdrop",
+            tr("newtab-backdrop"),
             false,
         );
         let anchor = wallpaper.rect;
@@ -761,7 +765,11 @@ fn draw_header(
         &mut cursor,
         header,
         if editing { Icon::Check } else { Icon::Sliders },
-        if editing { "Done" } else { "Customise" },
+        if editing {
+            tr("common-done")
+        } else {
+            tr("newtab-customise")
+        },
         editing,
     );
     if done.clicked() {
@@ -774,7 +782,7 @@ fn draw_header(
         &mut cursor,
         header,
         Icon::Plus,
-        "Add card",
+        tr("newtab-add-card"),
         false,
     );
     let add_anchor = add.rect;
@@ -829,7 +837,7 @@ fn draw_header(
         Icon::Mountains,
         // Never lit. It opens a menu; it is not a state. Tinting it because a
         // photograph happens to be up made it read as a button stuck down.
-        "Backdrop",
+        tr("newtab-backdrop"),
         false,
     );
     let backdrop_anchor = wallpaper.rect;
@@ -842,7 +850,7 @@ fn draw_header(
             &mut cursor,
             header,
             Icon::Reset,
-            "Reset",
+            tr("newtab-reset"),
             false,
         );
         if reset.clicked() {
@@ -985,23 +993,23 @@ fn draw_backdrop_menu(
     // Grouped off the variants themselves rather than off a list written out
     // here, so a backdrop added later turns up in the right group without
     // anyone remembering to add it to two places.
-    let mut rows: Vec<Row<Pick>> = vec![Row::Heading("Static")];
+    let mut rows: Vec<Row<Pick>> = vec![Row::Heading(tr("newtab-static"))];
     rows.extend(
         NewTabBackground::ALL
             .into_iter()
             .filter(|kind| !kind.animated() && *kind != NewTabBackground::Photo)
             .map(generated),
     );
-    rows.push(Row::Heading("Animated"));
+    rows.push(Row::Heading(tr("newtab-animated")));
     rows.extend(
         NewTabBackground::ALL
             .into_iter()
             .filter(super::settings::NewTabBackground::animated)
             .map(generated),
     );
-    rows.push(Row::Heading("Wallpaper provider"));
+    rows.push(Row::Heading(tr("newtab-wallpaper-provider")));
     rows.push(Row::Item(
-        "Commons picture of the day".to_owned(),
+        tr("newtab-commons-picture-of-the-day").to_owned(),
         Pick::Commons,
         photo && *source == Source::Commons,
     ));
@@ -1013,14 +1021,14 @@ fn draw_backdrop_menu(
         )
     }));
     rows.push(Row::Item(
-        "Choose a file…".to_owned(),
+        tr("common-choose-file").to_owned(),
         Pick::File,
         photo && matches!(source, Source::File(_)),
     ));
     if photo {
-        rows.push(Row::Heading("Now"));
+        rows.push(Row::Heading(tr("newtab-now")));
         rows.push(Row::Item(
-            "Another picture".to_owned(),
+            tr("common-another-picture").to_owned(),
             Pick::Shuffle,
             false,
         ));
@@ -1391,7 +1399,7 @@ fn draw_handles(
             Sense::click(),
         )
         .on_hover_cursor(CursorIcon::PointingHand)
-        .on_hover_text("Take this card off")
+        .on_hover_text(tr("newtab-take-this-card-off"))
         .clicked()
     {
         changes.push(Change::Remove(index));
@@ -1656,48 +1664,55 @@ fn draw_composed(
     ink: &Ink,
     actions: &mut Vec<UiAction>,
 ) -> bool {
-    let now = chrono::Local::now();
+    let now = jiff::ZonedDateTime::now();
 
-    // The bottom block is measured first, because the hero is centred in
-    // whatever is left rather than in the page: a hero centred on the page and
-    // a strip under it either overlap in a short window or leave the hero
-    // sitting high in a tall one.
+    // Reserve enough room for the clock, greeting and search before showing
+    // recent sites. The shelf can leave this page only a few rows high.
+    const MIN_HERO_HEIGHT: f32 = 124.0;
     let resume: Vec<Resume> = Resume::recent(chrome, 3);
     let strip = resume_height(&resume);
+    let strip = if canvas.height() >= strip + MIN_HERO_HEIGHT {
+        strip
+    } else {
+        0.0
+    };
     let hero = Rect::from_min_max(canvas.min, pos2(canvas.max.x, canvas.max.y - strip));
+    if hero.height() < MIN_HERO_HEIGHT {
+        draw_narrow(root, chrome, hero, ink, actions);
+        return false;
+    }
 
     // ── The hero.
     let hero_ink = ink.over(&chrome.palette, hero, false);
     let centre = hero.center();
-    // Sixty of the study's ninety-two, scaled down when the window cannot hold
-    // it: a clock that overruns its own page is not a hero.
-    let size = (hero.height() * 0.30).clamp(40.0, 92.0);
+    let field_height = (hero.height() * 0.28).clamp(44.0, HERO_HEIGHT);
+    let size = (hero.height() * 0.30)
+        .clamp(40.0, 92.0)
+        .min(hero.height() - field_height - 36.0);
+    let top = centre.y - (size + 36.0 + field_height) / 2.0;
     hero_ink.write(
         root.painter(),
-        pos2(centre.x, centre.y - size * 0.52),
+        pos2(centre.x, top + size / 2.0),
         Align2::CENTER_CENTER,
-        now.format("%H:%M").to_string(),
+        now.strftime("%H:%M").to_string(),
         crate::ui::display_font(size),
         hero_ink.text,
     );
     hero_ink.write(
         root.painter(),
-        pos2(centre.x, centre.y + size * 0.14),
+        pos2(centre.x, top + size + 10.0),
         Align2::CENTER_CENTER,
         format!(
             "{} · {}",
-            now.format("%A, %-d %B"),
+            now.strftime("%A, %-d %B"),
             greeting(chrome.settings)
         ),
         FontId::proportional(14.0),
         hero_ink.muted,
     );
     let field = Rect::from_center_size(
-        pos2(centre.x, centre.y + size * 0.42 + HERO_HEIGHT * 0.5 + 18.0),
-        vec2(
-            HERO_WIDTH.min(canvas.width() - 48.0),
-            HERO_HEIGHT.min(hero.height() * 0.28).max(44.0),
-        ),
+        pos2(centre.x, top + size + 36.0 + field_height / 2.0),
+        vec2(HERO_WIDTH.min(canvas.width() - 48.0), field_height),
     );
     draw_search(
         root,
@@ -1723,7 +1738,7 @@ fn draw_composed(
         root.painter(),
         pos2(strip_rect.min.x, label),
         Align2::LEFT_TOP,
-        "PICK UP WHERE YOU LEFT OFF",
+        tr("newtab-pick-up-where-you-left-off"),
         FontId::proportional(10.5),
         strip_ink.muted,
     );
@@ -1775,7 +1790,7 @@ fn draw_composed(
         root.painter(),
         pos2(cursor, chips.center().y),
         Align2::LEFT_CENTER,
-        "Most visited",
+        tr("common-most-visited"),
         FontId::proportional(11.5),
         strip_ink.muted.gamma_multiply(0.8),
     );
@@ -1797,7 +1812,14 @@ fn draw_composed(
     // The last chip is the one that is not a site. Pinning is the same
     // favourite the star in the sidebar keeps, so a site pinned here appears
     // there and on the board's Favourites card — one list, three ways in.
-    if let Some(response) = draw_site_chip(root, chrome, &mut cursor, chips, "Pin a site", true) {
+    if let Some(response) = draw_site_chip(
+        root,
+        chrome,
+        &mut cursor,
+        chips,
+        tr("newtab-pin-a-site"),
+        true,
+    ) {
         let menu_id = Id::new("zervo_newtab_pin_open");
         if response.clicked() {
             let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
@@ -1862,7 +1884,7 @@ struct Resume {
 
 impl Resume {
     fn recent(chrome: &ChromeContext, limit: usize) -> Vec<Resume> {
-        let now = chrono::Local::now();
+        let now = jiff::Timestamp::now().as_second();
         chrome
             .library
             .recent(limit)
@@ -1871,7 +1893,7 @@ impl Resume {
                 title: crate::ui::display_name(&visit.title, &visit.url).to_owned(),
                 url: visit.url.clone(),
                 host: crate::ui::host_of(&visit.url),
-                when: ago(now - visit.local_time()),
+                when: ago(now.saturating_sub(visit.at)),
             })
             .collect()
     }
@@ -1879,8 +1901,8 @@ impl Resume {
 
 /// "2 days ago" — the coarsest true unit, which is the only one worth reading
 /// on a card that exists to be recognised rather than audited.
-fn ago(gap: chrono::TimeDelta) -> String {
-    let minutes = gap.num_minutes().max(0);
+fn ago(seconds: i64) -> String {
+    let minutes = seconds.max(0) / 60;
     match minutes {
         0..=1 => "just now".to_owned(),
         2..=59 => format!("{minutes} minutes ago"),
@@ -2072,19 +2094,27 @@ fn draw_narrow(
     ink: &Ink,
     actions: &mut Vec<UiAction>,
 ) {
+    if content_rect.height() < 48.0 || content_rect.width() < 140.0 {
+        return;
+    }
     let centre = content_rect.center();
-    let now = chrono::Local::now();
-    ink.write(
-        root.painter(),
-        pos2(centre.x, centre.y - 58.0),
-        Align2::CENTER_CENTER,
-        now.format("%H:%M").to_string(),
-        FontId::proportional(44.0),
-        ink.text,
-    );
+    let show_clock = content_rect.height() >= 112.0;
+    if show_clock {
+        let now = jiff::ZonedDateTime::now();
+        ink.write(
+            root.painter(),
+            pos2(centre.x, centre.y - 31.0),
+            Align2::CENTER_CENTER,
+            now.strftime("%H:%M").to_string(),
+            FontId::proportional(36.0),
+            ink.text,
+        );
+        root.ctx()
+            .request_repaint_after(std::time::Duration::from_secs(20));
+    }
     let pill = Rect::from_center_size(
-        pos2(centre.x, centre.y + 8.0),
-        vec2((content_rect.width() - 48.0).max(120.0), 44.0),
+        pos2(centre.x, centre.y + if show_clock { 27.0 } else { 0.0 }),
+        vec2(content_rect.width() - 24.0, 44.0),
     );
     draw_search(
         root,
@@ -2096,8 +2126,6 @@ fn draw_narrow(
         actions,
         Search::Card,
     );
-    root.ctx()
-        .request_repaint_after(std::time::Duration::from_secs(20));
 }
 
 // ── Cards ──────────────────────────────────────────────────────────────────
@@ -2180,17 +2208,14 @@ fn draw_search(
         theme::mix(palette.text_muted, palette.accent, focus),
     );
 
-    let hint = if hero {
-        format!(
-            "Search with {}, or say where to go",
-            chrome.settings.search_engine.label()
-        )
-    } else {
-        format!(
-            "Search with {} or enter an address…",
-            chrome.settings.search_engine.label()
-        )
-    };
+    let hint = crate::l10n::message(
+        if hero {
+            "newtab-search-hero"
+        } else {
+            "newtab-search-compact"
+        },
+        [("engine", chrome.settings.search_engine.label().into())],
+    );
     // The shortcut, on the end of the hero. ⌘L already focuses the address
     // pill from anywhere; saying so on the one field the page is built around
     // costs a line of type and answers the question it raises.
@@ -2290,7 +2315,7 @@ fn draw_search(
 }
 
 fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
-    let now = chrono::Local::now();
+    let now = jiff::ZonedDateTime::now();
     // The time scales with the card: at one row it is a line of text, at three
     // it is the thing you look at first.
     let size = (rect.height() * 0.42).clamp(22.0, 62.0);
@@ -2298,7 +2323,7 @@ fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
         area.painter(),
         pos2(rect.center().x, rect.center().y - size * 0.22),
         Align2::CENTER_CENTER,
-        now.format("%H:%M").to_string(),
+        now.strftime("%H:%M").to_string(),
         FontId::proportional(size),
         ink.text,
     );
@@ -2307,7 +2332,7 @@ fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
             area.painter(),
             pos2(rect.center().x, rect.center().y + size * 0.48),
             Align2::CENTER_CENTER,
-            now.format("%A, %-d %B").to_string(),
+            now.strftime("%A, %-d %B").to_string(),
             FontId::proportional(12.0),
             ink.muted,
         );
@@ -2317,38 +2342,19 @@ fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
     false
 }
 
-/// A timezone from its IANA name, remembered.
-///
-/// `parse` walks the compiled-in zone table — some six hundred entries — and
-/// this was called for every clock on the card, on every frame it was drawn.
-/// The set of names is tiny and only changes when somebody edits the card, so
-/// the answers are worth keeping. The failures too: a name that is not a zone
-/// this year will not be one on the next frame either.
-fn timezone(name: &str) -> Option<chrono_tz::Tz> {
-    thread_local! {
-        static KNOWN: std::cell::RefCell<
-            std::collections::HashMap<String, Option<chrono_tz::Tz>>,
-        > = std::cell::RefCell::new(std::collections::HashMap::new());
-    }
-    KNOWN.with(|known| {
-        let mut known = known.borrow_mut();
-        if let Some(found) = known.get(name) {
-            return *found;
-        }
-        let parsed = name.parse::<chrono_tz::Tz>().ok();
-        known.insert(name.to_owned(), parsed);
-        parsed
-    })
-}
-
 fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &Ink) -> bool {
     let palette = chrome.palette;
     let zones = &chrome.settings.newtab_world_clocks;
     if zones.is_empty() {
-        empty(area, &palette, body, "Add a city in Settings › Layout.");
+        empty(
+            area,
+            &palette,
+            body,
+            tr("newtab-add-a-city-in-settings-layout"),
+        );
         return false;
     }
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     // As many across as fit at a readable width, the rest wrap onto a row of
     // their own.
     let per_row = ((body.width() / 96.0).floor() as usize).clamp(1, zones.len());
@@ -2362,7 +2368,7 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
             ),
             cell,
         );
-        let Some(tz) = timezone(&zone.name) else {
+        let Ok(tz) = jiff::tz::TimeZone::get(&zone.name) else {
             area.painter().text(
                 slot.center(),
                 Align2::CENTER_CENTER,
@@ -2372,7 +2378,7 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
             );
             continue;
         };
-        let there = now.with_timezone(&tz);
+        let there = now.to_zoned_datetime(tz);
         let clock = (slot.height() * 0.34).clamp(16.0, 26.0);
         area.painter().text(
             pos2(slot.min.x + 2.0, slot.min.y + 9.0),
@@ -2389,7 +2395,7 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
         area.painter().text(
             pos2(slot.min.x + 2.0, slot.min.y + 24.0),
             Align2::LEFT_TOP,
-            there.format("%H:%M").to_string(),
+            there.strftime("%H:%M").to_string(),
             FontId::proportional(clock),
             ink.text,
         );
@@ -2397,7 +2403,7 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
             area.painter().text(
                 pos2(slot.min.x + 2.0, slot.min.y + 26.0 + clock),
                 Align2::LEFT_TOP,
-                there.format("%Z · %a").to_string(),
+                there.strftime("%Z · %a").to_string(),
                 FontId::proportional(10.0),
                 palette.text_muted,
             );
@@ -2441,7 +2447,7 @@ fn draw_quick_links(
         .take(24)
         .collect();
     if links.is_empty() {
-        empty(area, &palette, body, "Pin a tab and it turns up here.");
+        empty(area, &palette, body, tr("newtab-pin-a-tab-and-it-turns-up"));
         return;
     }
 
@@ -2540,7 +2546,7 @@ fn draw_top_sites(
             area,
             &palette,
             body,
-            "Nowhere yet — this fills as you browse.",
+            tr("newtab-nowhere-yet-this-fills-as-you-browse"),
         );
         return;
     }
@@ -2588,7 +2594,7 @@ fn draw_recent(
         })
         .collect();
     if visits.is_empty() {
-        empty(area, &palette, body, "Nothing visited yet.");
+        empty(area, &palette, body, tr("newtab-nothing-visited-yet"));
         return;
     }
     for (index, (title, url)) in visits.iter().enumerate() {
@@ -2629,7 +2635,7 @@ fn draw_favourites(
             area,
             &palette,
             body,
-            "Nothing saved yet — the star adds a page.",
+            tr("newtab-nothing-saved-yet-the-star-adds-a"),
         );
         return;
     }
@@ -2674,7 +2680,7 @@ fn draw_downloads(
         })
         .collect();
     if items.is_empty() {
-        empty(area, &palette, body, "Nothing downloaded yet.");
+        empty(area, &palette, body, tr("common-no-downloads"));
         return;
     }
     for (index, (download_id, name, fraction, running)) in items.iter().enumerate() {
@@ -2763,7 +2769,7 @@ fn draw_now_playing(
     let palette = chrome.palette;
     let media = chrome.media;
     if media.is_idle() {
-        empty(area, &palette, body, "Nothing playing.");
+        empty(area, &palette, body, tr("newtab-nothing-playing"));
         return;
     }
     let controls = 108.0_f32.min(body.width() * 0.5);
@@ -2860,7 +2866,7 @@ fn draw_notes(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
     if !live {
         let note = chrome.library.note_mut().clone();
         let shown = if note.trim().is_empty() {
-            "A place to put something down.".to_owned()
+            tr("newtab-a-place-to-put-something-down").to_owned()
         } else {
             note
         };
@@ -2878,7 +2884,9 @@ fn draw_notes(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
         .frame(Frame::NONE)
         .font(FontId::proportional(12.5))
         .text_color(palette.text)
-        .hint_text(RichText::new("A place to put something down.").color(palette.text_muted))
+        .hint_text(
+            RichText::new(tr("newtab-a-place-to-put-something-down")).color(palette.text_muted),
+        )
         .desired_width(body.width())
         .desired_rows(((body.height() / 16.0) as usize).max(1));
     if inner.add(editor).changed() {
@@ -2907,7 +2915,7 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
         area.painter().text(
             pos2(list.min.x, list.min.y + 10.0),
             Align2::LEFT_CENTER,
-            "Nothing to do. Enviable.",
+            tr("newtab-nothing-to-do-enviable"),
             FontId::proportional(11.5),
             palette.text_muted,
         );
@@ -3036,7 +3044,7 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
             .font(FontId::proportional(12.5))
             .text_color(palette.text)
             .vertical_align(egui::Align::Center)
-            .hint_text(RichText::new("Add something…").color(palette.text_muted))
+            .hint_text(RichText::new(tr("newtab-add-something")).color(palette.text_muted))
             .desired_width(entry.width());
         let response = inner.add(editor);
         area.painter().line_segment(

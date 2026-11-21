@@ -21,11 +21,13 @@ yanked = "deny"
 # `servo-default-resources`.
 unmaintained = "workspace"
 ignore = [
-    # The Marvin Attack: a timing sidechannel in `rsa`, with no fixed version
-    # published. It arrives through Servo and cannot be resolved here. Zervo
-    # itself does no RSA; what reaches it is the engine's TLS. Worth revisiting
-    # on every engine bump — if `rsa` ever ships a fix, this line should go.
+    # The Marvin Attack: a timing side channel in Servo's WebCrypto RSA
+    # dependency. Remove this exception when Servo can use a fixed version.
     "RUSTSEC-2023-0071",
+    # Servo 0.8's sea-query-rusqlite requires rusqlite 0.38. The SQLite fix
+    # needs rusqlite 0.41 or newer. Servo uses the same exception (#49746).
+    # The issue requires a locally supplied database and mismatched WAL.
+    "RUSTSEC-2026-0459",
 ]
 
 [bans]
@@ -62,13 +64,6 @@ confidence-threshold = 0.9
 
 [sources]
 unknown-registry = "deny"
-# The engine is a git dependency, so git sources cannot simply be denied — but
-# "allow" opened the category rather than naming the exception, which meant any
-# git source substituted for these two would have passed unremarked. These are
-# the only two in the lockfile: the Servo fork carrying Zervo's patches (see
-# docs/SERVO.md) and the style system, which Servo itself pulls from git.
+# The pinned Servo fork carries Zervo's patches. See docs/SERVO.md.
 unknown-git = "deny"
-allow-git = [
-    "https://github.com/Goddv/servo",
-    "https://github.com/servo/stylo",
-]
+allow-git = ["https://github.com/Goddv/servo"]
