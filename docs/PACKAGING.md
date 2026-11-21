@@ -284,7 +284,7 @@ compatible and not forwards, so the oldest base still worth supporting reaches
 furthest — and a container outlives the `ubuntu-22.04` runner label, whose
 deprecation starts in September 2026.
 
-The AppImage uses the host graphics and display libraries. In media builds
+The AppImage uses the host graphics and display libraries and the system CA certificate bundle. In media builds
 it also uses the host’s GStreamer 1.20+ and GLib as a unit, including the
 host’s plugin scanner and plugins. The packaging script checks the AppDir for
 copies of these libraries before building the image. On Debian-family systems

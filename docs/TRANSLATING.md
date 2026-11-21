@@ -42,5 +42,5 @@ $env:ZERVO_LOCALES_DIR = 'C:\path\to\catalogues'
 Quit Zervo before launching the preview. Restart it after editing the file.
 If you already contribute code, `cargo test -p zervo-core --locked l10n`
 checks catalogue syntax, duplicate IDs, placeholders, and English fallback.
-Zervo includes a Japanese fallback font. A translation for another script
+Zervo includes a regular-weight [Noto Sans JP](https://github.com/google/fonts/tree/66a36c8c94b1a5d992ee4e7f392fccfe4945767c/ofl/notosansjp) fallback under the [SIL Open Font License](../assets/licenses/NotoSansJP-OFL.txt). A translation for another script
 may need an additional font or right-to-left layout work.

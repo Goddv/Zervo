@@ -19,6 +19,7 @@ conflicts=('zervo')
 # Worked out from the shipped binary with `namcap`, and matched against what
 # `servo-bin` depends on, since the engine is the same one.
 depends=(
+    'ca-certificates'
     'fontconfig'
     'freetype2'
     'glib2'

@@ -185,7 +185,7 @@ if [ "$WANT_DEB" = 1 ]; then
         echo "Section: web"
         echo "Priority: optional"
         echo "Installed-Size: $INSTALLED_SIZE"
-        [ -n "$DEPENDS" ] && echo "Depends: $DEPENDS"
+        echo "Depends: ca-certificates${DEPENDS:+, $DEPENDS}"
         DEB_RECOMMENDS="$ZERVO_DEB_RECOMMENDS"
         [ "$WITH_MEDIA" = 1 ] && DEB_RECOMMENDS="$DEB_RECOMMENDS, $ZERVO_DEB_MEDIA_RECOMMENDS"
         echo "Recommends: $DEB_RECOMMENDS"
@@ -279,7 +279,7 @@ ExclusiveArch:  x86_64 aarch64
 # Owns the icon directories and carries the file trigger that rebuilds the icon
 # cache; desktop-file-utils and shared-mime-info carry the equivalents for the
 # desktop and MIME databases. That is why there are no %%post scriptlets here.
-Requires:       hicolor-icon-theme
+Requires:       ca-certificates, hicolor-icon-theme
 $RPM_RECOMMENDS_LINES
 %description
 $ZERVO_DESCRIPTION
