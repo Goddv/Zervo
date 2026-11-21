@@ -2,6 +2,7 @@ id: app.zervo.Zervo
 runtime: org.gnome.Platform
 runtime-version: '50'
 sdk: org.gnome.Sdk
+separate-locales: false
 command: zervo
 finish-args:
   - --share=network

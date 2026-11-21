@@ -183,10 +183,17 @@ jobs:
 
       - name: Launch the installed sandbox
         run: |
+          # A minimal job container has neither the system bus nor a per-user
+          # runtime directory that Flatpak expects from a desktop login.
+          dbus-uuidgen --ensure
+          install -d /run/dbus
+          dbus-daemon --system --fork --nopidfile
+          XDG_RUNTIME_DIR="$(mktemp -d)"
+          export XDG_RUNTIME_DIR
           # The shell inside the smoke test resolves the fixture path.
           # shellcheck disable=SC2016
           dbus-run-session -- ./scripts/smoke-linux-package.sh bash -ec '
-            exec flatpak run --user --env=LIBGL_ALWAYS_SOFTWARE=1 \
+            exec flatpak run --verbose --user --env=LIBGL_ALWAYS_SOFTWARE=1 \
               --filesystem="$ZERVO_SMOKE_DIR:ro" app.zervo.Zervo "$@"
           ' bash
 
