@@ -456,7 +456,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            binutils ca-certificates dbus-daemon flatpak flatpak-builder git \
+            binutils ca-certificates dbus-daemon elfutils flatpak flatpak-builder git \
             xauth xdotool xvfb xz-utils
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
