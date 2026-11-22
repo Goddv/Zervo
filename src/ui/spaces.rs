@@ -157,7 +157,12 @@ fn favourites(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) 
     ui.add_space(6.0);
 }
 
-pub(super) fn body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
+pub(super) fn body(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    native_overlay: bool,
+) {
     let active = chrome.browser.active_workspace;
     let Some(space) = chrome.browser.workspaces.get(active) else {
         return;
@@ -198,6 +203,9 @@ pub(super) fn body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<Ui
     let drag_id = Id::unique("zervo_tab_drag");
     let dragging = ctx.data(|data| data.get_temp::<TabId>(drag_id));
     let pointer = ctx.input(|input| input.pointer.latest_pos());
+    let docked_frost = chrome.native_glass.sidebar.is_some()
+        && palette.translucency == theme::Translucency::LiquidGlass;
+    let mut frosted_tabs = Vec::new();
     egui::ScrollArea::vertical()
         .id_salt(("space_tabs", active))
         .auto_shrink([false, false])
@@ -247,11 +255,15 @@ pub(super) fn body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<Ui
                             always_show_close: chrome.settings.always_show_tab_close,
                             compact: chrome.settings.compact_sidebar,
                             dragging,
+                            native_overlay,
                         },
                         &palette,
                         chrome.favicons.get(&tab.id),
                         actions,
                     );
+                    if docked_frost && let Some(rect) = out.visible_rect {
+                        frosted_tabs.push(rect);
+                    }
                     if out.drag_started {
                         ctx.data_mut(|data| data.insert_temp(drag_id, tab.id));
                     }
@@ -354,4 +366,5 @@ pub(super) fn body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<Ui
                 }
             }
         });
+    chrome.native_glass.tabs = frosted_tabs;
 }

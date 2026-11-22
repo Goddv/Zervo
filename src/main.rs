@@ -1409,7 +1409,7 @@ impl RunningApp {
                 window_controls,
                 device_pixels_per_css_pixel,
                 native_glass: ui::NativeGlass {
-                    sidebar_available: native_available,
+                    vibrancy_available: native_available,
                     ..Default::default()
                 },
                 favicons: &self.favicons,
@@ -1604,9 +1604,15 @@ impl RunningApp {
                     palette.material.animation.min(0.16),
                 );
                 vibrancy::set_window_controls_opacity(&state.window, opacity);
-                if let Some(backdrop) = &self._vibrancy {
-                    backdrop.update_sidebar(output.native_glass.sidebar, zoom);
+                if let Some(backdrop) = &mut self._vibrancy {
+                    backdrop.update_sidebar(
+                        output.native_glass.sidebar,
+                        zoom,
+                        palette.translucency == theme::Translucency::LiquidGlass,
+                        palette.dark,
+                    );
                     backdrop.update_address(output.native_glass.address, zoom);
+                    backdrop.update_tabs(&output.native_glass.tabs, zoom);
                 }
             }
             state

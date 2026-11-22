@@ -22,9 +22,10 @@ use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass};
 use objc2_app_kit::{
     NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSGlassEffectView,
-    NSTitlebarSeparatorStyle, NSToolbar, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowButton,
-    NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle, NSWorkspace,
+    NSGlassEffectViewStyle, NSTitlebarSeparatorStyle, NSToolbar, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowButton, NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle,
+    NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -34,23 +35,45 @@ pub struct Vibrancy {
     view: Retained<NSVisualEffectView>,
     content: Retained<NSView>,
     sidebar: Retained<NSVisualEffectView>,
+    sidebar_glass: Option<Retained<NSGlassEffectView>>,
+    sidebar_dark: Option<bool>,
     address: Retained<NSVisualEffectView>,
+    tabs: Vec<Retained<NSVisualEffectView>>,
 }
 
 impl Vibrancy {
-    pub fn update_sidebar(&self, rect: Option<egui::Rect>, zoom: f32) {
-        update_surface(&self.content, &self.sidebar, rect, zoom);
+    pub fn update_sidebar(
+        &mut self,
+        rect: Option<egui::Rect>,
+        zoom: f32,
+        liquid: bool,
+        dark: bool,
+    ) {
+        let glass_rect = if liquid { rect } else { None };
+        let mut frost_rect = rect;
+        if let Some(glass) = &self.sidebar_glass {
+            if glass_rect.is_some() {
+                if self.sidebar_dark != Some(dark) {
+                    glass.setTintColor(Some(&crate::overlay_glass::Role::Sidebar.tint(dark)));
+                    self.sidebar_dark = Some(dark);
+                }
+                let radius =
+                    f64::from(crate::overlay_glass::Role::Sidebar.radius()) * f64::from(zoom);
+                if glass.cornerRadius() != radius {
+                    glass.setCornerRadius(radius);
+                }
+                frost_rect = None;
+            }
+            // Match the hover sidebar, whose left edge is clipped by the window.
+            let glass_rect = glass_rect.map(|rect| rect.with_min_x(rect.left() - 20.0));
+            update_surface(&self.content, glass, glass_rect, zoom);
+        }
+        update_surface(&self.content, &self.sidebar, frost_rect, zoom);
     }
 
     pub fn update_address(&self, rect: Option<(egui::Rect, f32)>, zoom: f32) {
-        if let Some((_, radius)) = rect
-            && let Some(layer) = self.address.layer()
-        {
-            let radius = f64::from(radius) * f64::from(zoom);
-            if layer.cornerRadius() != radius {
-                layer.setCornerRadius(radius);
-                layer.setMasksToBounds(true);
-            }
+        if let Some((_, radius)) = rect {
+            round_frost(&self.address, radius * zoom);
         }
         update_surface(
             &self.content,
@@ -58,6 +81,26 @@ impl Vibrancy {
             rect.map(|(rect, _)| rect),
             zoom,
         );
+    }
+
+    pub fn update_tabs(&mut self, tabs: &[egui::Rect], zoom: f32) {
+        let mtm = self.content.mtm();
+        let radius = f32::from(crate::overlay_glass::Role::Tab.radius());
+        // Reuse the visible rows' layers as the list scrolls. Their labels and
+        // interactions stay in the existing OpenGL pass.
+        for (index, &rect) in tabs.iter().enumerate() {
+            if index == self.tabs.len() {
+                self.tabs.push(frosted_field(mtm));
+            }
+            let tab = &self.tabs[index];
+            round_frost(tab, radius.min(rect.height() * 0.5) * zoom);
+            update_surface(&self.content, tab, Some(rect), zoom);
+        }
+        for tab in self.tabs.iter().skip(tabs.len()) {
+            if !tab.isHidden() {
+                tab.setHidden(true);
+            }
+        }
     }
 
     /// Swap material, crossfading over `duration` seconds.
@@ -197,6 +240,25 @@ fn update_surface(content: &NSView, surface: &NSView, rect: Option<egui::Rect>, 
     }
 }
 
+fn round_frost(view: &NSVisualEffectView, radius: f32) {
+    if let Some(layer) = view.layer()
+        && layer.cornerRadius() != f64::from(radius)
+    {
+        layer.setCornerRadius(f64::from(radius));
+        layer.setMasksToBounds(true);
+    }
+}
+
+fn frosted_field(mtm: MainThreadMarker) -> Retained<NSVisualEffectView> {
+    let view = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), NSRect::ZERO);
+    view.setMaterial(NSVisualEffectMaterial::Popover);
+    view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    view.setState(NSVisualEffectState::FollowsWindowActiveState);
+    view.setWantsLayer(true);
+    view.setHidden(true);
+    view
+}
+
 /// Install a full-window `NSVisualEffectView` behind winit's content view.
 ///
 /// Must be called on the main thread. Returns `None` off-main-thread or on a
@@ -244,12 +306,17 @@ pub fn install(
         Some(&content),
     );
 
-    let address = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), NSRect::ZERO);
-    address.setMaterial(NSVisualEffectMaterial::Popover);
-    address.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-    address.setState(NSVisualEffectState::FollowsWindowActiveState);
-    address.setWantsLayer(true);
-    address.setHidden(true);
+    let sidebar_glass = new_glass_view();
+    if let Some(glass) = &sidebar_glass {
+        glass.setStyle(NSGlassEffectViewStyle::Regular);
+        glass.setHidden(true);
+        frame_view.addSubview_positioned_relativeTo(
+            glass,
+            NSWindowOrderingMode::Below,
+            Some(&content),
+        );
+    }
+    let address = frosted_field(mtm);
     frame_view.addSubview_positioned_relativeTo(
         &address,
         NSWindowOrderingMode::Below,
@@ -260,7 +327,10 @@ pub fn install(
         view: effect,
         content,
         sidebar,
+        sidebar_glass,
+        sidebar_dark: None,
         address,
+        tabs: Vec::new(),
     })
 }
 

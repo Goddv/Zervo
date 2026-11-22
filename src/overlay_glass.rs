@@ -15,6 +15,8 @@ pub(crate) enum Role {
     Dialog,
     Status,
     Field,
+    Tab,
+    Widget,
 }
 
 impl Role {
@@ -25,6 +27,8 @@ impl Role {
             Self::Dialog => 20,
             Self::Status => 10,
             Self::Field => 12,
+            Self::Tab => 10,
+            Self::Widget => 18,
         }
     }
 
@@ -34,11 +38,13 @@ impl Role {
             (true, Self::Menu | Self::Status) => (0.045, 0.92),
             (true, Self::Dialog) => (0.055, 0.88),
             (true, Self::Panel | Self::Sidebar) => (0.065, 0.80),
-            (true, Self::Field) => (0.12, 0.62),
+            (true, Self::Field | Self::Tab) => (0.12, 0.62),
+            (true, Self::Widget) => (0.065, 0.58),
             (false, Self::Menu | Self::Status) => (0.90, 0.72),
             (false, Self::Dialog) => (0.89, 0.64),
             (false, Self::Panel | Self::Sidebar) => (0.88, 0.56),
-            (false, Self::Field) => (0.95, 0.48),
+            (false, Self::Field | Self::Tab) => (0.95, 0.48),
+            (false, Self::Widget) => (0.95, 0.42),
         };
         objc2_app_kit::NSColor::colorWithWhite_alpha(white, alpha)
     }
@@ -279,7 +285,7 @@ mod macos {
     impl Role {
         fn frost(self) -> Option<NSVisualEffectMaterial> {
             match self {
-                Self::Field => Some(NSVisualEffectMaterial::Popover),
+                Self::Field | Self::Tab => Some(NSVisualEffectMaterial::Popover),
                 _ => None,
             }
         }
@@ -707,7 +713,7 @@ mod macos {
             let screen = ctx.content_rect();
             let surface_width = rect.width();
             let clip = match role {
-                Role::Field => painter.clip_rect(),
+                Role::Field | Role::Tab | Role::Widget => painter.clip_rect(),
                 _ => screen,
             };
             let rect = rect.intersect(screen).intersect(clip);

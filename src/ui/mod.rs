@@ -142,9 +142,10 @@ pub enum UiAction {
 /// AppKit surfaces positioned beneath the browser chrome.
 #[derive(Default)]
 pub struct NativeGlass {
-    pub sidebar_available: bool,
+    pub vibrancy_available: bool,
     pub sidebar: Option<Rect>,
     pub address: Option<(Rect, f32)>,
+    pub tabs: Vec<Rect>,
 }
 
 pub struct UiOutput {
@@ -209,7 +210,7 @@ pub struct ChromeContext<'a> {
 
 impl ChromeContext<'_> {
     fn uses_native_sidebar(&self) -> bool {
-        self.native_glass.sidebar_available
+        self.native_glass.vibrancy_available
             && self.palette.translucency.is_translucent()
             && self.settings.layout.is_sidebar()
     }
@@ -489,7 +490,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
                         .max_rect(inner)
                         .layout(egui::Layout::top_down(egui::Align::Min)),
                 );
-                sidebar_body(&mut body, chrome, &mut actions);
+                sidebar_body(&mut body, chrome, &mut actions, false);
                 ui.advance_cursor_after_rect(over);
             });
     }
@@ -649,7 +650,7 @@ fn draw_sidebar(
                         ),
                     ));
                 }
-                sidebar_body(ui, chrome, actions);
+                sidebar_body(ui, chrome, actions, false);
                 return;
             }
             // Laid out at the width it will have when it arrives, and clipped
@@ -669,7 +670,7 @@ fn draw_sidebar(
             body.multiply_opacity(reveal);
             // Halfway through leaving is not something to click on.
             body.disable();
-            sidebar_body(&mut body, chrome, actions);
+            sidebar_body(&mut body, chrome, actions, false);
             // Catching the light on the way out. The phase runs with the
             // panel's own width, so the light crosses it exactly once over the
             // morph rather than on a clock of its own.
@@ -709,7 +710,12 @@ fn sidebar_nav_offset(
 }
 
 /// Draw the sidebar in its docked panel or its Full Page overlay.
-fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
+fn sidebar_body(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    actions: &mut Vec<UiAction>,
+    native_overlay: bool,
+) {
     let palette = chrome.palette;
     let drag = ui.interact(
         ui.max_rect(),
@@ -873,7 +879,7 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
         draw_favourites_card(ui, chrome, actions, star);
     }
 
-    spaces::body(ui, chrome, actions);
+    spaces::body(ui, chrome, actions, native_overlay);
 }
 
 /// zervo://history — everything visited, newest first, grouped by how long ago
@@ -2246,7 +2252,7 @@ fn draw_sidebar_peek(
             if !surface.is_native() {
                 chrome.palette = chrome.palette.reaching(PANEL_REACH).over(drawn);
             }
-            sidebar_body(&mut body, chrome, actions);
+            sidebar_body(&mut body, chrome, actions, surface.is_native());
             chrome.palette = restore;
             surface.finish(ui, drawn, crate::overlay_glass::Role::Sidebar);
             // Claim the whole overlay, so the pointer over it resolves to this
@@ -2825,6 +2831,7 @@ struct TabRowStyle<'a> {
     compact: bool,
     /// The tab being dragged, if any — including possibly this one.
     dragging: Option<TabId>,
+    native_overlay: bool,
 }
 
 /// Where a drop on a tab row would put the dragged tab.
@@ -2841,6 +2848,7 @@ enum DropAt {
 /// return, because the sidebar now has to resolve a drag across every row in
 /// every workspace before it can act on one.
 struct TabRowOut {
+    visible_rect: Option<Rect>,
     clicked: bool,
     close_clicked: bool,
     drag_started: bool,
@@ -3038,6 +3046,7 @@ fn tab_row(
         // is the clearest drop affordance there is.
         ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         return TabRowOut {
+            visible_rect: None,
             clicked: false,
             close_clicked: false,
             drag_started: false,
@@ -3111,6 +3120,11 @@ fn tab_row(
     // selected row is half its accent, and the theme's ink is not guaranteed to
     // read on that.
     let (ink, ink_muted) = row_ink(palette, select_t);
+    let visible = rect.intersect(ui.clip_rect());
+    // Overlay rows share the sidebar's ink buffer. Docked rows get their
+    // AppKit background beneath the OpenGL view instead.
+    let frost = (style.native_overlay && visible.is_positive())
+        .then(|| crate::overlay_glass::Surface::begin(ui));
     let painter = ui.painter();
 
     // Animated fill: transparent -> hover surface -> accent-tinted glass.
@@ -3299,7 +3313,11 @@ fn tab_row(
             .on_hover_cursor(CursorIcon::PointingHand)
             .on_hover_text(style.url);
     }
+    if let Some(frost) = frost {
+        frost.finish(ui, rect, crate::overlay_glass::Role::Tab);
+    }
     TabRowOut {
+        visible_rect: visible.is_positive().then_some(visible),
         clicked: row_clicked,
         close_clicked,
         drag_started,

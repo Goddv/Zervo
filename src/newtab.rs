@@ -312,7 +312,14 @@ pub fn draw(
     // drawn against. They are not the same once the seam closes: the page
     // stops painting a base and shows the window's backdrop through a veil,
     // but a gradient still has to be a gradient *of* something.
-    let ground = theme::page_ground(&palette);
+    let native_frost =
+        chrome.native_glass.vibrancy_available && palette.translucency.is_translucent();
+    let ground = if native_frost {
+        // Leave the AppKit window backdrop visible through the new-tab page.
+        theme::page_veil(&palette, 0.18)
+    } else {
+        theme::page_ground(&palette)
+    };
     let base = theme::page_base(&palette);
     let radius = theme::content_corners(&palette);
 
@@ -350,9 +357,14 @@ pub fn draw(
         }));
     }
     if !over_photo {
+        let mut pattern = backdrop.clone();
+        if native_frost {
+            // Patterns and animations remain visible as a tint on the frost.
+            pattern.multiply_opacity(0.52);
+        }
         ambient |= crate::ui::paint_newtab_background(
             root,
-            &backdrop,
+            &pattern,
             page_rect,
             &palette,
             chrome.settings.new_tab_background,
@@ -584,9 +596,18 @@ fn paint_photo(
     *ambient |= fade < 1.0;
 
     let uv = cover(texture.resolution_vec2(), content_rect);
+    let frosted = chrome.native_glass.vibrancy_available && palette.translucency.is_translucent();
+    let (background, opacity) = match (frosted, chrome.wallpaper.frost) {
+        (true, Some(frost)) => (frost.id(), 0.88),
+        _ => (texture.id(), 1.0),
+    };
     backdrop.add(
-        egui::epaint::RectShape::filled(content_rect, radius, Color32::WHITE.gamma_multiply(fade))
-            .with_texture(texture.id(), uv),
+        egui::epaint::RectShape::filled(
+            content_rect,
+            radius,
+            Color32::WHITE.gamma_multiply(fade * opacity),
+        )
+        .with_texture(background, uv),
     );
     // The veil: a light wash over the whole picture, and a heavier scrim at
     // the top and bottom edges.
@@ -1278,6 +1299,7 @@ fn draw_board(
             continue;
         }
 
+        let widget = crate::overlay_glass::Surface::begin(area);
         ambient |= draw_tile(
             area,
             chrome,
@@ -1285,6 +1307,7 @@ fn draw_board(
             drawn,
             ink,
             false,
+            widget.is_native(),
             card_id(index),
             actions,
         );
@@ -1302,9 +1325,11 @@ fn draw_board(
                 area, &palette, &metrics, *tile, index, drawn, changes, resizing,
             );
         }
+        widget.finish(area, drawn, crate::overlay_glass::Role::Widget);
     }
 
     if let Some((index, tile, drawn)) = carried {
+        let widget = crate::overlay_glass::Surface::begin(area);
         ambient |= draw_tile(
             area,
             chrome,
@@ -1312,9 +1337,11 @@ fn draw_board(
             drawn,
             ink,
             true,
+            widget.is_native(),
             card_id(index),
             actions,
         );
+        widget.finish(area, drawn, crate::overlay_glass::Role::Widget);
     }
 
     if overflow > 0.0 {
@@ -1519,6 +1546,7 @@ fn draw_tile(
     rect: Rect,
     ink: &Ink,
     carried: bool,
+    native_material: bool,
     id: Id,
     actions: &mut Vec<UiAction>,
 ) -> bool {
@@ -1531,9 +1559,20 @@ fn draw_tile(
     // only for a card that happens to sit where the page was sampled — a
     // photograph is dark sky at the top and bright water at the bottom, and
     // pale text set for the sky disappears into the water.
-    let card_ink = ink.over(&palette, rect, framed);
+    let card_ink = if native_material {
+        Ink::new(&palette, false)
+    } else {
+        ink.over(&palette, rect, framed)
+    };
     let ink = &card_ink;
-    if framed && tile.card != Card::Search {
+    if native_material && editing {
+        area.painter().rect_stroke(
+            rect,
+            crate::overlay_glass::Role::Widget.radius(),
+            Stroke::new(1.0, palette.accent.gamma_multiply(0.55)),
+            StrokeKind::Inside,
+        );
+    } else if !native_material && framed && tile.card != Card::Search {
         let material = if carried {
             Glass::tier(Tier::Card)
         } else if editing {
@@ -1583,7 +1622,18 @@ fn draw_tile(
     let live = !editing && !carried;
 
     match tile.card {
-        Card::Search => draw_search(area, chrome, rect, ink, live, id, actions, Search::Card),
+        Card::Search => draw_search(
+            area,
+            chrome,
+            rect,
+            ink,
+            live,
+            id,
+            actions,
+            Search::Card {
+                native_widget: native_material,
+            },
+        ),
         Card::Clock => return draw_clock(area, rect, ink),
         Card::WorldClocks => return draw_world_clocks(area, chrome, body, ink),
         Card::QuickLinks => draw_quick_links(area, chrome, body, live, id, actions),
@@ -1894,16 +1944,32 @@ fn draw_resume(
         response.hovered(),
         0.12,
     ));
-    glass::paint(
-        root.painter(),
-        rect,
-        palette,
-        Glass::tier(Tier::Panel)
-            .strength(0.82 + 0.18 * hover)
-            .ring(palette.accent_ring(0.14 + 0.14 * hover))
-            .opaque(palette.bg),
-    );
-    let ink = Ink::new(palette, false).over(palette, rect, true);
+    let widget = crate::overlay_glass::Surface::begin(root);
+    if widget.is_native() {
+        if hover > 0.0 {
+            root.painter().rect_filled(
+                rect,
+                crate::overlay_glass::Role::Widget.radius(),
+                palette.surface_hover.gamma_multiply(hover * 0.24),
+            );
+        }
+    } else {
+        glass::paint(
+            root.painter(),
+            rect,
+            palette,
+            Glass::tier(Tier::Panel)
+                .strength(0.82 + 0.18 * hover)
+                .ring(palette.accent_ring(0.14 + 0.14 * hover))
+                .opaque(palette.bg),
+        );
+    }
+    let ink = Ink::new(palette, false);
+    let ink = if widget.is_native() {
+        ink
+    } else {
+        ink.over(palette, rect, true)
+    };
 
     // The badge: the host's initial on a small square, which is what a favicon
     // would occupy if the page had one to hand.
@@ -1952,6 +2018,7 @@ fn draw_resume(
         FontId::proportional(11.0),
         ink.muted,
     );
+    widget.finish(root, rect, crate::overlay_glass::Role::Widget);
     response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -2078,7 +2145,9 @@ fn draw_narrow(
         true,
         Id::unique("zervo_newtab_narrow"),
         actions,
-        Search::Card,
+        Search::Card {
+            native_widget: false,
+        },
     );
 }
 
@@ -2089,7 +2158,7 @@ fn draw_narrow(
 enum Search {
     /// A card on the board: the pill tier's corner, and the card's own height
     /// held between a readable minimum and maximum.
-    Card,
+    Card { native_widget: bool },
     /// 7a's hero: a capsule sixty points tall, ringed and lit, with the
     /// keyboard shortcut on the end. "The field, big and centred" is most of
     /// what that page is.
@@ -2108,7 +2177,17 @@ fn draw_search(
     look: Search,
 ) {
     let palette = chrome.palette;
-    let surface = crate::overlay_glass::Surface::begin(area);
+    let native_widget = matches!(
+        look,
+        Search::Card {
+            native_widget: true
+        }
+    );
+    let surface = (!native_widget).then(|| crate::overlay_glass::Surface::begin(area));
+    let native_material = native_widget
+        || surface
+            .as_ref()
+            .is_some_and(crate::overlay_glass::Surface::is_native);
     if look == Search::Hero {
         let response = area.interact(rect, id, Sense::click());
         let fill = if response.hovered() {
@@ -2116,18 +2195,18 @@ fn draw_search(
         } else {
             palette.surface
         };
-        if !surface.is_native() || response.hovered() {
+        if !native_material || response.hovered() {
             area.painter().rect_filled(
                 rect,
                 12,
-                if surface.is_native() {
+                if native_material {
                     fill.gamma_multiply(0.35)
                 } else {
                     fill
                 },
             );
         }
-        if !surface.is_native() {
+        if !native_material {
             area.painter().rect_stroke(
                 rect,
                 12,
@@ -2179,7 +2258,9 @@ fn draw_search(
         {
             actions.push(UiAction::OpenCommand(crate::ui::CommandMode::CurrentTab));
         }
-        surface.finish(area, rect, crate::overlay_glass::Role::Field);
+        if let Some(surface) = surface {
+            surface.finish(area, rect, crate::overlay_glass::Role::Field);
+        }
         return;
     }
     let height = rect.height().clamp(38.0, 52.0);
@@ -2199,7 +2280,7 @@ fn draw_search(
     // Over a photograph there is, and the material frosts against that instead
     // — this is what the pill falls back to on a plain or generated backdrop.
     let backing = palette.bg;
-    if !surface.is_native() {
+    if !native_material {
         glass::paint(
             area.painter(),
             pill,
@@ -2256,7 +2337,9 @@ fn draw_search(
             FontId::proportional(font),
             palette.text_muted,
         );
-        surface.finish(area, pill, crate::overlay_glass::Role::Field);
+        if let Some(surface) = surface {
+            surface.finish(area, pill, crate::overlay_glass::Role::Field);
+        }
         return;
     }
 
@@ -2282,7 +2365,7 @@ fn draw_search(
     // not have known to give it: the ink `Palette::over` picks for whatever is
     // behind this particular pill.
     if chrome.browser.newtab_query.is_empty() {
-        let muted = if surface.is_native() {
+        let muted = if native_material {
             palette.text_muted
         } else {
             ink.over(&palette, pill, true).muted
@@ -2319,10 +2402,12 @@ fn draw_search(
         chrome.browser.newtab_query.clear();
         actions.push(UiAction::Navigate(target));
     }
-    if has_focus && surface.is_native() {
+    if has_focus && native_material {
         icons::paint_focus(area, &palette, pill, Tier::Control);
     }
-    surface.finish(area, pill, crate::overlay_glass::Role::Field);
+    if let Some(surface) = surface {
+        surface.finish(area, pill, crate::overlay_glass::Role::Field);
+    }
 }
 
 fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
