@@ -295,7 +295,7 @@ mod macos {
         }
 
         /// Start a frame and expose its renderer to popup builders during layout.
-        pub(crate) fn prepare(&self, ctx: &egui::Context, size: [u32; 2], enabled: bool) {
+        pub(crate) fn prepare(&self, ctx: &egui::Context, size: [u32; 2], enabled: bool) -> bool {
             let mut renderer = self.renderer.lock().unwrap();
             renderer.active = 0;
             let ready = enabled && renderer.failed_size != Some(size);
@@ -306,6 +306,7 @@ mod macos {
                     data.remove::<Arc<Mutex<Renderer>>>(renderer_id());
                 }
             });
+            ready
         }
 
         pub(crate) fn present(&mut self, ctx: &egui::Context, dark: bool) {

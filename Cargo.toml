@@ -164,10 +164,11 @@ objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "NSArray",
     "NSData",
     "NSGeometry",
+    "NSRunLoop",
     "NSString",
     "NSURL",
 ] }
-objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CALayer"] }
 resvg = "0.50.0"
 
 [profile.release]

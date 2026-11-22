@@ -40,8 +40,9 @@ const SLIDE: f32 = 0.42;
 const SHIFT: f32 = 60.0;
 
 /// Where the setup has got to, and which way it is going.
-fn step(ctx: &egui::Context) -> f32 {
-    ctx.animate_value_with_time(Id::unique("zervo_setup_at"), target(ctx) as f32, SLIDE)
+fn step(ctx: &egui::Context, animation: f32) -> f32 {
+    let duration = if animation > 0.0 { SLIDE } else { 0.0 };
+    ctx.animate_value_with_time(Id::unique("zervo_setup_at"), target(ctx) as f32, duration)
 }
 
 fn target(ctx: &egui::Context) -> u8 {
@@ -91,7 +92,7 @@ pub(crate) fn draw(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<
         );
     }
 
-    let at = step(&ctx);
+    let at = step(&ctx, palette.material.animation);
     let now = target(&ctx);
     // Only the neighbours are drawn. A panel two steps away is off screen and
     // has nothing to contribute but widget ids.

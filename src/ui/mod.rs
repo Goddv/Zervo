@@ -413,7 +413,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
                 ui.set_clip_rect(clip);
                 crossing.draw(ui.painter(), &chrome.palette);
             });
-        ctx.request_repaint_after(crossing.again());
+        ctx.request_repaint();
     }
 
     let settings_open = matches!(
@@ -702,6 +702,23 @@ fn draw_sidebar(
     reserved
 }
 
+fn sidebar_nav_offset(
+    controls: Rect,
+    sidebar_left: f32,
+    sidebar_width: f32,
+    align: bool,
+    button_count: usize,
+) -> egui::Vec2 {
+    let row_height = SIDEBAR_ICON + 8.0;
+    let inset = (controls.right() + 8.0 - sidebar_left).max(0.0);
+    // icon_button adds six points on either side of the glyph.
+    if align && inset + button_count as f32 * (SIDEBAR_ICON + 12.0) <= sidebar_width {
+        vec2(inset, controls.center().y - row_height * 0.5)
+    } else {
+        vec2(0.0, controls.bottom() + 8.0)
+    }
+}
+
 /// Draw the sidebar in its docked panel or its Full Page overlay.
 fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     let palette = chrome.palette;
@@ -750,22 +767,26 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
     // Navigation sits clear of the macOS window controls.
     {
         let nav_height = SIDEBAR_ICON + 8.0;
-        let row_left = ui.max_rect().left();
         let row_top = ui.cursor().top();
-        let (top, inset) = chrome.window_controls.map_or((row_top, 0.0), |controls| {
-            let after_controls = (controls.right() + 8.0 - row_left).max(0.0);
-            if chrome.settings.appearance.align_nav
-                && after_controls + 5.0 * (SIDEBAR_ICON + 12.0) <= ui.max_rect().width()
-            {
-                (
-                    (controls.center().y - nav_height * 0.5).max(row_top),
-                    after_controls,
+        // The overlay moves its whole body. Use the settled origin to choose
+        // a row and inset so the controls travel with it from the first frame.
+        let sidebar_left = ui.ctx().content_rect().left() + f32::from(SIDEBAR_MARGIN.left);
+        let button_count = 3
+            + usize::from(chrome.settings.show_forward_button)
+            + usize::from(chrome.settings.show_reload_button);
+        let offset = chrome
+            .window_controls
+            .map(|controls| {
+                sidebar_nav_offset(
+                    controls,
+                    sidebar_left,
+                    ui.max_rect().width(),
+                    chrome.settings.appearance.align_nav,
+                    button_count,
                 )
-            } else {
-                ((controls.bottom() + 8.0).max(row_top), 0.0)
-            }
-        });
-        ui.add_space((top - row_top).max(0.0));
+            })
+            .unwrap_or_default();
+        ui.add_space((offset.y - row_top).max(0.0));
         let star;
         // The nav row gets a rect of its own rather than a `horizontal`.
         //
@@ -781,22 +802,30 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
         // when the sidebar is too narrow for both to fit on one line.
         let row = Rect::from_min_size(
             pos2(ui.max_rect().min.x, ui.cursor().min.y),
-            vec2(ui.max_rect().width(), SIDEBAR_ICON + 8.0),
+            vec2(ui.max_rect().width(), nav_height),
         );
         let mut nav = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
-        nav.set_clip_rect(row.intersect(ui.clip_rect()));
+        let mut clip = row.intersect(ui.clip_rect());
+        if offset.x > 0.0
+            && let Some(controls) = chrome.window_controls
+        {
+            // During the slide keep the moving icons clear of the fixed
+            // traffic lights until they have reached their own column.
+            clip.min.x = clip.min.x.max(controls.right() + 8.0);
+        }
+        nav.set_clip_rect(clip);
         // The study's nav icons sit shoulder to shoulder — five 26pt boxes in a
         // row, no gap. egui's own 8pt item spacing put 32 points between them,
         // which is what pushed the fifth off the end of a 226-point column.
         nav.spacing_mut().item_spacing.x = 0.0;
         {
             let ui = &mut nav;
-            if inset > 0.0 {
-                ui.add_space(inset);
+            if offset.x > 0.0 {
+                ui.add_space(offset.x);
             }
 
             let (can_go_back, can_go_forward, is_settings) = chrome
@@ -2159,12 +2188,12 @@ fn draw_sidebar_peek(
     let slide = Id::unique("zervo_sidebar_peek_slide");
     let Some((rect, open)) = peek else {
         // Snap shut, or the next reveal starts half open.
-        ctx.animate_bool_with_time(slide, false, 0.0);
+        ctx.animate_value_with_time(slide, 0.0, 0.0);
         return None;
     };
-    let t = glass::ease_out(ctx.animate_bool_with_time(
+    let t = glass::ease_out(ctx.animate_value_with_time(
         slide,
-        open,
+        if open { 1.0 } else { 0.0 },
         chrome.palette.material.animation.min(PEEK_SLIDE),
     ));
     if t <= 0.0 {
@@ -2176,6 +2205,7 @@ fn draw_sidebar_peek(
         .order(egui::Order::Foreground)
         .fixed_pos(drawn.min)
         .constrain(false)
+        .fade_in(false)
         .show(&ctx, |ui| {
             ui.set_clip_rect(ctx.content_rect());
             let surface = crate::overlay_glass::Surface::begin(ui);
@@ -3841,6 +3871,23 @@ fn draw_status_text(root: &Ui, palette: &Palette, content_rect: Rect, status: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidebar_navigation_aligns_in_its_settled_width() {
+        let controls = Rect::from_min_max(pos2(19.0, 19.0), pos2(79.0, 33.0));
+        let width_needed = 75.0 + 5.0 * (SIDEBAR_ICON + 12.0);
+        let aligned = sidebar_nav_offset(controls, 12.0, width_needed, true, 5);
+        assert_eq!(aligned.x, 75.0);
+        assert_eq!(aligned.y + (SIDEBAR_ICON + 8.0) * 0.5, controls.center().y);
+        assert_eq!(
+            sidebar_nav_offset(controls, 12.0, width_needed - 1.0, true, 5),
+            vec2(0.0, 41.0),
+        );
+        assert_eq!(
+            sidebar_nav_offset(controls, 12.0, width_needed - 1.0, true, 4),
+            aligned,
+        );
+    }
 
     /// `Ui::set_min_width` carries `debug_assert!(0.0 <= width)`, and the
     /// sidebar hands it `ui.available_width()` — from a panel that is

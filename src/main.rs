@@ -36,6 +36,8 @@ mod app;
 mod backdrop;
 mod controls;
 mod dashboard;
+#[cfg(target_os = "macos")]
+mod display_link;
 mod downloads;
 // The engine-independent half of the browser, in its own crate so that clippy
 // and the tests can run on a pull request without compiling Servo first.
@@ -76,13 +78,13 @@ use std::sync::{Arc, Mutex};
 
 use egui::LayerId;
 use egui_glow::{CallbackFn, EguiGlow};
-use euclid::{Point2D, Rect, Scale, Size2D};
+use euclid::{Point2D, Rect, Scale};
 use keyboard_types::ShortcutMatcher;
 use servo::{
-    ClipboardAction, DeviceIndependentPixel, DevicePixel, EventLoopWaker, InputEvent, Key,
-    MouseButton as ServoMouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
-    MouseMoveEvent, NamedKey, RenderingContext, ServoBuilder, WebView, WheelDelta, WheelEvent,
-    WheelMode, WindowRenderingContext,
+    ClipboardAction, DevicePixel, EventLoopWaker, InputEvent, Key, MouseButton as ServoMouseButton,
+    MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent, NamedKey,
+    RenderingContext, ServoBuilder, WebView, WebViewId, WheelDelta, WheelEvent, WheelMode,
+    WindowRenderingContext,
 };
 use url::Url;
 use winit::application::ApplicationHandler;
@@ -228,6 +230,9 @@ struct RunningApp {
     pending_repaint_at: Option<std::time::Instant>,
     /// Where egui leaves the delay it actually asked for. See `RepaintAt`.
     repaint_at: RepaintAt,
+    animation_waker: Waker,
+    animation_pending: bool,
+    painted_webview: Option<WebViewId>,
     /// What `apply_theme` was last run for, and the icon last handed to the
     /// Dock. Every settings write used to redo both, and redoing the theme
     /// means restyling egui, retuning the window's appearance and the frosted
@@ -373,9 +378,22 @@ impl ApplicationHandler<WakerEvent> for App {
             .display_handle()
             .expect("Failed to get display handle");
         let window_handle = window.window_handle().expect("Failed to get window handle");
+        #[cfg(target_os = "macos")]
+        let refresh_driver = display_link::DisplayLink::for_window(&window);
+        #[cfg(not(target_os = "macos"))]
+        let refresh_driver: Option<Rc<dyn servo::RefreshDriver>> = None;
+        let size = window.inner_size();
         let window_rendering_context = Rc::new(
-            WindowRenderingContext::new(display_handle, window_handle, window.inner_size())
-                .expect("Could not create RenderingContext for window"),
+            match refresh_driver {
+                Some(driver) => WindowRenderingContext::new_with_refresh_driver(
+                    display_handle,
+                    window_handle,
+                    size,
+                    driver,
+                ),
+                None => WindowRenderingContext::new(display_handle, window_handle, size),
+            }
+            .expect("Could not create RenderingContext for window"),
         );
         window_rendering_context
             .make_current()
@@ -551,6 +569,7 @@ impl ApplicationHandler<WakerEvent> for App {
             servo,
             window_rendering_context,
             rendering_context,
+            page_frame_ready: Cell::new(false),
             browser: RefCell::new(BrowserState::restore(
                 start_url.as_str(),
                 &settings.first_space,
@@ -625,6 +644,9 @@ impl ApplicationHandler<WakerEvent> for App {
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
             repaint_at,
+            animation_waker: waker.clone(),
+            animation_pending: false,
+            painted_webview: None,
             applied_theme,
             applied_appearance,
             shot: shot::Shot::from_env(),
@@ -685,6 +707,10 @@ impl ApplicationHandler<WakerEvent> for App {
         };
         match event {
             WakerEvent::Engine => app.state.servo.spin_event_loop(),
+            WakerEvent::AnimationFrame => {
+                app.animation_pending = false;
+                app.state.window.request_redraw();
+            },
             WakerEvent::Accessibility(event) => {
                 use egui_winit::accesskit_winit::WindowEvent as AccessEvent;
                 match event.window_event {
@@ -1267,7 +1293,7 @@ impl RunningApp {
             if done {
                 self.theme_fade = None;
             } else {
-                state.window.request_redraw();
+                self.request_animation_frame();
             }
         }
         let active_webview = state.active_webview();
@@ -1277,18 +1303,26 @@ impl RunningApp {
         let offscreen = state.rendering_context.clone();
         let mut ui_output = None;
 
-        // Move UI-facing state out of `self` for the closure; restored below.
-        let mut settings = self.settings.clone();
-        let favicons = std::mem::take(&mut self.favicons);
         let showing = state
             .browser
             .borrow()
             .active_tab()
             .map(|tab| (tab.id, tab.kind));
-        // Settings is drawn over flat palette colors, so sampling its
-        // framebuffer would repeat the same readback and blur while scrolling.
+        #[cfg(target_os = "macos")]
+        let native_overlays = self.glass_overlays.as_ref().is_some_and(|overlays| {
+            let size = state.window.inner_size();
+            let enabled =
+                glass_available && palette.translucency == theme::Translucency::LiquidGlass;
+            overlays.prepare(&self.egui_glow.egui_ctx, [size.width, size.height], enabled)
+        });
+        #[cfg(not(target_os = "macos"))]
+        let native_overlays = false;
+
+        // Native overlays sample the live webpage directly. The software
+        // copy still supplies portable overlays and the new-tab materials.
         let frosting = palette.translucency.is_translucent()
-            && matches!(showing, Some((_, TabKind::Web | TabKind::NewTab)));
+            && (matches!(showing, Some((_, TabKind::NewTab)))
+                || (!native_overlays && matches!(showing, Some((_, TabKind::Web)))));
         let page_changed = self.frosted_for != showing;
         self.frosted_for = showing;
         if page_changed || !frosting {
@@ -1351,14 +1385,8 @@ impl RunningApp {
         if self.egui_glow.egui_ctx.theme() != widget_theme {
             self.egui_glow.egui_ctx.set_theme(widget_theme);
         }
-        #[cfg(target_os = "macos")]
-        if let Some(overlays) = &self.glass_overlays {
-            let size = state.window.inner_size();
-            let enabled =
-                glass_available && palette.translucency == theme::Translucency::LiquidGlass;
-            overlays.prepare(&self.egui_glow.egui_ctx, [size.width, size.height], enabled);
-        }
         self.egui_glow.run(&state.window, |root| {
+            let settings = &mut self.settings;
             let mut browser = state.browser.borrow_mut();
             let mut controls = state.controls.borrow_mut();
             let mut library = state.library.borrow_mut();
@@ -1387,7 +1415,7 @@ impl RunningApp {
                 library: &mut library,
                 vault: &mut vault,
                 media: &media,
-                settings: &mut settings,
+                settings,
                 palette,
                 window_controls,
                 device_pixels_per_css_pixel,
@@ -1396,7 +1424,7 @@ impl RunningApp {
                     glass_available,
                     ..Default::default()
                 },
-                favicons: &favicons,
+                favicons: &self.favicons,
                 downloads: &self.downloads,
                 wallpaper,
                 capture: capture.clone(),
@@ -1426,17 +1454,24 @@ impl RunningApp {
             if !output.settings_open
                 && let Some(webview) = &active_webview
             {
-                let size = Size2D::new(
-                    content_rect.width().max(1.0),
-                    content_rect.height().max(1.0),
-                ) * Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
-                if size != webview.size() {
+                let size = PhysicalSize::new(
+                    (content_rect.width() * scale).round().max(1.0) as u32,
+                    (content_rect.height() * scale).round().max(1.0) as u32,
+                );
+                let current_size = webview.size();
+                let resized = size.width != current_size.width as u32
+                    || size.height != current_size.height as u32;
+                if resized {
                     // Also resizes the offscreen context, which must stay
                     // sized to exactly the content viewport.
-                    webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
+                    webview.resize(size);
                 }
-                // Render Servo into the offscreen FBO before egui paints.
-                webview.paint();
+                // Keep the last page texture during chrome-only animation.
+                let frame_ready = state.page_frame_ready.replace(false);
+                if frame_ready || resized || self.painted_webview != Some(webview.id()) {
+                    webview.paint();
+                    self.painted_webview = Some(webview.id());
+                }
 
                 // Blit the page under all chrome widgets. Only when a live
                 // webview exists — otherwise the FBO holds a stale frame.
@@ -1522,9 +1557,6 @@ impl RunningApp {
 
             ui_output = Some(output);
         });
-
-        self.favicons = favicons;
-        self.settings = settings;
 
         // Downloads the user allowed in the pass just drawn. Started here
         // rather than inside it, because the UI pass holds `controls` borrowed
@@ -1638,12 +1670,10 @@ impl RunningApp {
         // while one is still growing out of the bell.
         {
             let toasts = state.toasts.borrow();
-            let mut due = toasts.next_deadline(frame_now);
             if palette.material.animation > 0.0 && toasts.morphing(frame_now) {
-                let frame = frame_now + std::time::Duration::from_millis(16);
-                due = Some(due.map_or(frame, |at| at.min(frame)));
+                self.request_animation_frame();
             }
-            if let Some(deadline) = due {
+            if let Some(deadline) = toasts.next_deadline(frame_now) {
                 self.pending_repaint_at = Some(
                     self.pending_repaint_at
                         .map_or(deadline, |at| at.min(deadline)),
@@ -1655,29 +1685,6 @@ impl RunningApp {
         {
             state.library.borrow_mut().save();
             self.library_saved_at = std::time::Instant::now();
-        }
-
-        // Whatever egui asked for during this pass, taken whichever branch runs
-        // so a stale deadline cannot survive into the next one.
-        let egui_deadline = self.repaint_at.take();
-        if self.egui_glow.egui_ctx.requested_repaint_last_pass() {
-            state.window.request_redraw();
-        } else if let Some(deadline) = egui_deadline {
-            // Delayed request (caret blink, a clock's next minute): wake on a
-            // timer instead of redrawing at max FPS until it fires.
-            //
-            // Two things used to be wrong here. It woke after a flat 300ms
-            // regardless of what was asked for, and `has_requested_repaint()` is
-            // true whenever *any* delay is pending — so the stock new tab page,
-            // which ships a clock asking for twenty seconds, re-armed 300ms
-            // forever and never idled. And it *assigned* rather than taking the
-            // earlier of the two, so the 33ms the ambient backdrop had just
-            // asked for two branches up was overwritten by the clock's, and the
-            // default animated backdrop ran at three frames a second.
-            self.pending_repaint_at = Some(
-                self.pending_repaint_at
-                    .map_or(deadline, |at| at.min(deadline)),
-            );
         }
 
         // Paint order: bind the window framebuffer, egui paint (runs the blit
@@ -1773,7 +1780,36 @@ impl RunningApp {
             }
             state.window.request_redraw();
         }
+        state.window.pre_present_notify();
         state.window_rendering_context.present();
+
+        // Include repaint requests from native overlays made during painting.
+        let egui_deadline = self.repaint_at.take();
+        if self.egui_glow.egui_ctx.requested_repaint_last_pass()
+            || egui_deadline.is_some_and(|deadline| deadline <= std::time::Instant::now())
+        {
+            self.request_animation_frame();
+        } else if let Some(deadline) = egui_deadline {
+            self.pending_repaint_at = Some(
+                self.pending_repaint_at
+                    .map_or(deadline, |at| at.min(deadline)),
+            );
+        }
+    }
+
+    fn request_animation_frame(&mut self) {
+        if self.animation_pending {
+            return;
+        }
+        if let Some(driver) = self.state.window_rendering_context.refresh_driver() {
+            self.animation_pending = true;
+            let proxy = self.animation_waker.0.clone();
+            driver.observe_next_frame(Box::new(move || {
+                let _ = proxy.send_event(WakerEvent::AnimationFrame);
+            }));
+        } else {
+            self.state.window.request_redraw();
+        }
     }
 
     /// Ask for a picture of the page on its way out.
@@ -1808,7 +1844,10 @@ impl RunningApp {
             return;
         }
         let palette = self.palette();
-        if !transition::Crossing::wanted(&palette) || self.page_rect_points.width() < 1.0 {
+        if !self.animations_allowed()
+            || !transition::Crossing::wanted(&palette)
+            || self.page_rect_points.width() < 1.0
+        {
             return;
         }
         self.crossing_wanted = Some(transition::Wanted {
@@ -2524,10 +2563,23 @@ impl RunningApp {
     /// chrome currently is — so changing the theme twice in quick succession
     /// carries on from the middle rather than snapping back.
     fn start_theme_fade(&mut self) {
-        let from = self.palette();
-        self.theme_fade = Some((from, std::time::Instant::now()));
-        self.apply_platform_theme();
+        if self.animations_allowed() {
+            let from = self.palette();
+            self.theme_fade = Some((from, std::time::Instant::now()));
+            self.apply_platform_theme();
+        } else {
+            self.theme_fade = None;
+            self.apply_theme();
+        }
         self.state.window.request_redraw();
+    }
+
+    fn animations_allowed(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if vibrancy::accessibility_preferences().1 {
+            return false;
+        }
+        self.settings.appearance.motion > 0.0
     }
 
     /// Re-style the chrome and tell every webview the new prefers-color-scheme.
@@ -2557,7 +2609,12 @@ impl RunningApp {
                 theme::SystemBackdrop::Opaque => NSVisualEffectMaterial::WindowBackground,
                 _ => NSVisualEffectMaterial::UnderWindowBackground,
             };
-            vibrancy.set_material_animated(material, THEME_FADE.as_secs_f64());
+            let duration = if self.animations_allowed() {
+                THEME_FADE.as_secs_f64()
+            } else {
+                0.0
+            };
+            vibrancy.set_material_animated(material, duration);
         }
     }
 
@@ -2733,6 +2790,8 @@ struct Waker(winit::event_loop::EventLoopProxy<WakerEvent>);
 enum WakerEvent {
     /// The engine has something to do; spin its event loop.
     Engine,
+    /// The window's display is ready for the next animation frame.
+    AnimationFrame,
     /// The platform's accessibility client is asking for the tree, or asking
     /// for something in it to be activated. `accesskit_winit` delivers these
     /// through the same proxy, which is why this is an enum now.

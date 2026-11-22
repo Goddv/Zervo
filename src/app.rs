@@ -61,6 +61,8 @@ pub struct AppState {
     pub window_rendering_context: Rc<WindowRenderingContext>,
     /// Webviews render here, sized to the content rect; blitted under the chrome.
     pub rendering_context: Rc<OffscreenRenderingContext>,
+    /// A fresh frame is available for the visible webview.
+    pub page_frame_ready: Cell<bool>,
     pub browser: RefCell<BrowserState>,
     /// Popups created by script (window.open) waiting to be adopted as tabs.
     pub pending_popups: RefCell<Vec<WebView>>,
@@ -598,6 +600,7 @@ impl servo::WebViewDelegate for AppState {
         if !showing {
             return;
         }
+        self.page_frame_ready.set(true);
         self.window.request_redraw();
     }
 
