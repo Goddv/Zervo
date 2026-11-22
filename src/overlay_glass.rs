@@ -37,12 +37,14 @@ impl Role {
         let (white, alpha) = match (dark, self) {
             (true, Self::Menu | Self::Status) => (0.045, 0.92),
             (true, Self::Dialog) => (0.055, 0.88),
-            (true, Self::Panel | Self::Sidebar) => (0.065, 0.80),
+            (true, Self::Panel) => (0.065, 0.80),
+            (true, Self::Sidebar) => (0.065, 0.46),
             (true, Self::Field | Self::Tab) => (0.12, 0.62),
             (true, Self::Widget) => (0.065, 0.58),
             (false, Self::Menu | Self::Status) => (0.90, 0.72),
             (false, Self::Dialog) => (0.89, 0.64),
-            (false, Self::Panel | Self::Sidebar) => (0.88, 0.56),
+            (false, Self::Panel) => (0.88, 0.56),
+            (false, Self::Sidebar) => (0.92, 0.36),
             (false, Self::Field | Self::Tab) => (0.95, 0.48),
             (false, Self::Widget) => (0.95, 0.42),
         };
@@ -283,6 +285,10 @@ mod macos {
     }
 
     impl Role {
+        fn is_content(self) -> bool {
+            matches!(self, Self::Widget | Self::Field)
+        }
+
         fn frost(self) -> Option<NSVisualEffectMaterial> {
             match self {
                 Self::Field | Self::Tab => Some(NSVisualEffectMaterial::Popover),
@@ -380,8 +386,8 @@ mod macos {
         host: Retained<Host>,
         container: Retained<NSGlassEffectContainerView>,
         surfaces: Retained<NSView>,
-        sidebar: Option<Layer>,
-        sidebar_position: Option<usize>,
+        underlays: Retained<NSView>,
+        sidebar: Layer,
         layers: Vec<Option<Layer>>,
         renderer: Arc<Mutex<Renderer>>,
     }
@@ -404,14 +410,22 @@ mod macos {
                 unsafe { objc2::msg_send![class, new] };
             let surfaces = NSView::initWithFrame(NSView::alloc(mtm), host.bounds());
             container.setContentView(Some(&surfaces));
+            let underlays = NSView::initWithFrame(NSView::alloc(mtm), host.bounds());
+            let sidebar = Layer::new(Role::Sidebar, false, mtm)?;
+            sidebar.root.setHidden(true);
+            // AppKit can elevate and merge glass in the popup container.
+            // Keep the sidebar in its own permanent plane between content
+            // controls and popups so changes to either cannot reorder it.
+            host.addSubview(&underlays);
+            host.addSubview(&sidebar.root);
             host.addSubview(&container);
             Some(Self {
                 content,
                 host,
                 container,
                 surfaces,
-                sidebar: None,
-                sidebar_position: None,
+                underlays,
+                sidebar,
                 layers: Vec::new(),
                 renderer: Default::default(),
             })
@@ -448,13 +462,6 @@ mod macos {
                 ctx.request_repaint();
             }
             let count = renderer.active;
-            if count == 0 {
-                if !self.host.isHidden() {
-                    self.host.setHidden(true);
-                }
-                return;
-            }
-
             // SAFETY: the retained content view is accessed on the main thread.
             let Some(parent) = (unsafe { self.content.superview() }) else {
                 return;
@@ -475,6 +482,7 @@ mod macos {
             if self.container.frame() != bounds {
                 self.container.setFrame(bounds);
                 self.surfaces.setFrame(self.container.bounds());
+                self.underlays.setFrame(bounds);
             }
             if self.host.isHidden() {
                 self.host.setHidden(false);
@@ -483,10 +491,16 @@ mod macos {
             let mtm = self.host.mtm();
             let zoom = f64::from(ctx.zoom_factor());
             let mut index = 0;
-            let mut sidebar_position = None;
+            let mut sidebar_visible = false;
             for frame in &mut renderer.frames[..count] {
-                let slot = if frame.role == Role::Sidebar {
-                    sidebar_position = Some(index);
+                let layer = if frame.role == Role::Sidebar {
+                    sidebar_visible = true;
+                    log::trace!(
+                        target: "zervo::sidebar",
+                        "presenting sidebar at {:.2}..{:.2}",
+                        frame.material_rect().left(),
+                        frame.material_rect().right()
+                    );
                     &mut self.sidebar
                 } else {
                     if index == self.layers.len() {
@@ -494,28 +508,32 @@ mod macos {
                     }
                     let slot = &mut self.layers[index];
                     index += 1;
-                    slot
-                };
-                if slot
-                    .as_ref()
-                    .is_none_or(|layer| layer.material.role != frame.role)
-                {
-                    let Some(layer) = Layer::new(frame.role, dark, mtm) else {
-                        continue;
-                    };
-                    if frame.role != Role::Sidebar {
-                        let previous = slot.as_ref().map(|layer| &*layer.root);
-                        self.surfaces.addSubview_positioned_relativeTo(
+                    if slot
+                        .as_ref()
+                        .is_none_or(|layer| layer.material.role != frame.role)
+                    {
+                        let Some(layer) = Layer::new(frame.role, dark, mtm) else {
+                            continue;
+                        };
+                        let parent = if frame.role.is_content() {
+                            &self.underlays
+                        } else {
+                            &self.surfaces
+                        };
+                        let previous = slot.as_ref().filter(|layer| {
+                            layer.material.role.is_content() == frame.role.is_content()
+                        });
+                        parent.addSubview_positioned_relativeTo(
                             &layer.root,
                             NSWindowOrderingMode::Above,
-                            previous,
+                            previous.map(|layer| &*layer.root),
                         );
+                        if let Some(previous) = slot.replace(layer) {
+                            previous.root.removeFromSuperview();
+                        }
                     }
-                    if let Some(previous) = slot.replace(layer) {
-                        previous.root.removeFromSuperview();
-                    }
-                }
-                let layer = slot.as_mut().unwrap();
+                    slot.as_mut().unwrap()
+                };
                 if !layer.update(frame, bounds, dark, zoom, mtm) {
                     renderer.failed_size = Some(renderer.size);
                     self.host.setHidden(true);
@@ -524,31 +542,19 @@ mod macos {
                 }
             }
             for layer in self.layers.iter().skip(index).flatten() {
-                layer.root.setHidden(true);
-            }
-            if let Some(sidebar) = &self.sidebar {
-                if let Some(position) = sidebar_position {
-                    if self.sidebar_position != sidebar_position {
-                        let previous = position
-                            .checked_sub(1)
-                            .and_then(|index| self.layers[index].as_ref());
-                        let next = self.layers.first().and_then(Option::as_ref);
-                        let (order, relative) = if let Some(previous) = previous {
-                            (NSWindowOrderingMode::Above, Some(previous))
-                        } else {
-                            (NSWindowOrderingMode::Below, next)
-                        };
-                        self.surfaces.addSubview_positioned_relativeTo(
-                            &sidebar.root,
-                            order,
-                            relative.map(|layer| &*layer.root),
-                        );
-                    }
-                } else {
-                    sidebar.root.setHidden(true);
+                if !layer.root.isHidden() {
+                    layer.root.setHidden(true);
                 }
             }
-            self.sidebar_position = sidebar_position;
+            if !sidebar_visible && !self.sidebar.root.isHidden() {
+                // Park the view and its shadow outside the clip. Keeping the
+                // view attached avoids rebuilding its effect on the reveal.
+                let frame = self.sidebar.root.frame();
+                let parked = NSPoint::new(bounds.min().x - frame.size.width - 64.0, frame.origin.y);
+                if frame.origin != parked {
+                    self.sidebar.root.setFrameOrigin(parked);
+                }
+            }
         }
 
         pub(crate) fn destroy(&self, gl: &glow::Context) {

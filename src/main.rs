@@ -1047,6 +1047,12 @@ impl RunningApp {
             && !self
                 .sidebar_overlay
                 .is_some_and(|rect| rect.contains(point))
+            && (self.settings.layout.is_sidebar()
+                || !ui::sidebar_trigger_contains(
+                    self.egui_glow.egui_ctx.content_rect(),
+                    &self.settings.appearance,
+                    point,
+                ))
             && self
                 .egui_glow
                 .egui_ctx
@@ -1604,15 +1610,11 @@ impl RunningApp {
                     palette.material.animation.min(0.16),
                 );
                 vibrancy::set_window_controls_opacity(&state.window, opacity);
-                if let Some(backdrop) = &mut self._vibrancy {
-                    backdrop.update_sidebar(
-                        output.native_glass.sidebar,
-                        zoom,
-                        palette.translucency == theme::Translucency::LiquidGlass,
-                        palette.dark,
-                    );
-                    backdrop.update_address(output.native_glass.address, zoom);
-                    backdrop.update_tabs(&output.native_glass.tabs, zoom);
+                if let Some(backdrop) = &self._vibrancy {
+                    let native = output.native_glass;
+                    let fallback = native.sidebar.filter(|_| !native.sidebar_captured);
+                    backdrop.update_sidebar(fallback, zoom);
+                    backdrop.update_address(native.address, zoom);
                 }
             }
             state

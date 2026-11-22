@@ -145,7 +145,7 @@ pub struct NativeGlass {
     pub vibrancy_available: bool,
     pub sidebar: Option<Rect>,
     pub address: Option<(Rect, f32)>,
-    pub tabs: Vec<Rect>,
+    pub sidebar_captured: bool,
 }
 
 pub struct UiOutput {
@@ -336,6 +336,20 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
 
     let outer = root.available_rect_before_wrap();
     if native_sidebar {
+        if chrome.native_glass.sidebar_captured
+            && let Some(sidebar) = chrome.native_glass.sidebar
+        {
+            // The pane sits beside the page. Give the native glass some
+            // colour to sample through the empty part of the WebRender surface.
+            let palette = &chrome.palette;
+            let painter = root.ctx().layer_painter(egui::LayerId::background());
+            eased_gradient(
+                &painter,
+                sidebar,
+                theme::mix(palette.bg, palette.accent, 0.18).gamma_multiply(0.42),
+                palette.bg.gamma_multiply(0.16),
+            );
+        }
         paint_chrome_base(
             root,
             &chrome.palette,
@@ -650,7 +664,14 @@ fn draw_sidebar(
                         ),
                     ));
                 }
-                sidebar_body(ui, chrome, actions, false);
+                if let Some(rect) = chrome.native_glass.sidebar {
+                    let glass = crate::overlay_glass::Surface::begin(ui);
+                    chrome.native_glass.sidebar_captured = glass.is_native();
+                    sidebar_body(ui, chrome, actions, glass.is_native());
+                    glass.finish(ui, rect, crate::overlay_glass::Role::Sidebar);
+                } else {
+                    sidebar_body(ui, chrome, actions, false);
+                }
                 return;
             }
             // Laid out at the width it will have when it arrives, and clipped
@@ -2104,7 +2125,56 @@ const PEEK_SLIDE: f32 = 0.14;
 #[derive(Clone, Copy, Default)]
 struct PeekState {
     open: bool,
-    linger_until: f64,
+    close_at: Option<f64>,
+}
+
+impl PeekState {
+    fn update(&mut self, wanted: bool, now: f64) -> Option<f64> {
+        if wanted {
+            self.open = true;
+            self.close_at = None;
+        } else if self.open {
+            let deadline = *self.close_at.get_or_insert(now + PEEK_LINGER);
+            if now < deadline {
+                return Some(deadline - now);
+            }
+            self.open = false;
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct PeekMotion {
+    progress: f32,
+    last_frame: Option<f64>,
+}
+
+impl PeekMotion {
+    fn advance(&mut self, target: f32, now: f64, duration: f32) -> f32 {
+        let previous = self.last_frame.replace(now);
+        if duration <= 0.0 {
+            self.progress = target;
+        } else if let Some(previous) = previous {
+            // A cold AppKit frame may take longer than the entire animation.
+            // Advance only as far as a 60 Hz frame so the next frame still
+            // shows the slide. Multiple egui passes with the same time add
+            // no motion.
+            let elapsed = (now - previous).clamp(0.0, 1.0 / 60.0) as f32;
+            let remaining = target - self.progress;
+            self.progress += remaining.clamp(-elapsed / duration, elapsed / duration);
+        }
+        self.progress
+    }
+}
+
+pub(crate) fn sidebar_trigger_contains(
+    window: Rect,
+    appearance: &theme::Appearance,
+    point: egui::Pos2,
+) -> bool {
+    let width = PEEK_TRIGGER.max(spine_width(appearance));
+    (window.left()..=window.left() + width).contains(&point.x) && window.y_range().contains(point.y)
 }
 
 /// The sidebar's width: what the user last dragged it to this session,
@@ -2144,33 +2214,20 @@ fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
     let pointer = ctx.input(|input| input.pointer.latest_pos());
     let now = ctx.input(|input| input.time);
 
-    // Never narrower than what the spine has drawn there: a strip you can see
-    // is a strip you will aim at.
-    let trigger = PEEK_TRIGGER.max(spine_width(&chrome.palette.appearance));
-    let in_trigger = pointer.is_some_and(|pos| {
-        (window.left()..=window.left() + trigger).contains(&pos.x)
-            && window.y_range().contains(pos.y)
-    });
-    // Still on screen while it slides away, so moving back onto one that is
-    // half gone catches it rather than watching it go.
-    let visible = state.open || now < state.linger_until + PEEK_SLIDE as f64;
+    let in_trigger = pointer
+        .is_some_and(|pos| sidebar_trigger_contains(window, &chrome.palette.appearance, pos));
+    // Returning to the panel during dismissal reverses the same slide.
     let hot = Rect::from_min_max(rect.min, rect.max + vec2(PEEK_GRACE, 0.0));
+    let motion =
+        ctx.data(|data| data.get_temp::<PeekMotion>(Id::unique("zervo_sidebar_peek_slide")));
+    let visible = state.open || motion.is_some_and(|motion| motion.progress > 0.0);
     let in_panel = visible && pointer.is_some_and(|pos| hot.contains(pos));
-    // Never pull it away mid-gesture: a held button, a drag, or an open menu
-    // keeps it up even if the pointer strays outside.
     let busy = state.open && (ctx.egui_is_using_pointer() || egui::Popup::is_any_open(ctx));
     let wanted =
         crate::shot::peek_forced(ctx.cumulative_pass_nr()) || in_trigger || in_panel || busy;
 
-    if wanted {
-        state.linger_until = now + PEEK_LINGER;
-    }
-    state.open = wanted || now < state.linger_until;
-    if state.open && !wanted {
-        // Nothing else will wake us to close it.
-        ctx.request_repaint_after(std::time::Duration::from_secs_f64(
-            (state.linger_until - now).max(0.0),
-        ));
+    if let Some(delay) = state.update(wanted, now) {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(delay));
     }
     ctx.data_mut(|data| data.insert_temp(id, state));
     Some((rect, state.open))
@@ -2190,75 +2247,97 @@ fn draw_sidebar_peek(
     let ctx = root.ctx().clone();
     let slide = Id::unique("zervo_sidebar_peek_slide");
     let Some((rect, open)) = peek else {
-        // Snap shut, or the next reveal starts half open.
-        ctx.animate_value_with_time(slide, 0.0, 0.0);
+        ctx.data_mut(|data| data.remove::<PeekMotion>(slide));
         return None;
     };
-    let t = glass::ease_out(ctx.animate_value_with_time(
-        slide,
-        if open { 1.0 } else { 0.0 },
-        chrome.palette.material.animation.min(PEEK_SLIDE),
-    ));
+    let target = if open { 1.0 } else { 0.0 };
+    let now = ctx.input(|input| input.time);
+    let duration = chrome.palette.material.animation.min(PEEK_SLIDE);
+    let progress = ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<PeekMotion>(slide)
+            .advance(target, now, duration)
+    });
+    if progress != target {
+        ctx.request_repaint();
+    }
+    let t = progress * progress * (3.0 - 2.0 * progress);
     if t <= 0.0 {
         return None;
     }
 
-    let drawn = rect.translate(vec2((t - 1.0) * rect.width(), 0.0));
-    egui::Area::new(Id::unique("zervo_sidebar_peek_area"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(drawn.min)
-        .constrain(false)
-        .fade_in(false)
-        .show(&ctx, |ui| {
-            ui.set_clip_rect(ctx.content_rect());
-            let surface = crate::overlay_glass::Surface::begin(ui);
-            if !surface.is_native() {
-                paint_chrome_fill(
-                    ui.painter(),
-                    drawn,
-                    ctx.content_rect().top(),
-                    &chrome.palette,
-                    chrome.settings.top_glow,
-                    chrome.palette.chrome_tint(),
-                );
-                if chrome.palette.translucency.is_translucent() {
-                    glass::paint(
-                        ui.painter(),
-                        drawn,
-                        &chrome.palette.reaching(PANEL_REACH),
-                        Glass::of(Surface::Menu).radius_exact(0).no_shadow(),
-                    );
-                }
-                paint_edge_shadow(
-                    ui.painter(),
-                    Rect::from_min_max(
-                        pos2(drawn.max.x, drawn.min.y),
-                        pos2(drawn.max.x + 12.0, drawn.max.y),
-                    ),
-                    chrome.palette.shadow,
-                );
-            }
+    let scale = ctx.pixels_per_point();
+    let shift = ((t - 1.0) * rect.width() * scale).round() / scale;
+    let drawn = rect.translate(vec2(shift, 0.0));
+    if drawn.right() <= rect.left() {
+        return None;
+    }
+    let id = Id::unique("zervo_sidebar_peek_area");
+    let layer = egui::LayerId::new(egui::Order::Foreground, id);
+    // The exact bounds are known even on the first frame. Register them
+    // directly so there is no invisible `Area` sizing frame during the slide.
+    ctx.memory_mut(|memory| {
+        memory.areas_mut().set_state(
+            layer,
+            egui::AreaState {
+                pivot_pos: Some(drawn.min),
+                size: Some(drawn.size()),
+                ..Default::default()
+            },
+        );
+    });
+    let mut overlay = root.new_child(
+        egui::UiBuilder::new()
+            .id_salt("sidebar_peek")
+            .layer_id(layer)
+            .max_rect(drawn)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    let ui = &mut overlay;
+    ui.set_clip_rect(ctx.content_rect());
+    let surface = crate::overlay_glass::Surface::begin(ui);
+    if !surface.is_native() {
+        paint_chrome_fill(
+            ui.painter(),
+            drawn,
+            ctx.content_rect().top(),
+            &chrome.palette,
+            chrome.settings.top_glow,
+            chrome.palette.chrome_tint(),
+        );
+        if chrome.palette.translucency.is_translucent() {
+            glass::paint(
+                ui.painter(),
+                drawn,
+                &chrome.palette.reaching(PANEL_REACH),
+                Glass::of(Surface::Menu).radius_exact(0).no_shadow(),
+            );
+        }
+        paint_edge_shadow(
+            ui.painter(),
+            Rect::from_min_max(
+                pos2(drawn.max.x, drawn.min.y),
+                pos2(drawn.max.x + 12.0, drawn.max.y),
+            ),
+            chrome.palette.shadow,
+        );
+    }
 
-            let inner = Rect::from_min_max(
-                drawn.min + vec2(SIDEBAR_MARGIN.left as f32, SIDEBAR_MARGIN.top as f32),
-                drawn.max - vec2(SIDEBAR_MARGIN.right as f32, SIDEBAR_MARGIN.bottom as f32),
-            );
-            let mut body = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(inner)
-                    .layout(egui::Layout::top_down(egui::Align::Min)),
-            );
-            let restore = chrome.palette;
-            if !surface.is_native() {
-                chrome.palette = chrome.palette.reaching(PANEL_REACH).over(drawn);
-            }
-            sidebar_body(&mut body, chrome, actions, surface.is_native());
-            chrome.palette = restore;
-            surface.finish(ui, drawn, crate::overlay_glass::Role::Sidebar);
-            // Claim the whole overlay, so the pointer over it resolves to this
-            // layer rather than the chrome underneath.
-            ui.advance_cursor_after_rect(drawn);
-        });
+    let inner = Rect::from_min_max(
+        drawn.min + vec2(SIDEBAR_MARGIN.left as f32, SIDEBAR_MARGIN.top as f32),
+        drawn.max - vec2(SIDEBAR_MARGIN.right as f32, SIDEBAR_MARGIN.bottom as f32),
+    );
+    let mut body = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    let restore = chrome.palette;
+    if !surface.is_native() {
+        chrome.palette = chrome.palette.reaching(PANEL_REACH).over(drawn);
+    }
+    sidebar_body(&mut body, chrome, actions, surface.is_native());
+    chrome.palette = restore;
+    surface.finish(ui, drawn, crate::overlay_glass::Role::Sidebar);
     Some(drawn.intersect(ctx.content_rect()))
 }
 
@@ -2453,6 +2532,7 @@ fn draw_address_pill(
 
     let radius = f32::from(palette.radius(Tier::Panel)).min(height * 0.5);
     let docked_glass = chrome.native_glass.sidebar.is_some()
+        && !chrome.native_glass.sidebar_captured
         && palette.translucency == theme::Translucency::LiquidGlass;
     let material = (!docked_glass).then(|| crate::overlay_glass::Surface::begin(ui));
     if docked_glass {
@@ -2848,7 +2928,6 @@ enum DropAt {
 /// return, because the sidebar now has to resolve a drag across every row in
 /// every workspace before it can act on one.
 struct TabRowOut {
-    visible_rect: Option<Rect>,
     clicked: bool,
     close_clicked: bool,
     drag_started: bool,
@@ -3046,7 +3125,6 @@ fn tab_row(
         // is the clearest drop affordance there is.
         ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         return TabRowOut {
-            visible_rect: None,
             clicked: false,
             close_clicked: false,
             drag_started: false,
@@ -3317,7 +3395,6 @@ fn tab_row(
         frost.finish(ui, rect, crate::overlay_glass::Role::Tab);
     }
     TabRowOut {
-        visible_rect: visible.is_positive().then_some(visible),
         clicked: row_clicked,
         close_clicked,
         drag_started,
@@ -3892,6 +3969,32 @@ fn draw_status_text(root: &Ui, palette: &Palette, content_rect: Rect, status: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidebar_hover_lingers_from_pointer_exit_and_can_reverse() {
+        let mut peek = PeekState::default();
+        assert_eq!(peek.update(true, 0.0), None);
+        assert_eq!(peek.update(false, 10.0), Some(PEEK_LINGER));
+        assert!(peek.open);
+        assert_eq!(peek.update(false, 10.0 + PEEK_LINGER), None);
+        assert!(!peek.open);
+        assert_eq!(peek.update(true, 10.3), None);
+        assert!(peek.open);
+        assert!(peek.close_at.is_none());
+    }
+
+    #[test]
+    fn sidebar_slide_advances_in_steps_after_a_slow_frame() {
+        let mut motion = PeekMotion::default();
+        assert_eq!(motion.advance(0.0, 1.0, PEEK_SLIDE), 0.0);
+        let first = motion.advance(1.0, 2.0, PEEK_SLIDE);
+        assert!(first > 0.0 && first < 0.13);
+        assert_eq!(motion.advance(1.0, 2.0, PEEK_SLIDE), first);
+        let second = motion.advance(1.0, 2.5, PEEK_SLIDE);
+        assert!(second > first && second < 0.25);
+        assert!(motion.advance(0.0, 2.51, PEEK_SLIDE) < second);
+        assert_eq!(motion.advance(0.0, 2.52, 0.0), 0.0);
+    }
 
     #[test]
     fn sidebar_navigation_aligns_in_its_settled_width() {

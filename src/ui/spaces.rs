@@ -203,9 +203,6 @@ pub(super) fn body(
     let drag_id = Id::unique("zervo_tab_drag");
     let dragging = ctx.data(|data| data.get_temp::<TabId>(drag_id));
     let pointer = ctx.input(|input| input.pointer.latest_pos());
-    let docked_frost = chrome.native_glass.sidebar.is_some()
-        && palette.translucency == theme::Translucency::LiquidGlass;
-    let mut frosted_tabs = Vec::new();
     egui::ScrollArea::vertical()
         .id_salt(("space_tabs", active))
         .auto_shrink([false, false])
@@ -261,9 +258,6 @@ pub(super) fn body(
                         chrome.favicons.get(&tab.id),
                         actions,
                     );
-                    if docked_frost && let Some(rect) = out.visible_rect {
-                        frosted_tabs.push(rect);
-                    }
                     if out.drag_started {
                         ctx.data_mut(|data| data.insert_temp(drag_id, tab.id));
                     }
@@ -366,5 +360,4 @@ pub(super) fn body(
                 }
             }
         });
-    chrome.native_glass.tabs = frosted_tabs;
 }
