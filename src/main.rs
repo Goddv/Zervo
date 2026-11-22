@@ -81,8 +81,8 @@ use keyboard_types::ShortcutMatcher;
 use servo::{
     ClipboardAction, DeviceIndependentPixel, DevicePixel, EventLoopWaker, InputEvent, Key,
     MouseButton as ServoMouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
-    MouseMoveEvent, NamedKey, RenderingContext, ServoBuilder, WheelDelta, WheelEvent, WheelMode,
-    WindowRenderingContext,
+    MouseMoveEvent, NamedKey, RenderingContext, ServoBuilder, WebView, WheelDelta, WheelEvent,
+    WheelMode, WindowRenderingContext,
 };
 use url::Url;
 use winit::application::ApplicationHandler;
@@ -196,11 +196,12 @@ struct RunningApp {
     settings_open: bool,
     modifiers: ModifiersState,
     /// Last cursor position in window physical pixels.
-    cursor: PhysicalPosition<f64>,
-    /// Last cursor position relative to the webview origin, physical pixels.
-    webview_relative_mouse: Cell<Point2D<f32, DevicePixel>>,
+    cursor: Option<PhysicalPosition<f64>>,
+    /// The webview that last received a pointer move and may still show a hover.
+    hovered_webview: Option<WebView>,
     /// The content rect left over after the chrome panels, in egui points.
     content_rect_points: egui::Rect,
+    sidebar_overlay: Option<egui::Rect>,
     /// The surface the page was painted on last frame, which is what the
     /// blurred copy every glass surface frosts against is a copy of. Not the
     /// card's own rectangle once the chrome floats over the page — see
@@ -496,6 +497,8 @@ impl ApplicationHandler<WakerEvent> for App {
             // Constructed stylesheets — how web components ship their styling.
             // Without it Lit and friends render unstyled.
             dom_adoptedstylesheet_enabled: true,
+            // Servo's shell enables this API, which sites use to load web fonts.
+            dom_fontface_enabled: true,
             // `@container`, and multi-column layout. Both fall back to
             // something wrong-looking rather than something absent.
             layout_css_container_queries_enabled: true,
@@ -611,9 +614,10 @@ impl ApplicationHandler<WakerEvent> for App {
             favicons: HashMap::new(),
             settings_open: false,
             modifiers: ModifiersState::default(),
-            cursor: PhysicalPosition::default(),
-            webview_relative_mouse: Cell::new(Point2D::zero()),
+            cursor: None,
+            hovered_webview: None,
             content_rect_points: egui::Rect::ZERO,
+            sidebar_overlay: None,
             page_rect_points: egui::Rect::ZERO,
             controls_open: false,
             swipe: gestures::Recognizer::default(),
@@ -771,22 +775,14 @@ impl RunningApp {
 
         // Route the remaining (input) events: egui first, unless the cursor is
         // over the web content, in which case pointer events bypass the chrome.
-        let scale = state.window.scale_factor() as f32;
-        let cursor_points = egui::pos2(self.cursor.x as f32 / scale, self.cursor.y as f32 / scale);
-        // While the settings page covers the content area, egui owns it — as
-        // it does the strip a revealed autohide sidebar floats over, or its
-        // clicks and scrolls would reach the page underneath as well.
-        // Anything egui has floating over the content owns the pointer: the
-        // favourites card, the downloads card, the revealed sidebar, widget
-        // menus, page dialogs. Asking egui which layer is under the pointer
-        // covers all of them, including ones added later — the previous
-        // version listed overlays by hand, and every overlay anyone forgot to
-        // add sent its clicks straight through to the page underneath.
-        let pointer_on_page = self.content_rect_points.contains(cursor_points)
-            && !self.settings_open
-            // A modal dialog blocks the whole page, not just its own rect.
-            && !self.controls_open
-            && !self.egui_glow.egui_ctx.is_pointer_over_egui();
+        match &event {
+            WindowEvent::CursorMoved { position, .. } => self.cursor = Some(*position),
+            WindowEvent::CursorLeft { .. } => self.cursor = None,
+            _ => {},
+        }
+        let scale = state.window.scale_factor() as f32 * self.egui_glow.egui_ctx.zoom_factor();
+        let cursor_points = self.cursor_points(scale);
+        let pointer_on_page = cursor_points.is_some_and(|point| self.pointer_hits_page(point));
 
         // Re-decided on every press rather than remembered indefinitely, so a
         // mouse-up we never see — AppKit swallows one whenever it runs its own
@@ -809,6 +805,7 @@ impl RunningApp {
         if let WindowEvent::Focused(focused) = &event {
             if !focused {
                 self.pointer_owner = PointerOwner::Free;
+                self.leave_webview();
             }
             if let Some(webview) = state.active_webview() {
                 webview.set_focused(*focused);
@@ -832,7 +829,8 @@ impl RunningApp {
             {
                 // Up and down are scrolling everywhere except the strip above
                 // the page, which has nothing to scroll.
-                let vertical_ok = cursor_points.y < self.content_rect_points.min.y;
+                let vertical_ok =
+                    cursor_points.is_some_and(|point| point.y < self.content_rect_points.min.y);
                 let horizontal = matches!(
                     direction,
                     gestures::Direction::Left | gestures::Direction::Right
@@ -885,9 +883,8 @@ impl RunningApp {
                 if response.repaint {
                     state.window.request_redraw();
                 }
-                // CursorMoved always goes to egui (tooltips), but is still
-                // forwarded to the webview when over the content.
-                consumed = if matches!(event, WindowEvent::CursorMoved { .. }) && over_content {
+                // A move over chrome can still have to clear the page's hover.
+                consumed = if matches!(event, WindowEvent::CursorMoved { .. }) {
                     false
                 } else {
                     response.consumed
@@ -904,22 +901,24 @@ impl RunningApp {
         }
 
         match event {
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = position;
+            WindowEvent::CursorMoved { position, .. } if over_content => {
                 let point = self.webview_point(position, scale);
-                let previous = self.webview_relative_mouse.replace(point);
-                if let Some(webview) = state.active_webview() {
-                    let rect: Rect<f32, DevicePixel> = webview.size().into();
-                    if rect.contains(point) {
-                        webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(
-                            point.into(),
-                        )));
-                    } else if rect.contains(previous) {
-                        webview.notify_input_event(InputEvent::MouseLeftViewport(
-                            MouseLeftViewportEvent::default(),
-                        ));
+                if let Some(webview) = state.active_webview()
+                    && Rect::<f32, DevicePixel>::from(webview.size()).contains(point)
+                {
+                    if self.hovered_webview.as_ref() != Some(&webview) {
+                        self.leave_webview();
                     }
+                    webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(
+                        point.into(),
+                    )));
+                    self.hovered_webview = Some(webview);
+                } else {
+                    self.leave_webview();
                 }
+            },
+            WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } => {
+                self.leave_webview();
             },
             WindowEvent::Ime(ime) => {
                 use servo::{CompositionEvent, CompositionState, ImeEvent};
@@ -954,19 +953,12 @@ impl RunningApp {
                     }
                 }
             },
-            WindowEvent::CursorLeft { .. } => {
-                if let Some(webview) = state.active_webview() {
-                    webview.notify_input_event(InputEvent::MouseLeftViewport(
-                        MouseLeftViewportEvent::default(),
-                    ));
-                }
-            },
             WindowEvent::MouseInput {
                 state: element_state,
                 button,
                 ..
-            } if over_content => {
-                let point = self.webview_relative_mouse.get();
+            } if over_content && let Some(position) = self.cursor => {
+                let point = self.webview_point(position, scale);
                 if let Some(webview) = state.active_webview() {
                     let rect: Rect<f32, DevicePixel> = webview.size().into();
                     if rect.contains(point) {
@@ -993,7 +985,9 @@ impl RunningApp {
                     }
                 }
             },
-            WindowEvent::MouseWheel { delta, .. } if over_content => {
+            WindowEvent::MouseWheel { delta, .. }
+                if over_content && let Some(position) = self.cursor =>
+            {
                 if let Some(webview) = state.active_webview() {
                     let (delta_x, delta_y) = match delta {
                         MouseScrollDelta::LineDelta(dx, dy) => {
@@ -1008,7 +1002,7 @@ impl RunningApp {
                             z: 0.0,
                             mode: WheelMode::DeltaPixel,
                         },
-                        self.webview_relative_mouse.get().into(),
+                        self.webview_point(position, scale).into(),
                     )));
                 }
             },
@@ -1018,6 +1012,33 @@ impl RunningApp {
                 self.handle_keyboard_input(key_event);
             },
             _ => {},
+        }
+    }
+
+    fn cursor_points(&self, scale: f32) -> Option<egui::Pos2> {
+        self.cursor
+            .map(|position| egui::pos2(position.x as f32 / scale, position.y as f32 / scale))
+    }
+
+    fn pointer_hits_page(&self, point: egui::Pos2) -> bool {
+        self.content_rect_points.contains(point)
+            && !self.settings_open
+            && !self.controls_open
+            && !self
+                .sidebar_overlay
+                .is_some_and(|rect| rect.contains(point))
+            && self
+                .egui_glow
+                .egui_ctx
+                .layer_id_at(point)
+                .is_none_or(|layer| layer.order == egui::Order::Background)
+    }
+
+    fn leave_webview(&mut self) {
+        if let Some(webview) = self.hovered_webview.take() {
+            webview.notify_input_event(InputEvent::MouseLeftViewport(
+                MouseLeftViewportEvent::default(),
+            ));
         }
     }
 
@@ -1173,24 +1194,6 @@ impl RunningApp {
             self.refresh_favicons();
         }
 
-        // The wallpaper: collect anything the fetch thread finished, and start
-        // a new one when the cadence says so. Both are cheap when there is
-        // nothing to do, which is almost always.
-        // The page's blurred copy, taken by last frame's paint callback. On an
-        // internal page there is nothing to copy, and a stale copy of the page
-        // you were on before is worse than none.
-        let ground = self.palette().bg;
-        if let Ok(mut backdrop) = self.page_backdrop.lock()
-            && let Some(image) = backdrop.take(ground)
-        {
-            self.page_backdrop_texture = Some(theme::Frost::upload(
-                &self.egui_glow.egui_ctx,
-                "zervo-page-backdrop",
-                image,
-                egui::TextureOptions::LINEAR,
-            ));
-        }
-
         // Collected whatever the page is showing: a result left sitting in the
         // channel would keep the loop waking up for it forever.
         if self.wallpaper.poll()
@@ -1277,31 +1280,37 @@ impl RunningApp {
         // Move UI-facing state out of `self` for the closure; restored below.
         let mut settings = self.settings.clone();
         let favicons = std::mem::take(&mut self.favicons);
-        // Handed to the paint callback, which runs inside `run` and so cannot
-        // borrow `self`. Only asked for when it is due, so an idle window is
-        // not stalling its own pipeline on a readback every frame.
-        // Nothing shows through a solid surface, so nothing needs copying:
-        // under Solid this whole path — the readback, the blur, the upload —
-        // costs nothing at all rather than costing a little.
-        let frosting = palette.translucency.is_translucent();
-        // Handed to the paint callback, which runs inside `run` and so cannot
-        // borrow `self`.
-        // The frost is a copy of one page. When that is no longer the page on
-        // screen it is thrown away rather than kept until something happens to
-        // overwrite it: a frame of unfrosted glass while the next copy is
-        // taken is a great deal better than glass frosted against a page the
-        // reader has left.
         let showing = state
             .browser
             .borrow()
             .active_tab()
             .map(|tab| (tab.id, tab.kind));
-        if self.frosted_for != showing {
-            self.frosted_for = showing;
+        // Settings is drawn over flat palette colors, so sampling its
+        // framebuffer would repeat the same readback and blur while scrolling.
+        let frosting = palette.translucency.is_translucent()
+            && matches!(showing, Some((_, TabKind::Web | TabKind::NewTab)));
+        let page_changed = self.frosted_for != showing;
+        self.frosted_for = showing;
+        if page_changed || !frosting {
             self.page_backdrop_texture = None;
+        }
+        // Consume the last frame's copy, discarding it if the tab has changed.
+        if (frosting || page_changed)
+            && let Ok(mut backdrop) = self.page_backdrop.lock()
+            && let Some(image) = backdrop.take(palette.bg)
+            && frosting
+            && !page_changed
+        {
+            self.page_backdrop_texture = Some(theme::Frost::upload(
+                &self.egui_glow.egui_ctx,
+                "zervo-page-backdrop",
+                image,
+                egui::TextureOptions::LINEAR,
+            ));
         }
         let eraser = self.corner_eraser.clone();
         let translucent_window = self.translucent_window;
+        // Defer the copy until the paint callback has the page's pixels.
         let capture = (frosting
             && self
                 .page_backdrop
@@ -1312,8 +1321,8 @@ impl RunningApp {
         // the same way the new tab page's cards frost against its wallpaper —
         // the new tab page then replaces it with the wallpaper's own, since
         // that is what is behind *its* cards.
-        let palette = match (&self.page_backdrop_texture, !frosting) {
-            (Some(frost), false) => palette.with_backdrop(Some(theme::Backdrop {
+        let palette = match &self.page_backdrop_texture {
+            Some(frost) => palette.with_backdrop(Some(theme::Backdrop {
                 texture: frost.id(),
                 luma: frost.luma(),
                 rect: self.page_rect_points,
@@ -1540,9 +1549,37 @@ impl RunningApp {
 
         let mut ambient = false;
         if let Some(output) = ui_output {
+            self.content_rect_points = output.content_rect;
+            self.page_rect_points = output.page_rect;
+            self.sidebar_overlay = output.sidebar_overlay;
+            self.controls_open = output.controls_open;
+            self.settings_open = output.settings_open;
+            let scale = self.egui_glow.egui_ctx.pixels_per_point();
+            let cursor = self.cursor_points(scale);
+            if self.hovered_webview.is_some()
+                && (self.hovered_webview != active_webview
+                    || (self.pointer_owner != PointerOwner::Page
+                        && !cursor.is_some_and(|point| self.pointer_hits_page(point))))
+            {
+                self.leave_webview();
+            }
             #[cfg(target_os = "macos")]
             {
-                let zoom = self.egui_glow.egui_ctx.zoom_factor();
+                let ctx = &self.egui_glow.egui_ctx;
+                let zoom = ctx.zoom_factor();
+                let controls_over_page = !output.settings_open
+                    && active_webview.is_some()
+                    && window_controls.is_some_and(|rect| output.content_rect.intersects(rect))
+                    && output.sidebar_overlay.is_none();
+                let controls_hovered = window_controls.is_some_and(|rect| {
+                    cursor.is_some_and(|point| rect.expand(8.0 / zoom).contains(point))
+                });
+                let opacity = ctx.animate_bool_with_time(
+                    egui::Id::unique("native_window_controls_visible"),
+                    !controls_over_page || controls_hovered,
+                    palette.material.animation.min(0.16),
+                );
+                vibrancy::set_window_controls_opacity(&state.window, opacity);
                 if let Some(backdrop) = &self._vibrancy {
                     backdrop.update_sidebar(output.native_glass.sidebar, zoom);
                 }
@@ -1550,13 +1587,9 @@ impl RunningApp {
                     glass.update(output.native_glass.address, zoom, palette.dark);
                 }
             }
-            self.content_rect_points = output.content_rect;
-            self.page_rect_points = output.page_rect;
             state
                 .content_origin
                 .set((output.content_rect.min.x, output.content_rect.min.y));
-            self.controls_open = output.controls_open;
-            self.settings_open = output.settings_open;
             ambient = output.ambient;
             // Debug-only, and only when asked: go somewhere so the picture at
             // the end of this frame lands in the middle of a page transition.
@@ -2178,7 +2211,7 @@ impl RunningApp {
                 // egui remembers the panel's width itself, and would otherwise
                 // keep the old one until the next launch.
                 self.egui_glow.egui_ctx.data_mut(|data| {
-                    data.remove::<egui::PanelState>(egui::Id::new(ui::SIDEBAR_ID));
+                    data.remove::<egui::PanelState>(egui::Id::unique(ui::SIDEBAR_ID));
                 });
                 state.window.request_redraw();
             },

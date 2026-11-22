@@ -10,13 +10,9 @@ the binary, with no file format and nothing to load one at runtime. That is no
 longer true, and the way it stopped being true is worth stating, because it was
 not by writing a loader.
 
-Every value a material is built from is now a field of [`Appearance`], and
-`Appearance` is an ordinary setting: it is on `zervo://settings` → Appearance
-with one control per field, and it serialises into `settings.json` with
-everything else. So the loader already existed — it is the settings file — and
-the file format is whatever that panel writes out. `Appearance::as_json` hands
-you it, and `Material::as_rust` hands you the same arrangement as the `const`
-you would have had to write by hand.
+[`Appearance`] stores the material and serialises into `settings.json`.
+Linux and Windows expose material controls in Settings. `Appearance::as_json`
+exports the arrangement, and `Material::as_rust` generates a Rust constant.
 
 [`Appearance`]: ../zervo-core/src/theme.rs
 
@@ -89,7 +85,9 @@ corners are half its height.
 
 ## Translucency
 
-The `Translucency` setting offers **Solid**, **Frosted**, and **Liquid Glass**.
+On Linux and Windows, the `Translucency` setting offers **Solid**, **Frosted**,
+and a portable **Liquid Glass** preset. macOS uses Liquid Glass automatically
+and follows the system’s Reduce Transparency setting.
 It controls the window backdrop, chrome and overlay materials:
 
 - what the *window* asks the platform for (`SystemBackdrop::Opaque` or
@@ -195,8 +193,7 @@ would only be a way to get them wrong:
 
 ## Presets
 
-Five named arrangements, which are the table this document used to describe in
-prose. `Preset::appearance` is the whole definition of each.
+Linux and Windows offer five named arrangements. `Preset::appearance` defines each.
 
 | Preset | What it is |
 | --- | --- |
@@ -283,7 +280,7 @@ same place, so nothing jumps when the kind of page changes.
 ## macOS-specific pieces
 
 The docked sidebar uses AppKit’s `NSVisualEffectView.Material.sidebar` for
-translucency and its active-window tint. The **Liquid Glass** preset uses
+translucency and its active-window tint. Zervo uses
 AppKit’s regular glass for dialogs, menus, popovers, the revealed sidebar, and
 the docked address field. Menus and dialogs use neutral tints for contrast on
 busy pages. Each floating surface places egui’s controls inside an

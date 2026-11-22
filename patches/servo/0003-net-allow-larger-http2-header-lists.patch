@@ -1,0 +1,45 @@
+From 3ccbee8c341f3e92d5139a1526b59f19868b05cd Mon Sep 17 00:00:00 2001
+From: Elliot Zhang <zzwelliot@gmail.com>
+Date: Tue, 17 Nov 2026 08:24:38 +0000
+Subject: [PATCH] net: use a larger 64 KiB max header list size for HTTP/2
+ (#49981)
+
+The default config of Hyper uses 16 KiB which may be too restrictive for
+some sites.
+
+Without the added max size increase, youtube.com causes error on screen:
+
+```
+    Could not load the requested page: client error (SendRequest)
+```
+
+Fixes: #49979
+Testing: visiting youtube.com no longer displays the error above
+
+Signed-off-by: Elliot Zhang <zzwelliot@gmail.com>
+---
+ components/net/connector.rs | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/components/net/connector.rs b/components/net/connector.rs
+index b1bf34315b0..a2f05f11d30 100644
+--- a/components/net/connector.rs
++++ b/components/net/connector.rs
+@@ -42,6 +42,8 @@ pub const BUF_SIZE: usize = 32768;
+ /// ALPN identifier for HTTP/2 (RFC 7540 §3.1).
+ pub const ALPN_H2: &str = "h2";
+
++const HTTP2_MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
++
+ #[derive(Clone)]
+ pub struct ServoHttpConnector {
+     inner: HyperHttpConnector,
+@@ -668,6 +670,8 @@ pub fn create_http_client(tls_config: TlsConfig) -> ServoClient {
+
+     Client::builder(TokioExecutor {})
+         .http1_title_case_headers(true)
++        // The default 16 KiB size is insufficient for certain sites like YouTube
++        .http2_max_header_list_size(HTTP2_MAX_HEADER_LIST_SIZE)
+         // This is necessary to allow hyper to perform various background tasks for HTTP/2.
+         .timer(TokioTimer::new())
+         // This is necessary for hyper to reap unused idle keep-alive connections.

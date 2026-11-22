@@ -410,23 +410,50 @@ pub struct Settings {
 }
 
 fn sidebar_default_appearance() -> crate::theme::Appearance {
-    use crate::theme::{Appearance, Preset, Seam, Spine, Translucency};
+    use crate::theme::{Appearance, Preset, Seam, Spine};
 
+    let native = cfg!(target_os = "macos");
+    let preset = if native {
+        Preset::LiquidGlass
+    } else {
+        Preset::Flat
+    };
     Appearance {
-        preset: None,
+        preset: native.then_some(preset),
         seam: Seam::Card,
-        translucency: if cfg!(target_os = "macos") {
-            Translucency::Frosted
-        } else {
-            Translucency::Solid
-        },
         gap: 9.0,
-        corners: 0.8,
+        corners: if native {
+            preset.appearance().corners
+        } else {
+            0.8
+        },
         candy: 0.025,
         workspace_accent: true,
         spine: Spine::Nothing,
-        ..Preset::Flat.appearance()
+        ..preset.appearance()
     }
+}
+
+#[cfg(target_os = "macos")]
+fn use_native_material(appearance: &mut crate::theme::Appearance) {
+    use crate::theme::{Appearance, Preset, Seam};
+
+    *appearance = Appearance {
+        seam: if appearance.seam.closes_gap() {
+            Seam::EdgeToEdge
+        } else {
+            Seam::Card
+        },
+        gap: appearance.gap,
+        motion: appearance.motion,
+        sweep: appearance.sweep,
+        pill_progress: appearance.pill_progress,
+        candy: appearance.candy,
+        workspace_accent: appearance.workspace_accent,
+        spine: appearance.spine,
+        align_nav: appearance.align_nav,
+        ..Preset::LiquidGlass.appearance()
+    };
 }
 
 impl Default for Settings {
@@ -517,6 +544,8 @@ pub fn load() -> Settings {
     let fresh = settings_path().is_none_or(|path| !path.exists());
     let mut settings: Settings = crate::store::load_or_default(settings_path());
     migrate(&mut settings);
+    #[cfg(target_os = "macos")]
+    use_native_material(&mut settings.appearance);
     if fresh {
         // No settings file, so nobody has been here before. The only honest
         // signal for it: there is no account, and nothing to ask.
@@ -644,13 +673,28 @@ mod tests {
         assert_eq!(
             appearance.translucency,
             if cfg!(target_os = "macos") {
-                Translucency::Frosted
+                Translucency::LiquidGlass
             } else {
                 Translucency::Solid
             }
         );
         assert!(appearance.workspace_accent);
         assert!(Preset::ALL.contains(&Preset::Zervo));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_material_applies_to_existing_appearances() {
+        let mut appearance = Preset::Flat.appearance();
+        appearance.seam = crate::theme::Seam::OneSurface;
+        appearance.gap = 11.0;
+        appearance.workspace_accent = true;
+        use_native_material(&mut appearance);
+        assert_eq!(appearance.translucency, Translucency::LiquidGlass);
+        assert_eq!(appearance.corners, Preset::LiquidGlass.appearance().corners);
+        assert_eq!(appearance.seam, crate::theme::Seam::EdgeToEdge);
+        assert_eq!(appearance.gap, 11.0);
+        assert!(appearance.workspace_accent);
     }
 
     #[test]

@@ -165,6 +165,8 @@ pub struct UiOutput {
     pub page_rect: egui::Rect,
     /// When true an internal page covers the content area — skip the blit.
     pub settings_open: bool,
+    /// Visible portion of the revealed sidebar, including its non-widget space.
+    pub sidebar_overlay: Option<Rect>,
     /// True while a page-initiated dialog or menu is up; the chrome owns the
     /// pointer over the content area for as long as it is.
     pub controls_open: bool,
@@ -277,6 +279,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             content_rect: window,
             page_rect: window,
             settings_open: true,
+            sidebar_overlay: None,
             controls_open: false,
             ambient: false,
         };
@@ -304,7 +307,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     let window = root.available_rect_before_wrap();
     let layout = chrome.settings.layout;
     let present = glass::ease_out(root.ctx().animate_bool_with_time(
-        Id::new("zervo_chrome_present"),
+        Id::unique("zervo_chrome_present"),
         layout.is_sidebar(),
         chrome.palette.material.animation,
     ));
@@ -396,7 +399,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     if let Some(crossing) = chrome.crossing {
         let ctx = root.ctx().clone();
         let clip = crossing.clip();
-        egui::Area::new(Id::new("zervo_crossing"))
+        egui::Area::new(Id::unique("zervo_crossing"))
             .order(egui::Order::Background)
             .fixed_pos(clip.min)
             .constrain(false)
@@ -448,7 +451,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     if let Some(over) = floating_sidebar {
         let ctx = root.ctx().clone();
         let clip = ctx.content_rect();
-        egui::Area::new(Id::new("zervo_sidebar_float"))
+        egui::Area::new(Id::unique("zervo_sidebar_float"))
             .order(egui::Order::Middle)
             .fixed_pos(over.min)
             .constrain(false)
@@ -505,9 +508,11 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         draw_spine(root, chrome);
     }
 
-    if !sidebar_docked {
-        draw_sidebar_peek(root, chrome, &mut actions, peek);
-    }
+    let sidebar_overlay = if sidebar_docked {
+        None
+    } else {
+        draw_sidebar_peek(root, chrome, &mut actions, peek)
+    };
 
     if let Some(status) = chrome.status
         && chrome.controls.is_empty()
@@ -551,6 +556,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         content_rect,
         page_rect,
         settings_open,
+        sidebar_overlay,
         controls_open,
         ambient,
     }
@@ -614,7 +620,7 @@ fn draw_sidebar(
         // The window chrome or AppKit paints the background beneath the panel.
         .frame(Frame::NONE.inner_margin(SIDEBAR_MARGIN))
         .show_separator_line(false)
-        .show_inside(root, |ui| {
+        .show(root, |ui| {
             // Fill the width the panel was given.
             //
             // egui stores a panel's remembered width from the rect its
@@ -699,7 +705,11 @@ fn draw_sidebar(
 /// Draw the sidebar in its docked panel or its Full Page overlay.
 fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     let palette = chrome.palette;
-    let drag = ui.interact(ui.max_rect(), ui.id().with("sidebar_drag"), Sense::drag());
+    let drag = ui.interact(
+        ui.max_rect(),
+        ui.scope_id().with("sidebar_drag"),
+        Sense::drag(),
+    );
     if drag.drag_started() {
         actions.push(UiAction::DragWindow);
     }
@@ -714,7 +724,7 @@ fn sidebar_body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAct
             bottom: 0,
         }))
         .show_separator_line(false)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
                 if chrome.settings.show_sidebar_tools {
                     draw_sidebar_tools(ui, chrome, actions);
@@ -1003,7 +1013,11 @@ fn draw_history_page(
                         );
                     }
                     if ui
-                        .interact(forget, Id::new("zervo_forget").with(index), Sense::click())
+                        .interact(
+                            forget,
+                            Id::unique("zervo_forget").with(index),
+                            Sense::click(),
+                        )
                         .clicked()
                     {
                         actions.push(UiAction::ForgetVisit(index));
@@ -1038,14 +1052,14 @@ fn draw_favourite_star(
     };
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             response.enabled() && !url.is_empty(),
             label,
         )
     });
     let rect = response.rect;
     let lit = glass::ease_out(ui.ctx().animate_bool_with_time(
-        ui.id().with("favourite_lit"),
+        ui.scope_id().with("favourite_lit"),
         saved,
         palette.material.animation,
     ));
@@ -1094,7 +1108,7 @@ fn hover_card(
     add: impl FnOnce(&mut Ui, Rect, Palette),
 ) -> Option<Rect> {
     let ctx = root.ctx().clone();
-    let id = Id::new(key);
+    let id = Id::unique(key);
     let pointer = ctx.input(|input| input.pointer.latest_pos());
     let was_open = ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
 
@@ -1267,7 +1281,7 @@ fn draw_favourites_card(
 
     let favourites = &chrome.library.favourites;
     let editing = chrome.browser.favourite_edit.clone();
-    let id = Id::new("zervo_favourites_card");
+    let id = Id::unique("zervo_favourites_card");
 
     let mut toggle_layout = false;
     let mut edit: Option<Option<(String, String)>> = None;
@@ -1451,7 +1465,7 @@ fn draw_favourites_card(
                             // keyboard here: clicking the address bar takes focus for a single
                             // frame and loses it again, and every keystroke in the window ends up
                             // in this field until it is dismissed.
-                            let focus_key = Id::new("zervo_ws_focus");
+                            let focus_key = Id::unique("zervo_ws_focus");
                             if ui.ctx().data(|data| data.get_temp::<usize>(focus_key))
                                 != Some(index)
                             {
@@ -1585,8 +1599,8 @@ fn draw_downloads_card(
     let palette = chrome.palette;
     let rows = chrome.downloads.items.len().clamp(1, 8) as f32;
     let size = vec2(360.0, rows * ROW + 52.0);
-    let id = Id::new("zervo_downloads_card");
-    let menu_id = Id::new("zervo_download_menu");
+    let id = Id::unique("zervo_downloads_card");
+    let menu_id = Id::unique("zervo_download_menu");
 
     hover_card(
         root,
@@ -1697,7 +1711,7 @@ fn draw_downloads_card(
                         DownloadState::Running | DownloadState::Complete => {
                             let done = *state == DownloadState::Complete;
                             let cross = glass::ease_out(ui.ctx().animate_bool_with_time(
-                                ui.id().with(("download_done", index)),
+                                ui.scope_id().with(("download_done", index)),
                                 done,
                                 palette.material.animation,
                             ));
@@ -2064,8 +2078,8 @@ struct PeekState {
 /// The sidebar's width: what the user last dragged it to this session,
 /// otherwise what they left it at in a previous one, otherwise the default.
 fn sidebar_width(ctx: &egui::Context, settings: &Settings) -> f32 {
-    egui::PanelState::load(ctx, Id::new(SIDEBAR_ID))
-        .map(|state| state.rect.width())
+    egui::PanelState::load(ctx, Id::unique(SIDEBAR_ID))
+        .map(|state| state.outer_rect.width())
         .unwrap_or(settings.sidebar_width)
         .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
 }
@@ -2079,7 +2093,7 @@ fn sidebar_width(ctx: &egui::Context, settings: &Settings) -> f32 {
 /// revealed sidebar could ever be clicked.
 fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
     let ctx = root.ctx();
-    let id = Id::new("zervo_sidebar_peek");
+    let id = Id::unique("zervo_sidebar_peek");
     if chrome.settings.layout.is_sidebar() {
         ctx.data_mut(|data| data.remove::<PeekState>(id));
         return None;
@@ -2140,13 +2154,13 @@ fn draw_sidebar_peek(
     chrome: &mut ChromeContext,
     actions: &mut Vec<UiAction>,
     peek: Option<(Rect, bool)>,
-) {
+) -> Option<Rect> {
     let ctx = root.ctx().clone();
-    let slide = Id::new("zervo_sidebar_peek_slide");
+    let slide = Id::unique("zervo_sidebar_peek_slide");
     let Some((rect, open)) = peek else {
         // Snap shut, or the next reveal starts half open.
         ctx.animate_bool_with_time(slide, false, 0.0);
-        return;
+        return None;
     };
     let t = glass::ease_out(ctx.animate_bool_with_time(
         slide,
@@ -2154,11 +2168,11 @@ fn draw_sidebar_peek(
         chrome.palette.material.animation.min(PEEK_SLIDE),
     ));
     if t <= 0.0 {
-        return;
+        return None;
     }
 
     let drawn = rect.translate(vec2((t - 1.0) * rect.width(), 0.0));
-    egui::Area::new(Id::new("zervo_sidebar_peek_area"))
+    egui::Area::new(Id::unique("zervo_sidebar_peek_area"))
         .order(egui::Order::Foreground)
         .fixed_pos(drawn.min)
         .constrain(false)
@@ -2207,11 +2221,12 @@ fn draw_sidebar_peek(
             }
             sidebar_body(&mut body, chrome, actions);
             chrome.palette = restore;
-            surface.finish(ui, drawn, crate::overlay_glass::Role::Panel);
+            surface.finish(ui, drawn, crate::overlay_glass::Role::Sidebar);
             // Claim the whole overlay, so the pointer over it resolves to this
             // layer rather than the chrome underneath.
             ui.advance_cursor_after_rect(drawn);
         });
+    Some(drawn.intersect(ctx.content_rect()))
 }
 
 fn widget_action(change: crate::dashboard::Change) -> UiAction {
@@ -2238,7 +2253,7 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
         .exact_size(SIDEBAR_GRIP + open)
         .frame(Frame::NONE)
         .show_separator_line(false)
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             let area = ui.max_rect();
             // The grip is at the top edge here rather than the bottom: the
             // shelf grows upward out of the foot of the sidebar, so that is
@@ -2246,11 +2261,11 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
             let grip = Rect::from_min_max(area.min, pos2(area.max.x, area.min.y + SIDEBAR_GRIP));
             let response = ui.interact(
                 grip,
-                Id::new("zervo_sidebar_shelf_grip"),
+                Id::unique("zervo_sidebar_shelf_grip"),
                 Sense::click_and_drag(),
             );
             let emphasis = glass::ease_out(ui.ctx().animate_bool_with_time(
-                Id::new("zervo_sidebar_shelf_grabber"),
+                Id::unique("zervo_sidebar_shelf_grabber"),
                 response.hovered() || response.dragged(),
                 0.12,
             ));
@@ -2399,7 +2414,7 @@ fn draw_address_pill(
         .map(|tab| tab.loading)
         .unwrap_or_default();
 
-    let pill_id = ui.id().with("zervo_address_pill");
+    let pill_id = ui.scope_id().with("zervo_address_pill");
 
     let (pill_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
 
@@ -2509,12 +2524,12 @@ fn draw_address_pill(
             crate::l10n::message("chrome-notification-count", [("count", count.into())])
         };
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &label)
+            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), &label)
         });
         // Where the toasts grow from. Stashed rather than returned because the
         // stack is drawn much later, over the content, by which point this Ui
         // is long gone.
-        ctx.data_mut(|data| data.insert_temp(Id::new(BELL_ANCHOR), response.rect));
+        ctx.data_mut(|data| data.insert_temp(Id::unique(BELL_ANCHOR), response.rect));
 
         if count > 1 {
             // A count, sat on the bell's shoulder.
@@ -2547,7 +2562,7 @@ fn draw_address_pill(
     } else {
         // Nothing to anchor to any more, so the next toast starts from wherever
         // the bell will actually be rather than where it last was.
-        ctx.data_mut(|data| data.remove::<Rect>(Id::new(BELL_ANCHOR)));
+        ctx.data_mut(|data| data.remove::<Rect>(Id::unique(BELL_ANCHOR)));
     }
 
     let right_inset = if loading && !chrome.settings.appearance.pill_progress {
@@ -2635,7 +2650,7 @@ fn workspace_header(
     }
 
     let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-        ui.id().with(("ws_header", index)),
+        ui.scope_id().with(("ws_header", index)),
         response.hovered(),
         palette.material.animation,
     ));
@@ -2675,7 +2690,7 @@ fn workspace_header(
                 .frame(Frame::NONE)
                 .font(FontId::proportional(13.0))
                 .text_color(palette.text)
-                .id(ui.id().with(("ws_name", index))),
+                .id(ui.scope_id().with(("ws_name", index))),
         );
         editor.request_focus();
 
@@ -2683,7 +2698,7 @@ fn workspace_header(
             let hit = Rect::from_center_size(pos2(x, rect.center().y), vec2(18.0, 18.0));
             let response = ui.interact(
                 hit,
-                ui.id().with((icon as usize, "ws_edit", index)),
+                ui.scope_id().with((icon as usize, "ws_edit", index)),
                 Sense::click(),
             );
             icons::draw_icon(
@@ -2754,12 +2769,7 @@ fn workspace_header(
         icons::paint_focus(ui, palette, rect, Tier::Row);
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
-            response.enabled(),
-            active,
-            name,
-        )
+        egui::WidgetInfo::selected(egui::Role::Tab, response.enabled(), active, name)
     });
     response.on_hover_cursor(CursorIcon::PointingHand);
     rect
@@ -2983,7 +2993,7 @@ fn tab_row(
     // closing a tab above must not hand this one's interaction state over.
     let response = ui.interact(
         rect,
-        ui.id().with(("tab_row", style.tab_id)),
+        ui.scope_id().with(("tab_row", style.tab_id)),
         Sense::click_and_drag(),
     );
     let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
@@ -3025,12 +3035,12 @@ fn tab_row(
         Rect::from_center_size(pos2(rect.max.x - 17.0, rect.center().y), vec2(20.0, 20.0));
     let close_response = ui.interact(
         close_rect,
-        ui.id().with(("tab_close", style.tab_id)),
+        ui.scope_id().with(("tab_close", style.tab_id)),
         Sense::click(),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
+            egui::Role::Tab,
             response.enabled(),
             style.selected,
             style.title,
@@ -3038,7 +3048,7 @@ fn tab_row(
     });
     close_response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             close_response.enabled(),
             crate::l10n::message(
                 if style.pinned {
@@ -3055,12 +3065,12 @@ fn tab_row(
     // Keyed by tab identity, not layout position, so closing a tab doesn't
     // shift animation state onto its neighbor.
     let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-        ui.id().with(("tab_hover", style.tab_id)),
+        ui.scope_id().with(("tab_hover", style.tab_id)),
         hovered && !style.selected,
         palette.material.animation,
     ));
     let select_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-        ui.id().with(("tab_sel", style.tab_id)),
+        ui.scope_id().with(("tab_sel", style.tab_id)),
         style.selected,
         palette.material.animation,
     ));
@@ -3591,13 +3601,13 @@ fn draw_toasts(
     // Where the bell is, if the address bar drew one this frame.
     let anchor: Option<Rect> = root
         .ctx()
-        .data(|data| data.get_temp::<Rect>(Id::new(BELL_ANCHOR)));
+        .data(|data| data.get_temp::<Rect>(Id::unique(BELL_ANCHOR)));
 
     let mut dismissed = None;
     let mut clear_all = false;
     let mut top = content_rect.top() + MARGIN;
 
-    egui::Area::new(Id::new("zervo_toasts"))
+    egui::Area::new(Id::unique("zervo_toasts"))
         .order(egui::Order::Foreground)
         .fixed_pos(content_rect.min)
         .show(root.ctx(), |ui| {
@@ -3665,8 +3675,11 @@ fn draw_toasts(
                 // Keyed on the toast's own id rather than its position, so
                 // dismissing the one above does not hand its hover state to
                 // the next.
-                let response =
-                    ui.interact(rect, Id::new("zervo_toast").with(toast.id), Sense::click());
+                let response = ui.interact(
+                    rect,
+                    Id::unique("zervo_toast").with(toast.id),
+                    Sense::click(),
+                );
                 if response.clicked() {
                     dismissed = Some(toast.id);
                 }
@@ -3726,7 +3739,8 @@ fn draw_toasts(
                 );
                 if rect.bottom() <= content_rect.bottom() {
                     ui.advance_cursor_after_rect(rect);
-                    let response = ui.interact(rect, Id::new("zervo_toasts_clear"), Sense::click());
+                    let response =
+                        ui.interact(rect, Id::unique("zervo_toasts_clear"), Sense::click());
                     if response.clicked() {
                         clear_all = true;
                     }
@@ -3734,7 +3748,7 @@ fn draw_toasts(
                         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                     }
                     let lit = glass::ease_out(ui.ctx().animate_bool_with_time(
-                        Id::new("zervo_toasts_clear_hover"),
+                        Id::unique("zervo_toasts_clear_hover"),
                         response.hovered(),
                         0.12,
                     ));
@@ -3793,7 +3807,7 @@ fn draw_status_text(root: &Ui, palette: &Palette, content_rect: Rect, status: &s
         vec2(width, height),
     );
     let role = crate::overlay_glass::Role::Status;
-    egui::Area::new(Id::new("zervo_link_preview"))
+    egui::Area::new(Id::unique("zervo_link_preview"))
         .order(egui::Order::Foreground)
         .interactable(false)
         .fixed_pos(rect.min)
@@ -3843,13 +3857,13 @@ mod tests {
         let margins = f32::from(SIDEBAR_MARGIN.left + SIDEBAR_MARGIN.right);
         let ctx = egui::Context::default();
         let mut seen: Vec<f32> = Vec::new();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
             for width in [0.0_f32, 2.0, 12.0, margins, 248.0] {
-                Panel::left(Id::new("t").with(width.to_bits()))
+                Panel::left(Id::unique("t").with(width.to_bits()))
                     .resizable(false)
                     .exact_size(width)
                     .frame(Frame::NONE.inner_margin(SIDEBAR_MARGIN))
-                    .show_inside(ui, |ui| {
+                    .show(ui, |ui| {
                         seen.push(ui.available_width());
                         // The call the sidebar makes. Without the clamp this
                         // line is the crash.
@@ -3857,6 +3871,7 @@ mod tests {
                     });
             }
         });
+        frame.textures_delta.clear();
         assert_eq!(seen.len(), 5, "every panel ran");
         assert!(
             seen.iter().all(|width| *width >= 0.0),

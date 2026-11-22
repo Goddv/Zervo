@@ -33,7 +33,7 @@ pub(super) fn draw(
                 |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
-                        let id = ui.id().with(("reorder_section", section));
+                        let id = ui.scope_id().with(("reorder_section", section));
                         ui.dnd_drag_source(id, section, |ui| {
                             let (rect, _) =
                                 ui.allocate_exact_size(vec2(24.0, 26.0), Sense::hover());
@@ -119,6 +119,6 @@ fn move_button(ui: &mut Ui, earlier: bool, enabled: bool, name: &str) -> egui::R
         enabled,
         egui::Button::new(if earlier { "↑" } else { "↓" }).min_size(vec2(28.0, 27.0)),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &label));
     response.on_hover_text(label)
 }

@@ -691,7 +691,7 @@ fn panel<R>(
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let fallback = scrim.map_or_else(|| palette.over(rect), |_| *palette);
-    egui::Area::new(Id::new(id))
+    egui::Area::new(Id::unique(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)
@@ -1118,7 +1118,7 @@ fn draw_color_picker(
                 ui.max_rect().min + vec2(column as f32 * CELL, row as f32 * CELL),
                 vec2(CELL - 4.0, CELL - 4.0),
             );
-            let response = ui.interact(cell, ui.id().with(index), Sense::click());
+            let response = ui.interact(cell, ui.scope_id().with(index), Sense::click());
             ui.painter().rect_filled(
                 cell,
                 palette.corner(Tier::Control),

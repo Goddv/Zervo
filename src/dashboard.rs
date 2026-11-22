@@ -296,9 +296,9 @@ pub fn draw(
     ));
     let root = &mut root;
 
-    let drag_id = Id::new("zervo_widget_drag");
-    let sizes_id = Id::new("zervo_widget_sizes");
-    let resize_id = Id::new("zervo_widget_resize");
+    let drag_id = Id::unique("zervo_widget_drag");
+    let sizes_id = Id::unique("zervo_widget_sizes");
+    let resize_id = Id::unique("zervo_widget_resize");
     let resizing = ctx.data(|data| data.get_temp::<usize>(resize_id));
     let dragging = ctx.data(|data| data.get_temp::<usize>(drag_id));
     let pointer = ctx.input(|input| input.pointer.latest_pos());
@@ -537,7 +537,7 @@ fn draw_resize_handle(root: &mut Ui, palette: &Palette, rect: Rect) {
 /// Whether the pointer is over whichever menu is up, so a press elsewhere can
 /// dismiss it.
 pub fn over_menu(ctx: &egui::Context) -> bool {
-    ctx.data(|data| data.get_temp::<Rect>(Id::new("zervo_menu_rect")))
+    ctx.data(|data| data.get_temp::<Rect>(Id::unique("zervo_menu_rect")))
         .zip(ctx.input(|input| input.pointer.interact_pos()))
         .is_some_and(|(rect, pos)| rect.contains(pos))
 }
@@ -578,9 +578,9 @@ pub fn menu<T: Copy>(
         ctx.content_rect(),
         false,
     );
-    ctx.data_mut(|data| data.insert_temp(Id::new("zervo_menu_rect"), rect));
+    ctx.data_mut(|data| data.insert_temp(Id::unique("zervo_menu_rect"), rect));
     let mut chosen = None;
-    egui::Area::new(Id::new(id))
+    egui::Area::new(Id::unique(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)
@@ -866,7 +866,7 @@ fn draw_widget(
                 let hit = Rect::from_center_size(centre, vec2(30.0, 30.0));
                 let response = root.interact(
                     hit,
-                    Id::new("zervo_transport").with((slot_index, index)),
+                    Id::unique("zervo_transport").with((slot_index, index)),
                     Sense::click(),
                 );
                 if response.hovered() {
@@ -886,7 +886,7 @@ fn draw_widget(
                     Some(icon) => icons::draw_icon(root.painter(), glyph, icon, tint),
                     None => {
                         let cross = crate::glass::ease_out(root.ctx().animate_bool_with_time(
-                            Id::new("zervo_transport_morph").with(slot_index),
+                            Id::unique("zervo_transport_morph").with(slot_index),
                             media.playing,
                             palette.material.animation,
                         ));

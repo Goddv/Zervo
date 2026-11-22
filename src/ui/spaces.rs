@@ -127,7 +127,7 @@ fn favourites(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) 
                 }
                 response.widget_info(|| {
                     egui::WidgetInfo::selected(
-                        egui::WidgetType::SelectableLabel,
+                        egui::Role::ListBoxOption,
                         true,
                         selected,
                         &site.title,
@@ -195,7 +195,7 @@ pub(super) fn body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<Ui
 
     ui.add_space(7.0);
     let ctx = ui.ctx().clone();
-    let drag_id = Id::new("zervo_tab_drag");
+    let drag_id = Id::unique("zervo_tab_drag");
     let dragging = ctx.data(|data| data.get_temp::<TabId>(drag_id));
     let pointer = ctx.input(|input| input.pointer.latest_pos());
     egui::ScrollArea::vertical()
@@ -310,11 +310,7 @@ pub(super) fn body(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<Ui
                 palette.text,
             );
             new.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    true,
-                    tr("sidebar-shortcut-new-tab"),
-                )
+                egui::WidgetInfo::labeled(egui::Role::Button, true, tr("sidebar-shortcut-new-tab"))
             });
             if new.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                 actions.push(UiAction::OpenCommand(CommandMode::NewTab));

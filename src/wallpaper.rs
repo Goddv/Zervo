@@ -791,11 +791,11 @@ mod tests {
         // The middle of the picture only. Every blur clamps at the edges, so
         // the border carries an artefact of the blur rather than a measure of
         // it, and at large radii that artefact is the loudest thing there.
-        let [width, height] = image.size;
+        let [width, height] = image.resolution();
         let (inset_x, inset_y) = (width / 5, height / 5);
         let values: Vec<f64> = (inset_y..height - inset_y)
             .flat_map(|y| (inset_x..width - inset_x).map(move |x| (x, y)))
-            .map(|(x, y)| f64::from(image.pixels[y * width + x].r()))
+            .map(|(x, y)| f64::from(image.pixels()[y * width + x].r()))
             .collect();
         let mean = values.iter().sum::<f64>() / values.len() as f64;
         values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64

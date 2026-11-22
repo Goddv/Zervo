@@ -170,7 +170,7 @@ impl Tab {
 }
 
 /// Categories in the settings page's left-hand navigation.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     Appearance,
     General,

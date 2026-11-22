@@ -40,7 +40,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     };
     let ctx = root.ctx();
     let palette = chrome.palette;
-    let id = Id::new("zervo_command_bar");
+    let id = Id::unique("zervo_command_bar");
     let window = ctx.content_rect();
     let top = (window.height() * 0.12).clamp(24.0, 56.0);
     let width = (window.width() - 64.0).clamp(1.0, 520.0);
@@ -112,7 +112,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                     .show(ui);
                 editor.response.widget_info(|| {
                     egui::WidgetInfo::labeled(
-                        egui::WidgetType::TextEdit,
+                        egui::Role::TextInput,
                         true,
                         tr("command-search-placeholder"),
                     )
@@ -354,7 +354,7 @@ fn result_row(ui: &mut Ui, row: &ResultRow, selected: bool, palette: &Palette) -
         palette.text,
     );
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, row.title)
+        egui::WidgetInfo::selected(egui::Role::ListBoxOption, true, selected, row.title)
     });
     response.on_hover_cursor(CursorIcon::PointingHand)
 }

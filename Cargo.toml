@@ -5,7 +5,7 @@ members = ["zervo-core"]
 name = "zervo"
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 license = "MPL-2.0"
 description = "A calm, workspace-oriented browser built on the Servo engine"
 repository = "https://github.com/goddv/zervo"
@@ -83,24 +83,25 @@ servo = { version = "=0.8.0", default-features = false, features = [
 zervo-core = { path = "zervo-core", version = "0.5.0" }
 
 # ── Chrome ────────────────────────────────────────────────────────────────
-egui = "0.34.3"
+egui = "0.37.0"
 # `accesskit` is *not* one of egui-winit's default features, so asking for it
 # by name is what puts the platform adapter in the build — without it egui
 # builds an accessibility tree every frame and has nowhere to hand it, and the
 # chrome is invisible to VoiceOver, Narrator and Orca. `links` is left off on
 # purpose: this is a browser, and it opens its own.
-egui-winit = { version = "0.34.3", default-features = false, features = [
+egui-winit = { version = "0.37.0", default-features = false, features = [
     "accesskit",
     "clipboard",
 ] }
-egui_glow = { version = "0.34.3", features = ["winit"] }
+egui_glow = { version = "0.37.0", features = ["winit"] }
+# Keep the GL context type shared with egui_glow.
 glow = "0.17.0"
 winit = "0.30.13"
 
 # ── Support ───────────────────────────────────────────────────────────────
 # Bundle the IANA database so world clocks work without system zone data.
 jiff = { version = "1.0", features = ["tzdb-bundle-always"] }
-dirs = "6.0"
+dirs = "7.0"
 euclid = "0.22"
 # Decoding downloaded wallpapers. Already in the tree as one of Servo's own
 # dependencies; only the two formats the sources actually serve are enabled.
@@ -133,7 +134,7 @@ webpki-roots = "1.0"
 servo = { version = "=0.8.0", default-features = false, features = ["no-wgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.4"
+objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSAccessibility",
     "NSAnimationContext",
@@ -167,7 +168,7 @@ objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "NSURL",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer"] }
-resvg = "0.48.1"
+resvg = "0.50.0"
 
 [profile.release]
 opt-level = 3

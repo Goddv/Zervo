@@ -11,6 +11,7 @@ use egui::{Context, InnerResponse, Rect, Ui};
 pub(crate) enum Role {
     Menu,
     Panel,
+    Sidebar,
     Dialog,
     Status,
 }
@@ -19,7 +20,7 @@ impl Role {
     pub(crate) fn radius(self) -> u8 {
         match self {
             Self::Menu => 14,
-            Self::Panel => 18,
+            Self::Panel | Self::Sidebar => 18,
             Self::Dialog => 20,
             Self::Status => 10,
         }
@@ -30,10 +31,10 @@ impl Role {
         let (white, alpha) = match (dark, self) {
             (true, Self::Menu | Self::Status) => (0.045, 0.92),
             (true, Self::Dialog) => (0.055, 0.88),
-            (true, Self::Panel) => (0.065, 0.80),
+            (true, Self::Panel | Self::Sidebar) => (0.065, 0.80),
             (false, Self::Menu | Self::Status) => (0.90, 0.72),
             (false, Self::Dialog) => (0.89, 0.64),
-            (false, Self::Panel) => (0.88, 0.56),
+            (false, Self::Panel | Self::Sidebar) => (0.88, 0.56),
         };
         objc2_app_kit::NSColor::colorWithWhite_alpha(white, alpha)
     }
@@ -188,7 +189,7 @@ pub(crate) trait ComboBoxGlassExt {
     -> InnerResponse<Option<R>>;
 }
 
-impl ComboBoxGlassExt for egui::ComboBox {
+impl ComboBoxGlassExt for egui::ComboBox<'_> {
     fn show_glass<R>(
         self,
         ui: &mut Ui,
@@ -220,9 +221,8 @@ mod macos {
     use objc2::rc::Retained;
     use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, runtime::AnyClass};
     use objc2_app_kit::{
-        NSAutoresizingMaskOptions, NSBitmapImageRep, NSDeviceRGBColorSpace,
-        NSGlassEffectContainerView, NSGlassEffectView, NSGlassEffectViewStyle, NSImage,
-        NSImageScaling, NSImageView, NSView, NSWindowOrderingMode,
+        NSBitmapImageRep, NSDeviceRGBColorSpace, NSGlassEffectContainerView, NSGlassEffectView,
+        NSGlassEffectViewStyle, NSImage, NSImageScaling, NSImageView, NSView, NSWindowOrderingMode,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use winit::raw_window_handle::HasWindowHandle;
@@ -363,13 +363,13 @@ mod macos {
                         break;
                     };
                     glass.setStyle(NSGlassEffectViewStyle::Regular);
+                    // AppKit sizes the glass's content view to the full effect
+                    // frame. Keep the rendered ink in a child with its own inset.
+                    let content = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
                     let ink = NSImageView::initWithFrame(NSImageView::alloc(mtm), NSRect::ZERO);
                     ink.setImageScaling(NSImageScaling::ScaleAxesIndependently);
-                    ink.setAutoresizingMask(
-                        NSAutoresizingMaskOptions::ViewWidthSizable
-                            | NSAutoresizingMaskOptions::ViewHeightSizable,
-                    );
-                    glass.setContentView(Some(&ink));
+                    content.addSubview(&ink);
+                    glass.setContentView(Some(&content));
                     self.surfaces.addSubview(&glass);
                     self.layers.push(Layer {
                         glass,
@@ -384,20 +384,31 @@ mod macos {
                     f64::from(frame.rect.width()) * zoom,
                     f64::from(frame.rect.height()) * zoom,
                 );
+                let radius =
+                    (f64::from(frame.role.radius()) * zoom).min(size.width.min(size.height) * 0.5);
+                // Extend the left curve offscreen so the window clips the sidebar
+                // with its own outline. The right corners still belong to the glass.
+                let bleed = if frame.role == Role::Sidebar {
+                    radius + 2.0
+                } else {
+                    0.0
+                };
                 let local = NSRect::new(
                     NSPoint::new(
-                        bounds.min().x + f64::from(frame.rect.left()) * zoom,
+                        bounds.min().x + f64::from(frame.rect.left()) * zoom - bleed,
                         bounds.max().y - f64::from(frame.rect.bottom()) * zoom,
                     ),
-                    size,
+                    NSSize::new(size.width + bleed, size.height),
                 );
                 if layer.glass.frame() != local {
                     layer.glass.setFrame(local);
                 }
-                let radius =
-                    (f64::from(frame.role.radius()) * zoom).min(size.width.min(size.height) * 0.5);
                 if layer.glass.cornerRadius() != radius {
                     layer.glass.setCornerRadius(radius);
+                }
+                let ink_frame = NSRect::new(NSPoint::new(bleed, 0.0), size);
+                if layer.ink.frame() != ink_frame {
+                    layer.ink.setFrame(ink_frame);
                 }
                 let appearance = Some((frame.role, dark));
                 if layer.appearance != appearance {
@@ -415,7 +426,6 @@ mod macos {
                         ctx.request_repaint();
                         return;
                     };
-                    layer.ink.setFrame(NSRect::new(NSPoint::ZERO, size));
                     layer.ink.setImage(Some(&image));
                     layer.image_size = image_size;
                     std::mem::swap(&mut frame.rgba, &mut layer.pixels);
@@ -432,7 +442,7 @@ mod macos {
     }
 
     fn renderer_id() -> Id {
-        Id::new("zervo_appkit_glass_overlays")
+        Id::unique("zervo_appkit_glass_overlays")
     }
 
     pub(super) fn enabled(ctx: &egui::Context) -> bool {

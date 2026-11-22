@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/tag/Goddv/Zervo?label=release&sort=semver)](https://github.com/Goddv/Zervo/releases)
 [![License](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE)
 [![Engine](https://img.shields.io/badge/engine-Servo-informational)](https://servo.org)
-![Rust](https://img.shields.io/badge/rust-1.97-orange)
+![Rust](https://img.shields.io/badge/rust-1.100-orange)
 
 **Sidebar Spaces preview**
 
@@ -119,37 +119,19 @@ so some sites will not work. See [Limitations](#limitations).
   shadow reach and how far glass frosts are decided in one place and reach the
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
-- **And every number in it is a setting.** Settings → Appearance has one
-  control per named field: the fill, the sheen, the blur, the edge, the corner
-  scale, the glow, the settle time, and how far the accent reaches into the
-  chrome. Save an arrangement under a name, or copy it out as the Rust `const`
-  you would otherwise have written by hand.
-- **Zervo's own material is the finished one.** Four more presets — Candy,
-  Flat, Liquid Glass, Material — came out of the same design study and are
-  offered beside it, but they are experiments rather than settled work and are
-  still being tuned.
-- **The seam between the chrome and the page is one setting with four steps**,
-  and each step brings the page transition its own geometry implies: a card
-  recedes, a tint dissolves in place, a frame slides, a page under floating
-  glass travels up while the glass stays put.
-- **Frosted, over anything.** The chrome sits on real macOS vibrancy, and
-  everything floating over a page frosts against a blurred copy of whatever that
-  page is showing — so a menu over a website is the same glass as a card over a
-  photograph. The Liquid Glass option uses AppKit for the docked sidebar and
-  toolbar on macOS 26 and later. In-page overlays and older systems use the
-  portable frosted material.
+- **Appearance settings.** macOS uses Liquid Glass as its material. Linux
+  and Windows offer built-in presets and material controls in Settings → Appearance.
+- **Page frame.** In Sidebar mode, macOS can inset the page in a rounded
+  card or place it flush against the sidebar and window edges.
+- **Native macOS materials.** The pinned sidebar uses AppKit's sidebar
+  material. Dialogs, popovers and floating controls use Liquid Glass on macOS
+  26 and later, with frosted surfaces on earlier versions. The app follows
+  the system's Reduce Transparency setting.
 - **Themed.** Light/dark/auto following the system, ten accent presets plus a
   colour of your own, and the accent is propagated into the engine so pages see
   the matching `prefers-color-scheme`.
 
-The material system is the seam a theme for another platform is written
-against — Windows, GTK, Android Material, Liquid Glass. Five arrangements ship,
-and every value one is built from is a control on `zervo://settings` →
-Appearance: the fill, the sheen, the blur, the edge, the corner scale, the
-glow, the settle time, how far the accent reaches, and where the chrome ends
-and the page begins. It is documented in [docs/THEMING.md](docs/THEMING.md),
-including what is still not there — palettes, and somewhere to save an
-arrangement under a name of your own.
+See [docs/THEMING.md](docs/THEMING.md) for the material system.
 
 ## Building
 
@@ -163,12 +145,12 @@ cargo build --profile dev-fast
 ./target/dev-fast/zervo
 ```
 
-The toolchain is pinned in `rust-toolchain.toml` and matches Servo's own.
+The toolchain is pinned in `rust-toolchain.toml` for local builds and CI.
 `rustup` will install it automatically; if it complains about unavailable
 components, install it explicitly:
 
 ```bash
-rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+rustup toolchain install 1.100.0 --profile minimal --component clippy,rustfmt
 ```
 
 ### Downloads

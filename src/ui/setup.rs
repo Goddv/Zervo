@@ -1,10 +1,6 @@
 //! First run.
 //!
-//! Four questions and about a minute. No account, no import wizard, no
-//! telemetry consent — every answer writes one field that already exists in
-//! `Settings`, so this is the same code path as the Appearance page rather
-//! than a parallel one, and anything answered here can be answered again
-//! later in the same words.
+//! First-run choices use the same settings as the browser chrome.
 //!
 //! ## Why the limitations screen is the point
 //!
@@ -34,9 +30,9 @@ use crate::theme::{self, Palette, Preset, Surface, Tier};
 
 use super::{ChromeContext, UiAction};
 
-/// The steps, in order. The first and last are not questions, which is why the
-/// counter says four rather than six.
-const STEPS: u8 = 6;
+const NATIVE_MATERIAL: bool = cfg!(target_os = "macos");
+/// The welcome screen, the questions, and the final screen.
+const STEPS: u8 = if NATIVE_MATERIAL { 5 } else { 6 };
 /// A full-window change is allowed to take longer than a hover. The chrome's
 /// own settle time would be a cut at this size.
 const SLIDE: f32 = 0.42;
@@ -45,18 +41,18 @@ const SHIFT: f32 = 60.0;
 
 /// Where the setup has got to, and which way it is going.
 fn step(ctx: &egui::Context) -> f32 {
-    ctx.animate_value_with_time(Id::new("zervo_setup_at"), target(ctx) as f32, SLIDE)
+    ctx.animate_value_with_time(Id::unique("zervo_setup_at"), target(ctx) as f32, SLIDE)
 }
 
 fn target(ctx: &egui::Context) -> u8 {
-    ctx.data(|data| data.get_temp::<u8>(Id::new("zervo_setup_step")))
+    ctx.data(|data| data.get_temp::<u8>(Id::unique("zervo_setup_step")))
         .or_else(crate::shot::setup_step)
         .unwrap_or(0)
         .min(STEPS - 1)
 }
 
 fn go(ctx: &egui::Context, to: u8) {
-    ctx.data_mut(|data| data.insert_temp(Id::new("zervo_setup_step"), to.min(STEPS - 1)));
+    ctx.data_mut(|data| data.insert_temp(Id::unique("zervo_setup_step"), to.min(STEPS - 1)));
 }
 
 /// The whole setup, or nothing at all.
@@ -139,6 +135,7 @@ fn panel(
     body: Rect,
     accent: Color32,
 ) {
+    let index = index + u8::from(NATIVE_MATERIAL && index > 0);
     match index {
         0 => welcome(ui, chrome, actions, body, accent),
         1 => material(ui, chrome, actions, body),
@@ -151,13 +148,15 @@ fn panel(
 
 /// The kicker, title and subtitle every question shares.
 fn heading(ui: &mut Ui, palette: &Palette, accent: Color32, kicker: &str, title: &str, sub: &str) {
-    ui.label(
-        RichText::new(kicker.to_uppercase())
-            .size(10.5)
-            .strong()
-            .color(accent),
-    );
-    ui.add_space(14.0);
+    if !NATIVE_MATERIAL {
+        ui.label(
+            RichText::new(kicker.to_uppercase())
+                .size(10.5)
+                .strong()
+                .color(accent),
+        );
+        ui.add_space(14.0);
+    }
     ui.label(RichText::new(title).size(34.0).color(palette.text));
     ui.add_space(12.0);
     ui.allocate_ui_with_layout(
@@ -642,14 +641,9 @@ fn ready(
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             ui.label(
-                RichText::new(format!(
-                    "{} material, the {}, and a colour. Everything here is in Settings → \
-                     Appearance if you change your mind.",
-                    chrome.settings.appearance.preset_label(),
-                    chrome.settings.layout.label().to_lowercase(),
-                ))
-                .size(13.5)
-                .color(palette.text_muted),
+                RichText::new(tr("setup-change-layout-and-accent"))
+                    .size(13.5)
+                    .color(palette.text_muted),
             );
         },
     );
@@ -735,7 +729,11 @@ fn footer(
         let width = if on { 18.0 } else { 6.0 };
         let x = bar.center().x - (STEPS as f32 * 12.0) / 2.0 + index as f32 * 12.0;
         let dot = Rect::from_center_size(pos2(x, bar.center().y), vec2(width, 6.0));
-        let response = ui.interact(dot, Id::new("zervo_setup_dot").with(index), Sense::click());
+        let response = ui.interact(
+            dot,
+            Id::unique("zervo_setup_dot").with(index),
+            Sense::click(),
+        );
         ui.painter().rect_filled(
             dot,
             // Half the dot's own height. A step marker is a capsule that
@@ -767,11 +765,13 @@ fn footer(
         if pill(&mut middle, &palette, tr("setup-set-it-up"), true).clicked() {
             go(&ui.ctx().clone(), 1);
         }
-        middle.label(
-            RichText::new(tr("setup-four-questions-about-a-minute"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
+        if !NATIVE_MATERIAL {
+            middle.label(
+                RichText::new(tr("setup-four-questions-about-a-minute"))
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
+        }
         return;
     }
 

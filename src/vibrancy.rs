@@ -86,6 +86,26 @@ pub fn configure_titlebar(window: &impl HasWindowHandle) -> Option<()> {
     Some(())
 }
 
+const WINDOW_CONTROLS: [NSWindowButton; 3] = [
+    NSWindowButton::CloseButton,
+    NSWindowButton::MiniaturizeButton,
+    NSWindowButton::ZoomButton,
+];
+
+pub fn set_window_controls_opacity(window: &impl HasWindowHandle, opacity: f32) {
+    let Some(window) = content_view(window).and_then(|content| content.window()) else {
+        return;
+    };
+    let opacity = f64::from(opacity);
+    for kind in WINDOW_CONTROLS {
+        if let Some(button) = window.standardWindowButton(kind)
+            && button.alphaValue() != opacity
+        {
+            button.setAlphaValue(opacity);
+        }
+    }
+}
+
 pub fn window_controls(window: &impl HasWindowHandle, zoom: f32) -> Option<egui::Rect> {
     let _mtm = MainThreadMarker::new()?;
     let content = content_view(window)?;
@@ -94,30 +114,26 @@ pub fn window_controls(window: &impl HasWindowHandle, zoom: f32) -> Option<egui:
         return None;
     }
     let bounds = content.bounds();
-    [
-        NSWindowButton::CloseButton,
-        NSWindowButton::MiniaturizeButton,
-        NSWindowButton::ZoomButton,
-    ]
-    .into_iter()
-    .filter_map(|kind| {
-        let button = window.standardWindowButton(kind)?;
-        if button.isHiddenOrHasHiddenAncestor() {
-            return None;
-        }
-        let rect = button.convertRect_toView(button.bounds(), Some(&content));
-        let x = rect.min().x - bounds.min().x;
-        let y = if content.isFlipped() {
-            rect.min().y - bounds.min().y
-        } else {
-            bounds.max().y - rect.max().y
-        };
-        Some(egui::Rect::from_min_size(
-            egui::pos2(x as f32, y as f32) / zoom,
-            egui::vec2(rect.size.width as f32, rect.size.height as f32) / zoom,
-        ))
-    })
-    .reduce(egui::Rect::union)
+    WINDOW_CONTROLS
+        .into_iter()
+        .filter_map(|kind| {
+            let button = window.standardWindowButton(kind)?;
+            if button.isHiddenOrHasHiddenAncestor() {
+                return None;
+            }
+            let rect = button.convertRect_toView(button.bounds(), Some(&content));
+            let x = rect.min().x - bounds.min().x;
+            let y = if content.isFlipped() {
+                rect.min().y - bounds.min().y
+            } else {
+                bounds.max().y - rect.max().y
+            };
+            Some(egui::Rect::from_min_size(
+                egui::pos2(x as f32, y as f32) / zoom,
+                egui::vec2(rect.size.width as f32, rect.size.height as f32) / zoom,
+            ))
+        })
+        .reduce(egui::Rect::union)
 }
 
 fn update_surface(content: &NSView, surface: &NSView, rect: Option<egui::Rect>, zoom: f32) {

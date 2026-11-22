@@ -213,7 +213,7 @@ pub const LUMA_CELLS: usize = 8;
 /// Reduce a picture to that map.
 pub fn luma_map(image: &egui::ColorImage) -> [u8; LUMA_CELLS * LUMA_CELLS] {
     let mut map = [0_u8; LUMA_CELLS * LUMA_CELLS];
-    let [width, height] = image.size;
+    let [width, height] = image.resolution();
     if width == 0 || height == 0 {
         return map;
     }
@@ -230,7 +230,7 @@ pub fn luma_map(image: &egui::ColorImage) -> [u8; LUMA_CELLS * LUMA_CELLS] {
             // nobody sees.
             for y in (y0..y1).step_by(2) {
                 for x in (x0..x1).step_by(2) {
-                    let pixel = image.pixels[y * width + x];
+                    let pixel = image.pixels()[y * width + x];
                     total += u32::from(luminance_of(pixel));
                     count += 1;
                 }
@@ -2389,7 +2389,7 @@ mod tests {
         let mut image = egui::ColorImage::filled([32, 32], Color32::BLACK);
         for y in 0..32 {
             for x in 0..16 {
-                image.pixels[y * 32 + x] = Color32::WHITE;
+                image.pixels_mut()[y * 32 + x] = Color32::WHITE;
             }
         }
         let map = luma_map(&image);

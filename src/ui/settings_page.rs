@@ -63,13 +63,6 @@ pub(crate) fn draw_settings_page(
         },
         theme::mix(palette.surface, palette.bg, 0.75),
     );
-    // The page as a menu opened over it will see it: the base and the
-    // navigation column, and none of the controls that are about to be drawn
-    // on them.
-    if let Some(capture) = &chrome.capture {
-        crate::backdrop::capture_into(&painter, content_rect, capture);
-    }
-
     let mut nav_ui = root.new_child(
         egui::UiBuilder::new()
             .max_rect(nav_rect.shrink2(vec2(10.0, 14.0)))
@@ -89,12 +82,12 @@ pub(crate) fn draw_settings_page(
             let (rect, response) =
                 ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
             let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.id().with(("settings_nav", section)),
+                ui.scope_id().with(("settings_nav", section)),
                 response.hovered() && !selected,
                 0.12,
             ));
             let select_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.id().with(("settings_nav_sel", section)),
+                ui.scope_id().with(("settings_nav_sel", section)),
                 selected,
                 0.18,
             ));
@@ -152,10 +145,8 @@ pub(crate) fn draw_settings_page(
     // made of settings rows — you need a card, a menu and something to type
     // into, side by side, to judge any of them — and a control adjusted with
     // nothing to look at is a control adjusted blind.
-    let specimen = matches!(
-        chrome.browser.settings_section,
-        crate::state::SettingsSection::Appearance
-    );
+    let specimen = !cfg!(target_os = "macos")
+        && chrome.browser.settings_section == crate::state::SettingsSection::Appearance;
     let head_height = 14.0
         + 26.0
         + if specimen {
@@ -244,14 +235,15 @@ pub(crate) fn draw_settings_page(
 /// study argues for. This is the other half of the answer to "a theme is a
 /// Rust constant": not only is every value settable, an arrangement somebody
 /// tuned can be put somewhere and come back.
+#[cfg(not(target_os = "macos"))]
 fn save_as_preset(
     ui: &mut Ui,
     chrome: &mut ChromeContext,
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
-    let open_id = Id::new("zervo_preset_naming");
-    let draft_id = Id::new("zervo_preset_name");
+    let open_id = Id::unique("zervo_preset_naming");
+    let draft_id = Id::unique("zervo_preset_name");
     if ghost_button(ui, palette, Icon::Plus, tr("settings-save-as-a-preset")).clicked() {
         let open = ui.ctx().data(|data| data.get_temp::<bool>(open_id)) == Some(true);
         ui.ctx().data_mut(|data| data.insert_temp(open_id, !open));
@@ -302,6 +294,7 @@ fn save_as_preset(
 /// Not `widgets::segmented`: five names of unequal length in equal slots reads
 /// as a table of contents rather than as five things to press, and the row has
 /// to wrap on a narrow window.
+#[cfg(not(target_os = "macos"))]
 fn preset_button(ui: &mut Ui, palette: &Palette, label: &str, selected: bool) -> egui::Response {
     let text =
         ui.painter()
@@ -428,6 +421,7 @@ fn tuning(
 }
 
 /// A ghost button in the "This arrangement" row.
+#[cfg(not(target_os = "macos"))]
 fn ghost_button(ui: &mut Ui, palette: &Palette, icon: Icon, label: &str) -> egui::Response {
     let text =
         ui.painter()
@@ -686,9 +680,10 @@ pub(crate) fn settings_appearance(
     // any of them moves, the row of presets at the top is naming something
     // that is no longer true. Rather than have twenty call sites remember to
     // say so, the page is compared against what it started the frame as.
-    let opened_as = chrome.settings.appearance;
-    let mut chose_preset = false;
+    #[cfg(not(target_os = "macos"))]
+    let (opened_as, mut chose_preset) = (chrome.settings.appearance, false);
 
+    #[cfg(not(target_os = "macos"))]
     settings_section(ui, palette, tr("settings-preset"), |ui| {
         ui.horizontal_wrapped(|ui| {
             for preset in theme::Preset::ALL {
@@ -803,23 +798,33 @@ pub(crate) fn settings_appearance(
         );
     });
 
-    settings_section(
-        ui,
-        palette,
-        tr("settings-seam-between-chrome-and-page"),
-        |ui| {
+    if chrome.settings.layout.is_sidebar() {
+        use theme::Seam;
+
+        let frame_options: &[Seam] = if cfg!(target_os = "macos") {
+            &[Seam::Card, Seam::EdgeToEdge]
+        } else {
+            &Seam::ALL
+        };
+        settings_section(ui, palette, tr("settings-page-frame"), |ui| {
             if choose(
                 ui,
                 palette,
                 &mut chrome.settings.appearance.seam,
-                &theme::Seam::ALL,
-                zervo_core::theme::Seam::label,
+                frame_options,
+                Seam::label,
             ) {
                 actions.push(UiAction::SettingsChanged);
             }
-            note(ui, palette, chrome.settings.appearance.seam.note());
+            let seam = chrome.settings.appearance.seam;
+            let detail = match seam {
+                Seam::Card => tr("settings-page-frame-card"),
+                Seam::EdgeToEdge => tr("settings-page-frame-edge-to-edge"),
+                _ => seam.note(),
+            };
+            note(ui, palette, detail);
 
-            if !chrome.settings.appearance.seam.closes_gap() {
+            if !seam.closes_gap() {
                 ui.add_space(10.0);
                 if tuning(
                     ui,
@@ -833,15 +838,11 @@ pub(crate) fn settings_appearance(
                 {
                     actions.push(UiAction::SettingsChanged);
                 }
-                note(
-                    ui,
-                    palette,
-                    tr("settings-content-margin-zero-puts-the-page-against"),
-                );
             }
-        },
-    );
+        });
+    }
 
+    #[cfg(not(target_os = "macos"))]
     settings_section(ui, palette, tr("settings-material"), |ui| {
         if choose(
             ui,
@@ -852,25 +853,11 @@ pub(crate) fn settings_appearance(
         ) {
             actions.push(UiAction::SettingsChanged);
         }
-        let translucency = chrome.settings.appearance.translucency;
-        let material_note = match translucency {
-            _ if translucency.is_translucent()
-                && palette.translucency == theme::Translucency::Solid =>
-            {
-                tr("settings-macos-reduce-transparency")
-            },
-            theme::Translucency::Frosted
-                if chrome.native_glass.sidebar_available && chrome.settings.layout.is_sidebar() =>
-            {
-                tr("settings-native-docked-sidebar")
-            },
-            theme::Translucency::LiquidGlass if chrome.native_glass.glass_available => {
-                tr("settings-liquid-glass-native")
-            },
+        let material_note = match chrome.settings.appearance.translucency {
             theme::Translucency::LiquidGlass => {
                 tr("settings-zervo-s-frosted-material-is-used-here")
             },
-            _ => translucency.note(),
+            translucency => translucency.note(),
         };
         note(ui, palette, material_note);
         if chrome.settings.appearance.frost_is_capped() {
@@ -1072,6 +1059,7 @@ pub(crate) fn settings_appearance(
 
     settings_window_section(ui, chrome, palette, actions);
 
+    #[cfg(not(target_os = "macos"))]
     settings_section(ui, palette, tr("settings-this-arrangement"), |ui| {
         ui.horizontal_wrapped(|ui| {
             if ghost_button(ui, palette, Icon::Reset, tr("settings-reset-to-zervo")).clicked() {
@@ -1098,6 +1086,7 @@ pub(crate) fn settings_appearance(
         note(ui, palette, tr("settings-a-theme-used-to-be-a-rust"));
     });
 
+    #[cfg(not(target_os = "macos"))]
     if !chose_preset && chrome.settings.appearance != opened_as {
         chrome.settings.appearance.customised();
     }
@@ -1898,7 +1887,7 @@ pub(crate) fn settings_passwords(
             if ui
                 .interact(
                     remove,
-                    Id::new("zervo_pw_remove").with((&site, &username)),
+                    Id::unique("zervo_pw_remove").with((&site, &username)),
                     Sense::click(),
                 )
                 .on_hover_text(tr("settings-forget-this-login"))
@@ -2043,14 +2032,18 @@ pub(crate) fn settings_section(
         // debug banner the reader should never be shown.
         ui.push_id(title, add_contents);
         let card_rect = ui.min_rect().expand(14.0);
-        ui.painter().set(
-            placeholder,
-            Shape::Vec(glass::shapes(
-                card_rect,
-                palette,
-                Glass::tier(Tier::Card).strength(0.8),
-            )),
-        );
+        let shadow = palette.material.shadow_reach
+            + f32::from(palette.corner(Tier::Card).nw) * palette.material.shadow_reach_per_radius;
+        if ui.is_rect_visible(card_rect.expand(shadow)) {
+            ui.painter().set(
+                placeholder,
+                Shape::Vec(glass::shapes(
+                    card_rect,
+                    palette,
+                    Glass::tier(Tier::Card).strength(0.8),
+                )),
+            );
+        }
     });
     ui.add_space(14.0);
 }

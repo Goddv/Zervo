@@ -568,7 +568,7 @@ fn paint_photo(
     // all: epaint never reuses a texture id, and egui hands back the target
     // value immediately for an id it has not seen before — so every wallpaper
     // arrived at full strength on its first frame and none of them ever faded.
-    let seen = Id::new("zervo_newtab_photo");
+    let seen = Id::unique("zervo_newtab_photo");
     let ramp = seen.with("fade");
     let ctx = root.ctx();
     if ctx.data(|data| data.get_temp::<egui::TextureId>(seen)) != Some(texture.id()) {
@@ -583,7 +583,7 @@ fn paint_photo(
     // all. A frame that draws nothing still has to ask for the next one.
     *ambient |= fade < 1.0;
 
-    let uv = cover(texture.size_vec2(), content_rect);
+    let uv = cover(texture.resolution_vec2(), content_rect);
     backdrop.add(
         egui::epaint::RectShape::filled(content_rect, radius, Color32::WHITE.gamma_multiply(fade))
             .with_texture(texture.id(), uv),
@@ -753,7 +753,7 @@ fn draw_header(
         false,
     );
     let add_anchor = add.rect;
-    let menu_id = Id::new("zervo_newtab_add_open");
+    let menu_id = Id::unique("zervo_newtab_add_open");
     if add.clicked() {
         // Adding puts the page into edit mode: the card lands somewhere, and
         // somewhere is rarely where it is wanted.
@@ -784,7 +784,7 @@ fn draw_header(
             Some(card) => {
                 root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
                 root.ctx()
-                    .data_mut(|data| data.insert_temp(Id::new("zervo_newtab_added"), card));
+                    .data_mut(|data| data.insert_temp(Id::unique("zervo_newtab_added"), card));
             },
             None if root.input(|input| input.pointer.any_pressed())
                 && !crate::dashboard::over_menu(root.ctx())
@@ -822,7 +822,7 @@ fn draw_header(
         );
         if reset.clicked() {
             root.ctx()
-                .data_mut(|data| data.insert_temp(Id::new("zervo_newtab_reset"), true));
+                .data_mut(|data| data.insert_temp(Id::unique("zervo_newtab_reset"), true));
         }
     }
 }
@@ -859,7 +859,7 @@ fn header_button(
 
     let response = root.interact(
         rect,
-        Id::new("zervo_newtab_header").with(label),
+        Id::unique("zervo_newtab_header").with(label),
         Sense::click(),
     );
     let hover = glass::ease_out(root.ctx().animate_bool_with_time(
@@ -928,7 +928,7 @@ fn draw_backdrop_menu(
     use crate::wallpaper::{Source, Subject};
 
     let palette = chrome.palette;
-    let menu_id = Id::new("zervo_newtab_backdrop_open");
+    let menu_id = Id::unique("zervo_newtab_backdrop_open");
     if trigger.clicked() {
         let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
         root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
@@ -1066,7 +1066,7 @@ fn draw_credit(
     let clickable = !credit.page.is_empty();
     let response = root.interact(
         hit,
-        Id::new("zervo_newtab_credit"),
+        Id::unique("zervo_newtab_credit"),
         if clickable {
             Sense::click()
         } else {
@@ -1114,13 +1114,13 @@ fn draw_board(
 
     // Deferred asks from the header, which cannot reach the change list from
     // where it is drawn.
-    let added = Id::new("zervo_newtab_added");
+    let added = Id::unique("zervo_newtab_added");
     if let Some(card) = ctx.data(|data| data.get_temp::<Card>(added)) {
         ctx.data_mut(|data| data.remove::<Card>(added));
         changes.push(Change::Add(card));
     }
     if ctx
-        .data_mut(|data| data.remove_temp::<bool>(Id::new("zervo_newtab_reset")))
+        .data_mut(|data| data.remove_temp::<bool>(Id::unique("zervo_newtab_reset")))
         .is_some()
     {
         changes.push(Change::Reset);
@@ -1139,7 +1139,7 @@ fn draw_board(
     let rows = needed.max(metrics.rows);
     let overflow = (metrics.height_for(rows) - board.height()).max(0.0);
 
-    let scroll_id = Id::new("zervo_newtab_scroll");
+    let scroll_id = Id::unique("zervo_newtab_scroll");
     let mut scroll = ctx
         .data(|data| data.get_temp::<f32>(scroll_id))
         .unwrap_or(0.0);
@@ -1185,9 +1185,9 @@ fn draw_board(
         );
     }
 
-    let drag_id = Id::new("zervo_newtab_drag");
-    let grab_id = Id::new("zervo_newtab_grab");
-    let resize_id = Id::new("zervo_newtab_resize");
+    let drag_id = Id::unique("zervo_newtab_drag");
+    let grab_id = Id::unique("zervo_newtab_grab");
+    let resize_id = Id::unique("zervo_newtab_resize");
     let held = ctx.data(|data| data.get_temp::<usize>(drag_id));
     let resizing = ctx.data(|data| data.get_temp::<usize>(resize_id));
     // Where inside the card the pointer went down. Kept, so a card follows the
@@ -1362,7 +1362,7 @@ fn draw_handles(
     if area
         .interact(
             close,
-            Id::new("zervo_newtab_remove").with(index),
+            Id::unique("zervo_newtab_remove").with(index),
             Sense::click(),
         )
         .on_hover_cursor(CursorIcon::PointingHand)
@@ -1393,7 +1393,7 @@ fn draw_resizer(
     resizing: Option<usize>,
 ) {
     let ctx = area.ctx().clone();
-    let resize_id = Id::new("zervo_newtab_resize");
+    let resize_id = Id::unique("zervo_newtab_resize");
     let corner =
         Rect::from_center_size(pos2(rect.max.x - 12.0, rect.max.y - 12.0), vec2(22.0, 22.0));
     icons::draw_icon(
@@ -1404,7 +1404,7 @@ fn draw_resizer(
     );
     let handle = area.interact(
         corner,
-        Id::new("zervo_newtab_size").with(index),
+        Id::unique("zervo_newtab_size").with(index),
         Sense::click_and_drag(),
     );
     if handle.hovered() || resizing == Some(index) {
@@ -1508,7 +1508,7 @@ fn apply(chrome: &mut ChromeContext, changes: Vec<Change>) -> bool {
 /// exactly the same height — either would collide on any other key, and egui
 /// answers a collision with a red banner across the page.
 fn card_id(index: usize) -> Id {
-    Id::new("zervo_newtab_card").with(index)
+    Id::unique("zervo_newtab_card").with(index)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -1677,7 +1677,7 @@ fn draw_composed(
         field,
         ink,
         true,
-        Id::new("zervo_newtab_hero"),
+        Id::unique("zervo_newtab_hero"),
         actions,
         Search::Hero,
     );
@@ -1774,7 +1774,7 @@ fn draw_composed(
         tr("newtab-pin-a-site"),
         true,
     ) {
-        let menu_id = Id::new("zervo_newtab_pin_open");
+        let menu_id = Id::unique("zervo_newtab_pin_open");
         if response.clicked() {
             let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
             root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
@@ -1886,7 +1886,7 @@ fn draw_resume(
     let palette = &chrome.palette;
     let response = root.interact(
         rect,
-        Id::new("zervo_newtab_resume").with(index),
+        Id::unique("zervo_newtab_resume").with(index),
         Sense::click(),
     );
     let hover = glass::ease_out(root.ctx().animate_bool_with_time(
@@ -1981,7 +1981,7 @@ fn draw_site_chip(
 
     let response = root.interact(
         rect,
-        Id::new("zervo_newtab_chip").with(label),
+        Id::unique("zervo_newtab_chip").with(label),
         Sense::click(),
     );
     let hover = glass::ease_out(root.ctx().animate_bool_with_time(
@@ -2076,7 +2076,7 @@ fn draw_narrow(
         pill,
         ink,
         true,
-        Id::new("zervo_newtab_narrow"),
+        Id::unique("zervo_newtab_narrow"),
         actions,
         Search::Card,
     );
@@ -2158,7 +2158,7 @@ fn draw_search(
             text,
             palette.text,
         );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, live, label));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, live, label));
         if live
             && response
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -2283,7 +2283,7 @@ fn draw_search(
         .frame(Frame::NONE)
         .font(FontId::proportional(font))
         .text_color(palette.text)
-        .vertical_align(egui::Align::Center)
+        .align(egui::Align2::LEFT_CENTER)
         .desired_width(field.width());
     let response = inner.add(editor);
     let has_focus = response.has_focus();
@@ -3029,7 +3029,7 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
             .frame(Frame::NONE)
             .font(FontId::proportional(12.5))
             .text_color(palette.text)
-            .vertical_align(egui::Align::Center)
+            .align(egui::Align2::LEFT_CENTER)
             .hint_text(RichText::new(tr("newtab-add-something")).color(palette.text_muted))
             .desired_width(entry.width());
         let response = inner.add(editor);
