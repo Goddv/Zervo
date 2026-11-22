@@ -860,6 +860,8 @@ impl RunningApp {
             self.pointer_owner = PointerOwner::Free;
         }
 
+        let overlay_owns_keyboard =
+            self.controls_open || egui::Popup::is_any_open(&self.egui_glow.egui_ctx);
         let mut consumed = false;
         match &event {
             WindowEvent::MouseWheel { .. } | WindowEvent::MouseInput { .. } if over_content => {
@@ -872,7 +874,8 @@ impl RunningApp {
                 });
             },
             WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..)
-                if state.active_webview().is_some()
+                if !overlay_owns_keyboard
+                    && state.active_webview().is_some()
                     && !self
                         .egui_glow
                         .egui_ctx
@@ -888,6 +891,11 @@ impl RunningApp {
                     false
                 } else {
                     response.consumed
+                        || (overlay_owns_keyboard
+                            && matches!(
+                                event,
+                                WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..)
+                            ))
                 };
             },
         }
@@ -957,7 +965,7 @@ impl RunningApp {
                 state: element_state,
                 button,
                 ..
-            } => {
+            } if over_content => {
                 let point = self.webview_relative_mouse.get();
                 if let Some(webview) = state.active_webview() {
                     let rect: Rect<f32, DevicePixel> = webview.size().into();
@@ -1337,15 +1345,9 @@ impl RunningApp {
         #[cfg(target_os = "macos")]
         if let Some(overlays) = &self.glass_overlays {
             let size = state.window.inner_size();
-            let enabled = glass_available
-                && palette.translucency == theme::Translucency::LiquidGlass
-                && state.rendering_context.make_current().is_ok();
-            overlays.prepare(
-                &self.egui_glow.egui_ctx,
-                &state.window_rendering_context.glow_gl_api(),
-                [size.width, size.height],
-                enabled,
-            );
+            let enabled =
+                glass_available && palette.translucency == theme::Translucency::LiquidGlass;
+            overlays.prepare(&self.egui_glow.egui_ctx, [size.width, size.height], enabled);
         }
         self.egui_glow.run(&state.window, |root| {
             let mut browser = state.browser.borrow_mut();
@@ -1545,7 +1547,7 @@ impl RunningApp {
                     backdrop.update_sidebar(output.native_glass.sidebar, zoom);
                 }
                 if let Some(glass) = &self.liquid_glass {
-                    glass.update(output.native_glass.address, zoom);
+                    glass.update(output.native_glass.address, zoom, palette.dark);
                 }
             }
             self.content_rect_points = output.content_rect;
@@ -1666,7 +1668,7 @@ impl RunningApp {
         self.egui_glow.paint(&state.window);
         #[cfg(target_os = "macos")]
         if let Some(overlays) = &mut self.glass_overlays {
-            overlays.present(self.egui_glow.egui_ctx.zoom_factor());
+            overlays.present(&self.egui_glow.egui_ctx, palette.dark);
         }
         // The picture of a page on its way out, taken in the one moment it can
         // be: the chrome has just been painted, the framebuffer still holds the

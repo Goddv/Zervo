@@ -144,7 +144,7 @@ pub(crate) fn draw_settings_page(
     // ── Content pane: a pinned header, and sections that scroll under it.
     let pane_rect = Rect::from_min_max(pos2(nav_rect.max.x, laid_out.min.y), laid_out.max)
         .shrink2(vec2(6.0, 10.0));
-    let column = (pane_rect.width() - 40.0).clamp(240.0, 520.0);
+    let column = (pane_rect.width() - 24.0).clamp(0.0, 520.0);
     let margin = ((pane_rect.width() - column) * 0.5).max(0.0);
 
     // The title sits outside the scroll area, and on Appearance the specimen
@@ -207,6 +207,7 @@ pub(crate) fn draw_settings_page(
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     let ui = &mut pane_ui;
+    ui.set_clip_rect(ui.clip_rect().intersect(pane_rect));
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -1143,54 +1144,35 @@ fn accent_swatches(
         response
     };
 
-    ui.horizontal(|ui| {
-        // ── The reader's own, first.
+    ui.horizontal_wrapped(|ui| {
         let custom_selected = matches!(chrome.settings.accent, AccentColor::Custom(..));
-        let mut rgb = chrome.settings.accent.rgb(palette.dark);
+        let rgb = chrome.settings.accent.rgb(palette.dark);
         let response = swatch(
             ui,
             egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
             custom_selected,
             true,
-        );
-        let picker = Id::new("zervo_accent_picker");
-        if response
-            .clone()
-            .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text(tr("settings-mix-your-own"))
-            .clicked()
-        {
-            // Opening it also selects it, seeded from whatever is in force
-            // — so the picker opens on the colour being replaced rather
-            // than on an arbitrary one.
-            chrome.settings.accent = AccentColor::Custom(rgb[0], rgb[1], rgb[2]);
-            actions.push(UiAction::SettingsChanged);
-            let open = ui.ctx().data(|data| data.get_temp::<bool>(picker)) == Some(true);
-            ui.ctx().data_mut(|data| data.insert_temp(picker, !open));
-        }
-        if ui.ctx().data(|data| data.get_temp::<bool>(picker)) == Some(true) {
+        )
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text(tr("settings-mix-your-own"));
+        let popup = egui::Popup::from_toggle_button_response(&response)
+            .gap(6.0)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        crate::overlay_glass::popup(popup, ui.ctx(), |ui| {
+            ui.spacing_mut().slider_width = 232.0;
             let mut colour = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-            egui::Area::new(picker.with("area"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(response.rect.left_bottom() + vec2(0.0, 6.0))
-                .constrain(true)
-                .show(ui.ctx(), |ui| {
-                    crate::overlay_glass::popup_frame(ui, |ui| {
-                        if egui::color_picker::color_picker_color32(
-                            ui,
-                            &mut colour,
-                            egui::color_picker::Alpha::Opaque,
-                        ) {
-                            rgb = [colour.r(), colour.g(), colour.b()];
-                            chrome.settings.accent = AccentColor::Custom(rgb[0], rgb[1], rgb[2]);
-                            actions.push(UiAction::SettingsChanged);
-                        }
-                        if ui.button(tr("common-done")).clicked() {
-                            ui.ctx().data_mut(|data| data.insert_temp(picker, false));
-                        }
-                    });
-                });
-        }
+            if egui::color_picker::color_picker_color32(
+                ui,
+                &mut colour,
+                egui::color_picker::Alpha::Opaque,
+            ) {
+                chrome.settings.accent = AccentColor::Custom(colour.r(), colour.g(), colour.b());
+                actions.push(UiAction::SettingsChanged);
+            }
+            if ui.button(tr("common-done")).clicked() {
+                ui.close();
+            }
+        });
 
         // ── The presets.
         for accent in AccentColor::PRESETS {

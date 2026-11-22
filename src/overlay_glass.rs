@@ -7,6 +7,38 @@
 
 use egui::{Context, InnerResponse, Rect, Ui};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Role {
+    Menu,
+    Panel,
+    Dialog,
+    Status,
+}
+
+impl Role {
+    pub(crate) fn radius(self) -> u8 {
+        match self {
+            Self::Menu => 14,
+            Self::Panel => 18,
+            Self::Dialog => 20,
+            Self::Status => 10,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn tint(self, dark: bool) -> objc2::rc::Retained<objc2_app_kit::NSColor> {
+        let (white, alpha) = match (dark, self) {
+            (true, Self::Menu | Self::Status) => (0.045, 0.92),
+            (true, Self::Dialog) => (0.055, 0.88),
+            (true, Self::Panel) => (0.065, 0.80),
+            (false, Self::Menu | Self::Status) => (0.90, 0.72),
+            (false, Self::Dialog) => (0.89, 0.64),
+            (false, Self::Panel) => (0.88, 0.56),
+        };
+        objc2_app_kit::NSColor::colorWithWhite_alpha(white, alpha)
+    }
+}
+
 pub(crate) struct Surface {
     #[cfg(target_os = "macos")]
     capture: Option<macos::Capture>,
@@ -32,17 +64,44 @@ impl Surface {
         }
     }
 
-    pub(crate) fn finish(self, ui: &Ui, rect: Rect, radius: f32) {
-        self.finish_on(ui.painter(), ui.ctx(), rect, radius);
+    pub(crate) fn finish(self, ui: &Ui, rect: Rect, role: Role) {
+        self.finish_on(ui.painter(), rect, role);
     }
 
-    fn finish_on(self, painter: &egui::Painter, ctx: &Context, rect: Rect, radius: f32) {
-        let _ = (painter, ctx, rect, radius);
+    fn finish_on(self, painter: &egui::Painter, rect: Rect, role: Role) {
+        let _ = (painter, rect, role);
         #[cfg(target_os = "macos")]
         if let Some(capture) = self.capture {
-            capture.finish(painter, ctx, rect, radius);
+            capture.finish(painter, rect, role);
         }
     }
+}
+
+/// Give a fixed-height panel a scrollable body while leaving its header and
+/// actions outside the scrolling region.
+pub(crate) fn scroll_body<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let mut body = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    body.set_clip_rect(ui.clip_rect().intersect(rect));
+    egui::ScrollArea::vertical()
+        .max_height(rect.height().max(0.0))
+        .auto_shrink([false, false])
+        .show(&mut body, add)
+        .inner
+}
+
+pub(crate) fn row_label(ui: &Ui, rect: Rect, label: &str, font: egui::FontId, ink: egui::Color32) {
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), font, ink);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width().max(0.0));
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(
+        egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
+        galley,
+        ink,
+    );
 }
 
 const MENU_MARGIN: i8 = 8;
@@ -54,6 +113,8 @@ fn menu_style(style: &mut egui::Style) {
     style.visuals.window_fill = egui::Color32::TRANSPARENT;
     style.visuals.window_stroke = egui::Stroke::NONE;
     style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(Role::Menu.radius());
+    style.wrap_mode = Some(egui::TextWrapMode::Truncate);
 }
 
 fn enabled(ctx: &Context) -> bool {
@@ -87,12 +148,13 @@ impl MenuSurface {
         result
     }
 
-    fn finish(self, ctx: &Context) {
-        if let Some((surface, painter, id, fallback)) = self.0 {
-            let rect = ctx
-                .read_response(id)
-                .map_or(fallback, |response| response.rect);
-            surface.finish_on(&painter, ctx, rect, 14.0);
+    fn finish(self, ctx: &Context, rect: Option<Rect>) {
+        if let Some((surface, painter, id, measured)) = self.0 {
+            let rect = rect
+                .or_else(|| ctx.read_response(id).map(|response| response.rect))
+                .filter(|rect| rect.is_finite() && rect.is_positive())
+                .unwrap_or(measured);
+            surface.finish_on(&painter, rect, Role::Menu);
         }
     }
 }
@@ -107,7 +169,7 @@ pub(crate) fn popup<R>(
     }
     let mut surface = MenuSurface::default();
     let result = popup.style(menu_style).show(|ui| surface.draw(ui, add));
-    surface.finish(ctx);
+    surface.finish(ctx, result.as_ref().map(|shown| shown.response.rect));
     result
 }
 
@@ -118,19 +180,7 @@ pub(crate) fn context_menu(response: &egui::Response, add: impl FnOnce(&mut Ui))
 pub(crate) fn submenu(ui: &mut Ui, label: impl Into<egui::WidgetText>, add: impl FnOnce(&mut Ui)) {
     let mut surface = MenuSurface::default();
     ui.menu_button(label.into(), |ui| surface.draw(ui, add));
-    surface.finish(ui.ctx());
-}
-
-pub(crate) fn popup_frame<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let surface = Surface::begin(ui);
-    let frame = if surface.is_native() {
-        egui::Frame::NONE.inner_margin(MENU_MARGIN)
-    } else {
-        egui::Frame::popup(ui.style())
-    };
-    let response = frame.show(ui, add);
-    surface.finish(ui, response.response.rect, 16.0);
-    response.inner
+    surface.finish(ui.ctx(), None);
 }
 
 pub(crate) trait ComboBoxGlassExt {
@@ -151,7 +201,7 @@ impl ComboBoxGlassExt for egui::ComboBox {
         let response = self
             .popup_style(menu_style.into())
             .show_ui(ui, |ui| surface.draw(ui, add));
-        surface.finish(ui.ctx());
+        surface.finish(ui.ctx(), None);
         response
     }
 }
@@ -163,6 +213,7 @@ pub(crate) use macos::GlassOverlays;
 mod macos {
     use std::sync::{Arc, Mutex};
 
+    use super::Role;
     use egui::{Id, PaintCallbackInfo, Rect, Shape, Ui};
     use egui_glow::CallbackFn;
     use glow::HasContext as _;
@@ -201,6 +252,9 @@ mod macos {
     struct Layer {
         glass: Retained<NSGlassEffectView>,
         ink: Retained<NSImageView>,
+        appearance: Option<(Role, bool)>,
+        image_size: Option<(NSSize, usize, usize)>,
+        pixels: Vec<u8>,
     }
 
     pub(crate) struct GlassOverlays {
@@ -241,16 +295,10 @@ mod macos {
         }
 
         /// Start a frame and expose its renderer to popup builders during layout.
-        pub(crate) fn prepare(
-            &self,
-            ctx: &egui::Context,
-            gl: &glow::Context,
-            size: [u32; 2],
-            enabled: bool,
-        ) {
+        pub(crate) fn prepare(&self, ctx: &egui::Context, size: [u32; 2], enabled: bool) {
             let mut renderer = self.renderer.lock().unwrap();
-            renderer.frames.clear();
-            let ready = enabled && renderer.prepare(gl, size);
+            renderer.active = 0;
+            let ready = enabled && renderer.failed_size != Some(size);
             ctx.data_mut(|data| {
                 if ready {
                     data.insert_temp(renderer_id(), self.renderer.clone());
@@ -260,16 +308,25 @@ mod macos {
             });
         }
 
-        pub(crate) fn present(&mut self, zoom: f32) {
-            let frames = std::mem::take(&mut self.renderer.lock().unwrap().frames);
-            for layer in self.layers.iter().skip(frames.len()) {
+        pub(crate) fn present(&mut self, ctx: &egui::Context, dark: bool) {
+            let renderer = self.renderer.clone();
+            let mut renderer = renderer.lock().unwrap();
+            if std::mem::take(&mut renderer.repaint) {
+                ctx.request_repaint();
+            }
+            let count = renderer.active;
+            for layer in self.layers.iter_mut().skip(count) {
                 if !layer.glass.isHidden() {
                     layer.ink.setImage(None);
                     layer.glass.setHidden(true);
+                    layer.image_size = None;
+                    layer.pixels.clear();
                 }
             }
-            if frames.is_empty() {
-                self.host.setHidden(true);
+            if count == 0 {
+                if !self.host.isHidden() {
+                    self.host.setHidden(true);
+                }
                 return;
             }
 
@@ -285,17 +342,23 @@ mod macos {
                     Some(&self.content),
                 );
             }
-            self.host.setFrame(self.content.frame());
-            self.container.setFrame(self.host.bounds());
-            self.surfaces.setFrame(self.container.bounds());
-            self.host.setHidden(false);
+            let host_frame = self.content.frame();
+            if self.host.frame() != host_frame {
+                self.host.setFrame(host_frame);
+            }
+            let bounds = self.host.bounds();
+            if self.container.frame() != bounds {
+                self.container.setFrame(bounds);
+                self.surfaces.setFrame(self.container.bounds());
+            }
+            if self.host.isHidden() {
+                self.host.setHidden(false);
+            }
 
             let mtm = self.host.mtm();
-            let zoom = f64::from(zoom);
-            for (index, frame) in frames.into_iter().enumerate() {
-                let layer = if let Some(layer) = self.layers.get(index) {
-                    layer
-                } else {
+            let zoom = f64::from(ctx.zoom_factor());
+            for (index, frame) in renderer.frames[..count].iter_mut().enumerate() {
+                if index == self.layers.len() {
                     let Some(glass) = crate::vibrancy::new_glass_view() else {
                         break;
                     };
@@ -308,10 +371,15 @@ mod macos {
                     );
                     glass.setContentView(Some(&ink));
                     self.surfaces.addSubview(&glass);
-                    self.layers.push(Layer { glass, ink });
-                    &self.layers[index]
-                };
-                let bounds = self.surfaces.bounds();
+                    self.layers.push(Layer {
+                        glass,
+                        ink,
+                        appearance: None,
+                        image_size: None,
+                        pixels: Vec::new(),
+                    });
+                }
+                let layer = &mut self.layers[index];
                 let size = NSSize::new(
                     f64::from(frame.rect.width()) * zoom,
                     f64::from(frame.rect.height()) * zoom,
@@ -323,11 +391,38 @@ mod macos {
                     ),
                     size,
                 );
-                layer.glass.setFrame(local);
-                layer.glass.setCornerRadius(f64::from(frame.radius) * zoom);
-                layer.ink.setFrame(NSRect::new(NSPoint::ZERO, size));
-                layer.ink.setImage(frame.image(size).as_deref());
-                layer.glass.setHidden(false);
+                if layer.glass.frame() != local {
+                    layer.glass.setFrame(local);
+                }
+                let radius =
+                    (f64::from(frame.role.radius()) * zoom).min(size.width.min(size.height) * 0.5);
+                if layer.glass.cornerRadius() != radius {
+                    layer.glass.setCornerRadius(radius);
+                }
+                let appearance = Some((frame.role, dark));
+                if layer.appearance != appearance {
+                    let tint = frame.role.tint(dark);
+                    layer.glass.setTintColor(Some(&tint));
+                    layer.appearance = appearance;
+                }
+                let image_size = Some((size, frame.width, frame.height));
+                // The compositor updates the backdrop independently of the ink.
+                // An animating page doesn't need another copy of the same labels.
+                if layer.image_size != image_size || frame.rgba != layer.pixels {
+                    let Some(image) = frame.image(size) else {
+                        renderer.failed_size = Some(renderer.size);
+                        self.host.setHidden(true);
+                        ctx.request_repaint();
+                        return;
+                    };
+                    layer.ink.setFrame(NSRect::new(NSPoint::ZERO, size));
+                    layer.ink.setImage(Some(&image));
+                    layer.image_size = image_size;
+                    std::mem::swap(&mut frame.rgba, &mut layer.pixels);
+                }
+                if layer.glass.isHidden() {
+                    layer.glass.setHidden(false);
+                }
             }
         }
 
@@ -366,20 +461,15 @@ mod macos {
             })
         }
 
-        pub(super) fn finish(
-            self,
-            painter: &egui::Painter,
-            ctx: &egui::Context,
-            rect: Rect,
-            radius: f32,
-        ) {
+        pub(super) fn finish(self, painter: &egui::Painter, rect: Rect, role: Role) {
+            let ctx = painter.ctx();
             let screen = ctx.content_rect();
             let rect = rect.intersect(screen);
-            if !rect.is_positive() {
+            if !rect.is_positive() || !rect.is_finite() {
                 return;
             }
             let renderer = self.renderer.clone();
-            let painter = painter.with_clip_rect(screen);
+            let painter = ctx.layer_painter(painter.layer_id()).with_clip_rect(screen);
             // The marker inherits the same layer and placement as the
             // overlay. The normal egui paint order then determines stacking.
             painter.set(
@@ -394,10 +484,7 @@ mod macos {
             painter.add(egui::PaintCallback {
                 rect,
                 callback: Arc::new(CallbackFn::new(move |info, painter| {
-                    self.renderer
-                        .lock()
-                        .unwrap()
-                        .end(info, painter.gl(), radius);
+                    self.renderer.lock().unwrap().end(info, painter.gl(), role);
                 })),
             });
         }
@@ -405,7 +492,7 @@ mod macos {
 
     struct Frame {
         rect: Rect,
-        radius: f32,
+        role: Role,
         width: usize,
         height: usize,
         rgba: Vec<u8>,
@@ -456,6 +543,9 @@ mod macos {
         size: [u32; 2],
         previous: Option<(Option<glow::Framebuffer>, Option<glow::Framebuffer>)>,
         frames: Vec<Frame>,
+        active: usize,
+        failed_size: Option<[u32; 2]>,
+        repaint: bool,
     }
 
     impl Renderer {
@@ -509,6 +599,16 @@ mod macos {
         }
 
         fn begin(&mut self, info: PaintCallbackInfo, gl: &glow::Context) {
+            let size = info.screen_size_px;
+            if self.failed_size == Some(size) {
+                return;
+            }
+            if !self.prepare(gl, size) {
+                self.failed_size = Some(size);
+                self.repaint = true;
+                return;
+            }
+            self.failed_size = None;
             let Some((fbo, _)) = self.target else {
                 return;
             };
@@ -533,14 +633,26 @@ mod macos {
             }
         }
 
-        fn end(&mut self, info: PaintCallbackInfo, gl: &glow::Context, radius: f32) {
+        fn end(&mut self, info: PaintCallbackInfo, gl: &glow::Context, role: Role) {
             let Some((draw, read)) = self.previous.take() else {
                 return;
             };
             let viewport = info.viewport_in_pixels();
             let width = viewport.width_px.max(0) as usize;
             let height = viewport.height_px.max(0) as usize;
-            let mut rgba = vec![0; width * height * 4];
+            let frame = if self.active == self.frames.len() {
+                self.frames.push(Frame {
+                    rect: Rect::NOTHING,
+                    role,
+                    width: 0,
+                    height: 0,
+                    rgba: Vec::new(),
+                });
+                self.frames.last_mut().unwrap()
+            } else {
+                &mut self.frames[self.active]
+            };
+            frame.rgba.resize(width * height * 4, 0);
             // SAFETY: dimensions are clipped to the window and this buffer
             // has four bytes for each pixel. The app's pack state is restored.
             unsafe {
@@ -557,7 +669,7 @@ mod macos {
                 });
                 let previous_pack = gl.get_parameter_buffer(glow::PIXEL_PACK_BUFFER_BINDING);
                 gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
-                if !rgba.is_empty() {
+                if !frame.rgba.is_empty() {
                     gl.read_pixels(
                         viewport.left_px,
                         viewport.from_bottom_px,
@@ -565,7 +677,7 @@ mod macos {
                         viewport.height_px,
                         glow::RGBA,
                         glow::UNSIGNED_BYTE,
-                        glow::PixelPackData::Slice(Some(&mut rgba)),
+                        glow::PixelPackData::Slice(Some(&mut frame.rgba)),
                     );
                 }
                 for (param, value) in previous {
@@ -575,24 +687,21 @@ mod macos {
                 gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
                 gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
             }
-            if rgba.is_empty() {
+            if frame.rgba.is_empty() {
                 return;
             }
             let scale = info.pixels_per_point;
-            let rect = Rect::from_min_size(
+            frame.rect = Rect::from_min_size(
                 egui::pos2(
                     viewport.left_px as f32 / scale,
                     viewport.top_px as f32 / scale,
                 ),
                 egui::vec2(width as f32 / scale, height as f32 / scale),
             );
-            self.frames.push(Frame {
-                rect,
-                radius,
-                width,
-                height,
-                rgba,
-            });
+            frame.width = width;
+            frame.height = height;
+            frame.role = role;
+            self.active += 1;
         }
 
         fn destroy(&mut self, gl: &glow::Context) {

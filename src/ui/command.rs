@@ -41,11 +41,14 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     let ctx = root.ctx();
     let palette = chrome.palette;
     let id = Id::new("zervo_command_bar");
-    let width = (ctx.content_rect().width() - 64.0).clamp(140.0, 560.0);
+    let window = ctx.content_rect();
+    let top = (window.height() * 0.12).clamp(24.0, 56.0);
+    let width = (window.width() - 64.0).clamp(1.0, 520.0);
+    let max_height = (window.height() - top - 24.0).max(0.0);
     let modal = egui::Modal::new(id)
         .area(
             egui::Modal::default_area(id)
-                .anchor(Align2::CENTER_TOP, vec2(0.0, 56.0))
+                .anchor(Align2::CENTER_TOP, vec2(0.0, top))
                 .fade_in(false),
         )
         .backdrop_color(Color32::from_black_alpha(if palette.dark {
@@ -61,7 +64,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                 frame = frame
                     .fill(palette.surface)
                     .stroke(Stroke::new(1.0_f32, palette.border))
-                    .corner_radius(16)
+                    .corner_radius(crate::overlay_glass::Role::Dialog.radius())
                     .shadow(egui::epaint::Shadow {
                         offset: [0, 14],
                         blur: 38,
@@ -105,6 +108,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                     .hint_text(tr("command-search-placeholder"))
                     .desired_width(width)
                     .margin(Margin::symmetric(12, 11))
+                    .background_color(palette.surface)
                     .show(ui);
                 editor.response.widget_info(|| {
                     egui::WidgetInfo::labeled(
@@ -140,17 +144,29 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                     (_, true) => (bar.selection + max - 1) % max,
                     _ => bar.selection.min(max - 1),
                 };
+                let used = ui.cursor().top() - ui.min_rect().top();
+                let results_height = (max_height - used - 28.0).max(36.0);
                 let mut chosen = None;
-                for (index, row) in rows.into_iter().enumerate() {
-                    let selected = index == bar.selection;
-                    let response = result_row(ui, &row, selected, &palette);
-                    if response.clicked() || (enter && selected && editor.response.has_focus()) {
-                        chosen = Some(row.action);
-                    }
-                }
+                egui::ScrollArea::vertical()
+                    .max_height(results_height)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (index, row) in rows.into_iter().enumerate() {
+                            let selected = index == bar.selection;
+                            let response = result_row(ui, &row, selected, &palette);
+                            if selected && (down || up || editor.response.changed()) {
+                                response.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if response.clicked()
+                                || (enter && selected && editor.response.has_focus())
+                            {
+                                chosen = Some(row.action);
+                            }
+                        }
+                    });
                 chosen
             });
-            surface.finish(ui, card.response.rect, 20.0);
+            surface.finish(ui, card.response.rect, crate::overlay_glass::Role::Dialog);
             card.inner
         });
 

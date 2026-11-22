@@ -572,12 +572,11 @@ pub fn menu<T: Copy>(
 ) -> Option<T> {
     let ctx = root.ctx().clone();
     let height: f32 = rows.iter().map(Row::height).sum();
-    let rect = crate::ui::clamp_into(
-        Rect::from_min_size(
-            pos2(anchor.min.x, anchor.max.y + 6.0),
-            vec2(width, height + 12.0),
-        ),
+    let rect = crate::ui::anchored_popup(
+        anchor,
+        vec2(width, height + 12.0),
         ctx.content_rect(),
+        false,
     );
     ctx.data_mut(|data| data.insert_temp(Id::new("zervo_menu_rect"), rect));
     let mut chosen = None;
@@ -603,61 +602,66 @@ pub fn menu<T: Copy>(
                         .border(palette.border),
                 );
             }
-            let mut y = rect.min.y + 6.0;
-            for (index, entry) in rows.iter().enumerate() {
-                let row = Rect::from_min_size(
-                    pos2(rect.min.x + 6.0, y),
-                    vec2(rect.width() - 12.0, entry.height()),
-                );
-                y += entry.height();
-                match entry {
-                    Row::Heading(label) => {
-                        ui.painter().text(
-                            pos2(row.min.x + 8.0, row.center().y + 2.0),
-                            Align2::LEFT_CENTER,
-                            label.to_uppercase(),
-                            FontId::proportional(10.0),
-                            palette.text_muted,
-                        );
-                    },
-                    Row::Item(label, value, current) => {
-                        let response = ui.interact(row, Id::new(id).with(index), Sense::click());
-                        if response.hovered() {
-                            ui.painter().rect_filled(
-                                row,
-                                CornerRadius::same(palette.radius(crate::theme::Tier::Control)),
-                                palette.surface_hover,
+            crate::overlay_glass::scroll_body(ui, rect.shrink(6.0), |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for entry in rows {
+                    let (row, response) = ui.allocate_exact_size(
+                        vec2(ui.available_width(), entry.height()),
+                        if matches!(entry, Row::Heading(_)) {
+                            Sense::hover()
+                        } else {
+                            Sense::click()
+                        },
+                    );
+                    match entry {
+                        Row::Heading(label) => {
+                            ui.painter().text(
+                                pos2(row.min.x + 8.0, row.center().y + 2.0),
+                                Align2::LEFT_CENTER,
+                                label.to_uppercase(),
+                                FontId::proportional(10.0),
+                                palette.text_muted,
                             );
-                        }
-                        ui.painter().text(
-                            pos2(row.min.x + 8.0, row.center().y),
-                            Align2::LEFT_CENTER,
-                            label,
-                            FontId::proportional(13.0),
+                        },
+                        Row::Item(label, value, current) => {
+                            if response.hovered() {
+                                ui.painter().rect_filled(
+                                    row,
+                                    CornerRadius::same(palette.radius(crate::theme::Tier::Control)),
+                                    palette.surface_hover,
+                                );
+                            }
+                            crate::overlay_glass::row_label(
+                                ui,
+                                row.with_min_x(row.left() + 8.0)
+                                    .with_max_x(row.right() - 22.0),
+                                label,
+                                FontId::proportional(13.0),
+                                if *current {
+                                    palette.accent
+                                } else {
+                                    palette.text
+                                },
+                            );
                             if *current {
-                                palette.accent
-                            } else {
-                                palette.text
-                            },
-                        );
-                        if *current {
-                            icons::draw_icon(
-                                ui.painter(),
-                                Rect::from_center_size(
-                                    pos2(row.max.x - 12.0, row.center().y),
-                                    vec2(11.0, 11.0),
-                                ),
-                                Icon::Check,
-                                palette.accent,
-                            );
-                        }
-                        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                            chosen = Some(*value);
-                        }
-                    },
+                                icons::draw_icon(
+                                    ui.painter(),
+                                    Rect::from_center_size(
+                                        pos2(row.max.x - 12.0, row.center().y),
+                                        vec2(11.0, 11.0),
+                                    ),
+                                    Icon::Check,
+                                    palette.accent,
+                                );
+                            }
+                            if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                chosen = Some(*value);
+                            }
+                        },
+                    }
                 }
-            }
-            surface.finish(ui, rect, 14.0);
+            });
+            surface.finish(ui, rect, crate::overlay_glass::Role::Menu);
             ui.advance_cursor_after_rect(rect);
         });
     chosen

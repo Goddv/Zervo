@@ -241,6 +241,7 @@ pub fn force_layer_transparent(window: &impl HasWindowHandle) -> Option<()> {
 pub struct LiquidGlass {
     content: Retained<NSView>,
     view: Retained<NSGlassEffectView>,
+    dark: std::cell::Cell<Option<bool>>,
 }
 
 impl LiquidGlass {
@@ -253,11 +254,19 @@ impl LiquidGlass {
         view.setStyle(NSGlassEffectViewStyle::Regular);
         view.setHidden(true);
         frame.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(&content));
-        Some(Self { content, view })
+        Some(Self {
+            content,
+            view,
+            dark: Default::default(),
+        })
     }
 
-    pub fn update(&self, surface: Option<(egui::Rect, f32)>, zoom: f32) {
+    pub fn update(&self, surface: Option<(egui::Rect, f32)>, zoom: f32, dark: bool) {
         if let Some((_, radius)) = surface {
+            if self.dark.replace(Some(dark)) != Some(dark) {
+                self.view
+                    .setTintColor(Some(&crate::overlay_glass::Role::Panel.tint(dark)));
+            }
             let radius = f64::from(radius) * f64::from(zoom);
             if self.view.cornerRadius() != radius {
                 self.view.setCornerRadius(radius);

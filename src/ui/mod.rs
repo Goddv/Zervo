@@ -41,7 +41,9 @@ use text::*;
 pub use backdrops::{draw_zervo_mark, paint_newtab_background};
 pub use command::{CommandBar, CommandMode};
 pub use frame::{CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient};
-pub use text::{clamp_into, display_name, ellipsize, host_of, initial, normalize_url};
+pub use text::{
+    anchored_popup, clamp_into, display_name, ellipsize, host_of, initial, normalize_url,
+};
 
 #[derive(Debug)]
 pub enum UiAction {
@@ -507,6 +509,13 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         draw_sidebar_peek(root, chrome, &mut actions, peek);
     }
 
+    if let Some(status) = chrome.status
+        && chrome.controls.is_empty()
+        && chrome.browser.command_bar.is_none()
+    {
+        draw_status_text(root, &chrome.palette, content_rect, status);
+    }
+
     // Page-initiated UI last, over everything else it might overlap.
     let origin = chrome
         .browser
@@ -526,9 +535,6 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         &origin,
         chrome.vault,
     );
-    if let Some(status) = chrome.status {
-        draw_status_text(root, &chrome.palette, content_rect, status);
-    }
     draw_toasts(
         root,
         &chrome.palette,
@@ -1092,18 +1098,16 @@ fn hover_card(
     let pointer = ctx.input(|input| input.pointer.latest_pos());
     let was_open = ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
 
-    let card = clamp_into(
-        Rect::from_min_size(
-            pos2(anchor.center().x - size.x / 2.0, anchor.max.y + 6.0),
-            size,
-        ),
-        ctx.content_rect(),
-    );
-    // The gap between trigger and card counts as still hovering, or the card
-    // closes in the space between them.
+    let card = anchored_popup(anchor, size, ctx.content_rect(), true);
+    // Cover the gap in either direction when the panel flips.
+    let (top, bottom) = if card.top() >= anchor.bottom() {
+        (anchor.bottom(), card.top())
+    } else {
+        (card.bottom(), anchor.top())
+    };
     let bridge = Rect::from_min_max(
-        pos2(anchor.min.x.min(card.min.x), anchor.max.y),
-        pos2(anchor.max.x.max(card.min.x + 40.0), card.min.y + 2.0),
+        pos2(anchor.left().min(card.left()), top),
+        pos2(anchor.right().max(card.right()), bottom),
     );
     let open = pointer.is_some_and(|pos| {
         anchor.contains(pos)
@@ -1119,11 +1123,13 @@ fn hover_card(
     if grow <= 0.0 {
         return None;
     }
-    // Grows downward out of the trigger's underside, so it never covers it.
-    let drawn = Rect::from_min_size(
-        card.min,
-        vec2(card.width(), (card.height() * grow).max(1.0)),
-    );
+    let height = (card.height() * grow).max(1.0).min(card.height());
+    let top = if card.bottom() <= anchor.top() {
+        card.bottom() - height
+    } else {
+        card.top()
+    };
+    let drawn = Rect::from_min_size(pos2(card.left(), top), vec2(card.width(), height));
 
     egui::Area::new(id.with("area"))
         .order(egui::Order::Foreground)
@@ -1162,7 +1168,7 @@ fn hover_card(
                 palette.reaching(PANEL_REACH).over(drawn)
             };
             add(ui, card, ink);
-            surface.finish(ui, drawn, 18.0);
+            surface.finish(ui, drawn, crate::overlay_glass::Role::Panel);
             ui.advance_cursor_after_rect(drawn);
         });
     Some(drawn)
@@ -1208,31 +1214,31 @@ fn popup_menu<T: Clone>(
                         .border(palette.border),
                 );
             }
-            for (index, (label, value)) in rows.iter().enumerate() {
-                let row = Rect::from_min_size(
-                    pos2(rect.min.x + 6.0, rect.min.y + 6.0 + index as f32 * ROW),
-                    vec2(rect.width() - 12.0, ROW),
-                );
-                let response = ui.interact(row, key.with(index), Sense::click());
-                if response.hovered() {
-                    ui.painter().rect_filled(
-                        row,
-                        palette.corner(Tier::Control),
-                        palette.surface_hover,
+            crate::overlay_glass::scroll_body(ui, rect.shrink(6.0), |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (label, value) in rows {
+                    let (row, response) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                    if response.hovered() {
+                        ui.painter().rect_filled(
+                            row,
+                            palette.corner(Tier::Control),
+                            palette.surface_hover,
+                        );
+                    }
+                    crate::overlay_glass::row_label(
+                        ui,
+                        row.shrink2(vec2(8.0, 0.0)),
+                        label,
+                        FontId::proportional(13.0),
+                        palette.text,
                     );
+                    if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        chosen = Some(value.clone());
+                    }
                 }
-                ui.painter().text(
-                    pos2(row.min.x + 8.0, row.center().y),
-                    Align2::LEFT_CENTER,
-                    label,
-                    FontId::proportional(13.0),
-                    palette.text,
-                );
-                if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                    chosen = Some(value.clone());
-                }
-            }
-            surface.finish(ui, rect, 14.0);
+            });
+            surface.finish(ui, rect, crate::overlay_glass::Role::Menu);
             ui.advance_cursor_after_rect(rect);
         });
     chosen
@@ -1259,12 +1265,7 @@ fn draw_favourites_card(
         vec2(300.0, count.clamp(1, 10) as f32 * ROW + 46.0)
     };
 
-    let favourites: Vec<(String, String)> = chrome
-        .library
-        .favourites
-        .iter()
-        .map(|entry| (entry.url.clone(), entry.title.clone()))
-        .collect();
+    let favourites = &chrome.library.favourites;
     let editing = chrome.browser.favourite_edit.clone();
     let id = Id::new("zervo_favourites_card");
 
@@ -1328,61 +1329,221 @@ fn draw_favourites_card(
                 return;
             }
 
-            if grid {
-                for (index, (url, title)) in favourites.iter().enumerate() {
-                    let tile = Rect::from_min_size(
-                        body.min + vec2((index % 4) as f32 * TILE, (index / 4) as f32 * TILE),
-                        vec2(TILE - 6.0, TILE - 6.0),
-                    );
-                    if tile.max.y > body.max.y {
-                        break;
-                    }
-                    let response = ui.interact(tile, id.with(("tile", index)), Sense::click());
-                    let over = pointer.is_some_and(|pos| tile.contains(pos));
-                    if over {
+            crate::overlay_glass::scroll_body(ui, body, |ui| {
+                let body = ui.max_rect();
+                if grid {
+                    for (index, entry) in favourites.iter().enumerate() {
+                        let (url, title) = (&entry.url, &entry.title);
+                        let tile = Rect::from_min_size(
+                            body.min + vec2((index % 4) as f32 * TILE, (index / 4) as f32 * TILE),
+                            vec2(TILE - 6.0, TILE - 6.0),
+                        );
+                        ui.advance_cursor_after_rect(tile);
+                        if !ui.is_rect_visible(tile) {
+                            continue;
+                        }
+                        let response = ui.interact(tile, id.with(("tile", index)), Sense::click());
+                        let over = pointer.is_some_and(|pos| tile.contains(pos));
+                        if over {
+                            ui.painter().rect_filled(
+                                tile,
+                                palette.corner(Tier::Card),
+                                palette.surface_hover,
+                            );
+                        }
+                        // No favicon store yet, so the initial stands in for one.
+                        let badge = Rect::from_center_size(
+                            pos2(tile.center().x, tile.min.y + 20.0),
+                            vec2(26.0, 26.0),
+                        );
                         ui.painter().rect_filled(
-                            tile,
-                            palette.corner(Tier::Card),
+                            badge,
+                            palette.corner(Tier::Control),
+                            palette.accent.gamma_multiply(0.22),
+                        );
+                        ui.painter().text(
+                            badge.center(),
+                            Align2::CENTER_CENTER,
+                            initial(title, url),
+                            FontId::proportional(13.0),
+                            palette.accent,
+                        );
+                        ui.painter().text(
+                            pos2(tile.center().x, tile.max.y - 12.0),
+                            Align2::CENTER_CENTER,
+                            ellipsize(display_name(title, url), 9),
+                            FontId::proportional(10.5),
+                            palette.text,
+                        );
+                        if over {
+                            let close = Rect::from_center_size(
+                                pos2(tile.max.x - 8.0, tile.min.y + 8.0),
+                                vec2(14.0, 14.0),
+                            );
+                            icons::draw_icon(
+                                ui.painter(),
+                                close.shrink(2.0),
+                                Icon::Close,
+                                palette.text_muted,
+                            );
+                            if ui
+                                .interact(close, id.with(("gx", index)), Sense::click())
+                                .clicked()
+                            {
+                                actions.push(UiAction::RemoveFavourite(url.clone()));
+                            }
+                        }
+                        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                            actions.push(UiAction::Navigate(url.clone()));
+                        }
+                    }
+                    return;
+                }
+
+                for (index, entry) in favourites.iter().enumerate() {
+                    let (url, title) = (&entry.url, &entry.title);
+                    let row = Rect::from_min_size(
+                        pos2(body.min.x, body.min.y + index as f32 * ROW),
+                        vec2(body.width(), ROW - 2.0),
+                    );
+                    ui.advance_cursor_after_rect(row);
+                    if !ui.is_rect_visible(row) {
+                        continue;
+                    }
+                    let being_edited = editing.as_ref().is_some_and(|(at, _)| at == url);
+                    let response = ui.interact(row, id.with(("row", index)), Sense::click());
+                    // Hover from the pointer, not the row's response: the controls sit
+                    // on top of the row, which stops the row counting as hovered.
+                    let over = pointer.is_some_and(|pos| row.contains(pos));
+                    if over && !being_edited {
+                        ui.painter().rect_filled(
+                            row,
+                            palette.corner(Tier::Row),
                             palette.surface_hover,
                         );
                     }
-                    // No favicon store yet, so the initial stands in for one.
-                    let badge = Rect::from_center_size(
-                        pos2(tile.center().x, tile.min.y + 20.0),
-                        vec2(26.0, 26.0),
+                    icons::draw_icon(
+                        ui.painter(),
+                        Rect::from_center_size(
+                            pos2(row.min.x + 14.0, row.center().y),
+                            vec2(13.0, 13.0),
+                        ),
+                        Icon::Globe,
+                        palette.text_muted,
                     );
-                    ui.painter().rect_filled(
-                        badge,
-                        palette.corner(Tier::Control),
-                        palette.accent.gamma_multiply(0.22),
-                    );
-                    ui.painter().text(
-                        badge.center(),
-                        Align2::CENTER_CENTER,
-                        initial(title, url),
-                        FontId::proportional(13.0),
-                        palette.accent,
-                    );
-                    ui.painter().text(
-                        pos2(tile.center().x, tile.max.y - 12.0),
-                        Align2::CENTER_CENTER,
-                        ellipsize(display_name(title, url), 9),
-                        FontId::proportional(10.5),
-                        palette.text,
-                    );
-                    if over {
-                        let close = Rect::from_center_size(
-                            pos2(tile.max.x - 8.0, tile.min.y + 8.0),
-                            vec2(14.0, 14.0),
+
+                    if being_edited {
+                        let mut draft = editing
+                            .as_ref()
+                            .map(|(_, name)| name.clone())
+                            .unwrap_or_default();
+                        let field = Rect::from_min_max(
+                            pos2(row.min.x + 28.0, row.min.y + 2.0),
+                            pos2(row.max.x - 46.0, row.max.y - 2.0),
+                        );
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+                        let editor = child.add_sized(
+                            field.size(),
+                            TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
+                        );
+                        if !editor.has_focus() && !editor.lost_focus() {
+                            // Once, when the editor opens. Requesting it every frame pins the
+                            // keyboard here: clicking the address bar takes focus for a single
+                            // frame and loses it again, and every keystroke in the window ends up
+                            // in this field until it is dismissed.
+                            let focus_key = Id::new("zervo_ws_focus");
+                            if ui.ctx().data(|data| data.get_temp::<usize>(focus_key))
+                                != Some(index)
+                            {
+                                editor.request_focus();
+                                ui.ctx().data_mut(|data| data.insert_temp(focus_key, index));
+                            }
+                        }
+                        let entered = child.input(|input| input.key_pressed(Key::Enter));
+                        let escaped = child.input(|input| input.key_pressed(Key::Escape));
+
+                        // An explicit tick, because committing only on Enter-and-blur
+                        // meant a rename was lost far more often than it was kept.
+                        let save = Rect::from_center_size(
+                            pos2(row.max.x - 30.0, row.center().y),
+                            vec2(20.0, 20.0),
                         );
                         icons::draw_icon(
                             ui.painter(),
-                            close.shrink(2.0),
+                            save.shrink(3.0),
+                            Icon::Check,
+                            palette.accent,
+                        );
+                        let saved = ui
+                            .interact(save, id.with(("save", index)), Sense::click())
+                            .on_hover_text(tr("common-save"))
+                            .on_hover_cursor(CursorIcon::PointingHand)
+                            .clicked();
+                        let cancel = Rect::from_center_size(
+                            pos2(row.max.x - 10.0, row.center().y),
+                            vec2(20.0, 20.0),
+                        );
+                        icons::draw_icon(
+                            ui.painter(),
+                            cancel.shrink(4.0),
+                            Icon::Close,
+                            palette.text_muted,
+                        );
+                        let cancelled = ui
+                            .interact(cancel, id.with(("cancelrename", index)), Sense::click())
+                            .on_hover_text(tr("chrome-discard"))
+                            .clicked();
+
+                        if saved || entered {
+                            actions.push(UiAction::RenameFavourite(url.clone(), draft.clone()));
+                            edit = Some(None);
+                        } else if cancelled || escaped {
+                            edit = Some(None);
+                        } else {
+                            edit = Some(Some((url.clone(), draft)));
+                        }
+                        continue;
+                    }
+
+                    crate::overlay_glass::row_label(
+                        ui,
+                        row.with_min_x(row.left() + 28.0)
+                            .with_max_x(row.right() - 46.0),
+                        display_name(title, url),
+                        FontId::proportional(13.0),
+                        palette.text,
+                    );
+                    if over {
+                        let rename = Rect::from_center_size(
+                            pos2(row.max.x - 30.0, row.center().y),
+                            vec2(18.0, 18.0),
+                        );
+                        icons::draw_icon(
+                            ui.painter(),
+                            rename.shrink(3.0),
+                            Icon::Sliders,
+                            palette.text_muted,
+                        );
+                        if ui
+                            .interact(rename, id.with(("edit", index)), Sense::click())
+                            .on_hover_text(tr("common-rename"))
+                            .clicked()
+                        {
+                            edit = Some(Some((url.clone(), title.clone())));
+                        }
+                        let close = Rect::from_center_size(
+                            pos2(row.max.x - 10.0, row.center().y),
+                            vec2(18.0, 18.0),
+                        );
+                        icons::draw_icon(
+                            ui.painter(),
+                            close.shrink(3.0),
                             Icon::Close,
                             palette.text_muted,
                         );
                         if ui
-                            .interact(close, id.with(("gx", index)), Sense::click())
+                            .interact(close, id.with(("x", index)), Sense::click())
+                            .on_hover_text(tr("common-remove"))
                             .clicked()
                         {
                             actions.push(UiAction::RemoveFavourite(url.clone()));
@@ -1392,149 +1553,7 @@ fn draw_favourites_card(
                         actions.push(UiAction::Navigate(url.clone()));
                     }
                 }
-                return;
-            }
-
-            for (index, (url, title)) in favourites.iter().enumerate() {
-                let row = Rect::from_min_size(
-                    pos2(body.min.x, body.min.y + index as f32 * ROW),
-                    vec2(body.width(), ROW - 2.0),
-                );
-                if row.max.y > body.max.y {
-                    break;
-                }
-                let being_edited = editing.as_ref().is_some_and(|(at, _)| at == url);
-                let response = ui.interact(row, id.with(("row", index)), Sense::click());
-                // Hover from the pointer, not the row's response: the controls sit
-                // on top of the row, which stops the row counting as hovered.
-                let over = pointer.is_some_and(|pos| row.contains(pos));
-                if over && !being_edited {
-                    ui.painter()
-                        .rect_filled(row, palette.corner(Tier::Row), palette.surface_hover);
-                }
-                icons::draw_icon(
-                    ui.painter(),
-                    Rect::from_center_size(
-                        pos2(row.min.x + 14.0, row.center().y),
-                        vec2(13.0, 13.0),
-                    ),
-                    Icon::Globe,
-                    palette.text_muted,
-                );
-
-                if being_edited {
-                    let mut draft = editing
-                        .as_ref()
-                        .map(|(_, name)| name.clone())
-                        .unwrap_or_default();
-                    let field = Rect::from_min_max(
-                        pos2(row.min.x + 28.0, row.min.y + 2.0),
-                        pos2(row.max.x - 46.0, row.max.y - 2.0),
-                    );
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
-                    let editor = child.add_sized(
-                        field.size(),
-                        TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
-                    );
-                    if !editor.has_focus() && !editor.lost_focus() {
-                        // Once, when the editor opens. Requesting it every frame pins the
-                        // keyboard here: clicking the address bar takes focus for a single
-                        // frame and loses it again, and every keystroke in the window ends up
-                        // in this field until it is dismissed.
-                        let focus_key = Id::new("zervo_ws_focus");
-                        if ui.ctx().data(|data| data.get_temp::<usize>(focus_key)) != Some(index) {
-                            editor.request_focus();
-                            ui.ctx().data_mut(|data| data.insert_temp(focus_key, index));
-                        }
-                    }
-                    let entered = child.input(|input| input.key_pressed(Key::Enter));
-                    let escaped = child.input(|input| input.key_pressed(Key::Escape));
-
-                    // An explicit tick, because committing only on Enter-and-blur
-                    // meant a rename was lost far more often than it was kept.
-                    let save = Rect::from_center_size(
-                        pos2(row.max.x - 30.0, row.center().y),
-                        vec2(20.0, 20.0),
-                    );
-                    icons::draw_icon(ui.painter(), save.shrink(3.0), Icon::Check, palette.accent);
-                    let saved = ui
-                        .interact(save, id.with(("save", index)), Sense::click())
-                        .on_hover_text(tr("common-save"))
-                        .on_hover_cursor(CursorIcon::PointingHand)
-                        .clicked();
-                    let cancel = Rect::from_center_size(
-                        pos2(row.max.x - 10.0, row.center().y),
-                        vec2(20.0, 20.0),
-                    );
-                    icons::draw_icon(
-                        ui.painter(),
-                        cancel.shrink(4.0),
-                        Icon::Close,
-                        palette.text_muted,
-                    );
-                    let cancelled = ui
-                        .interact(cancel, id.with(("cancelrename", index)), Sense::click())
-                        .on_hover_text(tr("chrome-discard"))
-                        .clicked();
-
-                    if saved || entered {
-                        actions.push(UiAction::RenameFavourite(url.clone(), draft.clone()));
-                        edit = Some(None);
-                    } else if cancelled || escaped {
-                        edit = Some(None);
-                    } else {
-                        edit = Some(Some((url.clone(), draft)));
-                    }
-                    continue;
-                }
-
-                ui.painter().text(
-                    pos2(row.min.x + 28.0, row.center().y),
-                    Align2::LEFT_CENTER,
-                    ellipsize(display_name(title, url), 24),
-                    FontId::proportional(13.0),
-                    palette.text,
-                );
-                if over {
-                    let rename = Rect::from_center_size(
-                        pos2(row.max.x - 30.0, row.center().y),
-                        vec2(18.0, 18.0),
-                    );
-                    icons::draw_icon(
-                        ui.painter(),
-                        rename.shrink(3.0),
-                        Icon::Sliders,
-                        palette.text_muted,
-                    );
-                    if ui
-                        .interact(rename, id.with(("edit", index)), Sense::click())
-                        .on_hover_text(tr("common-rename"))
-                        .clicked()
-                    {
-                        edit = Some(Some((url.clone(), title.clone())));
-                    }
-                    let close = Rect::from_center_size(
-                        pos2(row.max.x - 10.0, row.center().y),
-                        vec2(18.0, 18.0),
-                    );
-                    icons::draw_icon(
-                        ui.painter(),
-                        close.shrink(3.0),
-                        Icon::Close,
-                        palette.text_muted,
-                    );
-                    if ui
-                        .interact(close, id.with(("x", index)), Sense::click())
-                        .on_hover_text(tr("common-remove"))
-                        .clicked()
-                    {
-                        actions.push(UiAction::RemoveFavourite(url.clone()));
-                    }
-                }
-                if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                    actions.push(UiAction::Navigate(url.clone()));
-                }
-            }
+            });
         },
     );
 
@@ -1564,15 +1583,7 @@ fn draw_downloads_card(
     const ROW: f32 = 46.0;
 
     let palette = chrome.palette;
-    let items: Vec<crate::downloads::RowView> = chrome
-        .downloads
-        .items
-        .iter()
-        .rev()
-        .take(8)
-        .map(crate::downloads::Download::row_view)
-        .collect();
-    let rows = items.len().max(1) as f32;
+    let rows = chrome.downloads.items.len().clamp(1, 8) as f32;
     let size = vec2(360.0, rows * ROW + 52.0);
     let id = Id::new("zervo_downloads_card");
     let menu_id = Id::new("zervo_download_menu");
@@ -1585,6 +1596,14 @@ fn draw_downloads_card(
         size,
         |ui, card, palette| {
             let ctx = ui.ctx().clone();
+            let items: Vec<_> = chrome
+                .downloads
+                .items
+                .iter()
+                .rev()
+                .take(8)
+                .map(crate::downloads::Download::row_view)
+                .collect();
             let pointer = ctx.input(|input| input.pointer.latest_pos());
 
             let header =
@@ -1632,114 +1651,127 @@ fn draw_downloads_card(
                 return;
             }
 
-            for (index, entry) in items.iter().enumerate() {
-                let crate::downloads::RowView {
-                    id: download,
-                    filename,
-                    url: _,
-                    fraction,
-                    received,
-                    total,
-                    state,
-                } = entry;
-                let row = Rect::from_min_size(
-                    pos2(body.min.x, body.min.y + index as f32 * ROW),
-                    vec2(body.width(), ROW - 4.0),
-                );
-                if row.max.y > body.max.y {
-                    break;
-                }
-                let over = pointer.is_some_and(|pos| row.contains(pos));
-                let response = ui.interact(row, id.with(("row", index)), Sense::click_and_drag());
-                if over {
-                    ui.painter()
-                        .rect_filled(row, palette.corner(Tier::Row), palette.surface_hover);
-                }
+            crate::overlay_glass::scroll_body(ui, body, |ui| {
+                let body = ui.max_rect();
+                for (index, entry) in items.iter().enumerate() {
+                    let crate::downloads::RowView {
+                        id: download,
+                        filename,
+                        url: _,
+                        fraction,
+                        received,
+                        total,
+                        state,
+                    } = entry;
+                    let row = Rect::from_min_size(
+                        pos2(body.min.x, body.min.y + index as f32 * ROW),
+                        vec2(body.width(), ROW - 4.0),
+                    );
+                    ui.advance_cursor_after_rect(row);
+                    if !ui.is_rect_visible(row) {
+                        continue;
+                    }
+                    let over = pointer.is_some_and(|pos| row.contains(pos));
+                    let response =
+                        ui.interact(row, id.with(("row", index)), Sense::click_and_drag());
+                    if over {
+                        ui.painter().rect_filled(
+                            row,
+                            palette.corner(Tier::Row),
+                            palette.surface_hover,
+                        );
+                    }
 
-                let running = *state == DownloadState::Running;
-                let glyph = Rect::from_center_size(
-                    pos2(row.min.x + 16.0, row.center().y),
-                    vec2(15.0, 15.0),
-                );
-                match state {
-                    // The one state change in this row somebody is waiting
-                    // for, so it is drawn rather than lettered: the shaft
-                    // retracts into its own base while the chevron
-                    // straightens into a tick, and the colour crosses with
-                    // it. A glyph swap here happens at the exact moment
-                    // nobody is looking at the row any more.
-                    DownloadState::Running | DownloadState::Complete => {
-                        let done = *state == DownloadState::Complete;
-                        let cross = glass::ease_out(ui.ctx().animate_bool_with_time(
-                            ui.id().with(("download_done", index)),
-                            done,
-                            palette.material.animation,
-                        ));
-                        crate::morphicons::draw(
+                    let running = *state == DownloadState::Running;
+                    let glyph = Rect::from_center_size(
+                        pos2(row.min.x + 16.0, row.center().y),
+                        vec2(15.0, 15.0),
+                    );
+                    match state {
+                        // The one state change in this row somebody is waiting
+                        // for, so it is drawn rather than lettered: the shaft
+                        // retracts into its own base while the chevron
+                        // straightens into a tick, and the colour crosses with
+                        // it. A glyph swap here happens at the exact moment
+                        // nobody is looking at the row any more.
+                        DownloadState::Running | DownloadState::Complete => {
+                            let done = *state == DownloadState::Complete;
+                            let cross = glass::ease_out(ui.ctx().animate_bool_with_time(
+                                ui.id().with(("download_done", index)),
+                                done,
+                                palette.material.animation,
+                            ));
+                            crate::morphicons::draw(
+                                ui.painter(),
+                                glyph,
+                                &crate::morphicons::DOWNLOADING,
+                                &crate::morphicons::DONE,
+                                cross,
+                                theme::mix(palette.text_muted, palette.accent, cross),
+                            );
+                        },
+                        _ => icons::draw_icon(
                             ui.painter(),
                             glyph,
-                            &crate::morphicons::DOWNLOADING,
-                            &crate::morphicons::DONE,
-                            cross,
-                            theme::mix(palette.text_muted, palette.accent, cross),
-                        );
-                    },
-                    _ => icons::draw_icon(
-                        ui.painter(),
-                        glyph,
-                        Icon::XCircle,
-                        palette.text_muted.gamma_multiply(0.8),
-                    ),
-                }
-                ui.painter().text(
-                    pos2(row.min.x + 34.0, row.min.y + 13.0),
-                    Align2::LEFT_CENTER,
-                    ellipsize(filename, 30),
-                    FontId::proportional(13.0),
-                    palette.text,
-                );
-                let detail = match state {
-                    DownloadState::Running => match total {
-                        Some(total) => {
-                            format!("{} of {}", format_bytes(*received), format_bytes(*total))
-                        },
-                        None => format_bytes(*received),
-                    },
-                    DownloadState::Complete => format_bytes(*received),
-                    DownloadState::Cancelled => tr("chrome-stopped").to_owned(),
-                    DownloadState::Failed(why) => ellipsize(why, 34),
-                };
-                ui.painter().text(
-                    pos2(row.min.x + 34.0, row.min.y + 29.0),
-                    Align2::LEFT_CENTER,
-                    detail,
-                    FontId::proportional(11.0),
-                    palette.text_muted,
-                );
-                if let Some(fraction) = fraction
-                    && running
-                {
-                    let track = Rect::from_min_size(
-                        pos2(row.min.x + 34.0, row.max.y - 8.0),
-                        vec2(row.width() - 150.0, 3.0),
-                    );
-                    ui.painter()
-                        .rect_filled(track, palette.corner(Tier::Hairline), palette.border);
-                    ui.painter().rect_filled(
-                        Rect::from_min_size(
-                            track.min,
-                            vec2(track.width() * fraction, track.height()),
+                            Icon::XCircle,
+                            palette.text_muted.gamma_multiply(0.8),
                         ),
-                        palette.corner(Tier::Hairline),
-                        palette.accent,
+                    }
+                    ui.painter().text(
+                        pos2(row.min.x + 34.0, row.min.y + 13.0),
+                        Align2::LEFT_CENTER,
+                        ellipsize(filename, 30),
+                        FontId::proportional(13.0),
+                        palette.text,
                     );
-                }
+                    let detail = match state {
+                        DownloadState::Running => match total {
+                            Some(total) => {
+                                format!("{} of {}", format_bytes(*received), format_bytes(*total))
+                            },
+                            None => format_bytes(*received),
+                        },
+                        DownloadState::Complete => format_bytes(*received),
+                        DownloadState::Cancelled => tr("chrome-stopped").to_owned(),
+                        DownloadState::Failed(why) => ellipsize(why, 34),
+                    };
+                    ui.painter().text(
+                        pos2(row.min.x + 34.0, row.min.y + 29.0),
+                        Align2::LEFT_CENTER,
+                        detail,
+                        FontId::proportional(11.0),
+                        palette.text_muted,
+                    );
+                    if let Some(fraction) = fraction
+                        && running
+                    {
+                        let track = Rect::from_min_size(
+                            pos2(row.min.x + 34.0, row.max.y - 8.0),
+                            vec2(row.width() - 150.0, 3.0),
+                        );
+                        ui.painter().rect_filled(
+                            track,
+                            palette.corner(Tier::Hairline),
+                            palette.border,
+                        );
+                        ui.painter().rect_filled(
+                            Rect::from_min_size(
+                                track.min,
+                                vec2(track.width() * fraction, track.height()),
+                            ),
+                            palette.corner(Tier::Hairline),
+                            palette.accent,
+                        );
+                    }
 
-                // ── Controls, on hover so a quiet list stays quiet.
-                if over {
-                    let mut x = row.max.x - 16.0;
-                    let mut control =
-                        |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, key: &str| {
+                    // ── Controls, on hover so a quiet list stays quiet.
+                    if over {
+                        let mut x = row.max.x - 16.0;
+                        let mut control = |ui: &mut Ui,
+                                           icon: Icon,
+                                           tip: &str,
+                                           enabled: bool,
+                                           key: &str| {
                             let hit =
                                 Rect::from_center_size(pos2(x, row.center().y), vec2(24.0, 24.0));
                             x -= 26.0;
@@ -1764,49 +1796,52 @@ fn draw_downloads_card(
                             enabled && response.on_hover_text(tip).clicked()
                         };
 
-                    if running {
-                        if control(ui, Icon::Close, tr("chrome-stop"), true, "stop") {
-                            actions.push(UiAction::CancelDownload(*download));
-                        }
-                        control(
-                            ui,
-                            Icon::Pause,
-                            tr("chrome-pause-the-engine-cannot-suspend-a-transfer"),
-                            false,
-                            "pause",
-                        );
-                    } else {
-                        if control(ui, Icon::Reload, tr("chrome-start-again"), true, "restart") {
-                            actions.push(UiAction::RestartDownload(*download));
-                        }
-                        if *state == DownloadState::Complete {
-                            if control(
-                                ui,
-                                Icon::Folder,
-                                tr("chrome-show-in-folder"),
-                                true,
-                                "reveal",
-                            ) {
-                                actions.push(UiAction::RevealDownload(*download));
+                        if running {
+                            if control(ui, Icon::Close, tr("chrome-stop"), true, "stop") {
+                                actions.push(UiAction::CancelDownload(*download));
                             }
-                            if control(ui, Icon::ExternalLink, tr("common-open"), true, "open") {
-                                actions.push(UiAction::OpenDownload(*download));
+                            control(
+                                ui,
+                                Icon::Pause,
+                                tr("chrome-pause-the-engine-cannot-suspend-a-transfer"),
+                                false,
+                                "pause",
+                            );
+                        } else {
+                            if control(ui, Icon::Reload, tr("chrome-start-again"), true, "restart")
+                            {
+                                actions.push(UiAction::RestartDownload(*download));
+                            }
+                            if *state == DownloadState::Complete {
+                                if control(
+                                    ui,
+                                    Icon::Folder,
+                                    tr("chrome-show-in-folder"),
+                                    true,
+                                    "reveal",
+                                ) {
+                                    actions.push(UiAction::RevealDownload(*download));
+                                }
+                                if control(ui, Icon::ExternalLink, tr("common-open"), true, "open")
+                                {
+                                    actions.push(UiAction::OpenDownload(*download));
+                                }
                             }
                         }
                     }
-                }
 
-                if response.secondary_clicked()
-                    && let Some(pos) = pointer
-                {
-                    ctx.data_mut(|data| data.insert_temp(menu_id, (*download, pos)));
+                    if response.secondary_clicked()
+                        && let Some(pos) = pointer
+                    {
+                        ctx.data_mut(|data| data.insert_temp(menu_id, (*download, pos)));
+                    }
+                    if *state == DownloadState::Complete
+                        && response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+                    {
+                        actions.push(UiAction::OpenDownload(*download));
+                    }
                 }
-                if *state == DownloadState::Complete
-                    && response.on_hover_cursor(CursorIcon::PointingHand).clicked()
-                {
-                    actions.push(UiAction::OpenDownload(*download));
-                }
-            }
+            });
 
             // ── Right-click menu.
             if let Some((download, at)) =
@@ -2172,7 +2207,7 @@ fn draw_sidebar_peek(
             }
             sidebar_body(&mut body, chrome, actions);
             chrome.palette = restore;
-            surface.finish(ui, drawn, 14.0);
+            surface.finish(ui, drawn, crate::overlay_glass::Role::Panel);
             // Claim the whole overlay, so the pointer over it resolves to this
             // layer rather than the chrome underneath.
             ui.advance_cursor_after_rect(drawn);
@@ -3673,7 +3708,11 @@ fn draw_toasts(
                     }
                 }
 
-                surface.finish(ui, rect.intersect(content_rect), 16.0);
+                surface.finish(
+                    ui,
+                    rect.intersect(content_rect),
+                    crate::overlay_glass::Role::Panel,
+                );
                 top = rect.bottom() + GAP;
             }
 
@@ -3718,7 +3757,7 @@ fn draw_toasts(
                         FontId::proportional(11.5),
                         theme::mix(palette.text_muted, palette.text, lit),
                     );
-                    surface.finish(ui, rect, 13.0);
+                    surface.finish(ui, rect, crate::overlay_glass::Role::Status);
                 }
             }
         });
@@ -3735,34 +3774,54 @@ fn draw_status_text(root: &Ui, palette: &Palette, content_rect: Rect, status: &s
     if status.trim().is_empty() {
         return;
     }
-    let painter = root.ctx().layer_painter(egui::LayerId::background());
     let font = FontId::proportional(11.5);
-    // Long URLs are the common case, so give it most of the card and trim the
-    // middle rather than the end — the host is the part worth reading, and so
-    // is the end of the path.
     let text = ellipsize(status, 128);
-    let galley = painter.layout_no_wrap(text, font, palette.text_muted);
-    let pad = vec2(8.0, 4.0);
-    let size = galley.size() + pad * 2.0;
-    let rect = Rect::from_min_size(
-        pos2(content_rect.left(), content_rect.bottom() - size.y),
-        size,
-    )
-    .intersect(content_rect);
-    let painter = painter.with_clip_rect(content_rect);
-    for shape in glass::shapes(
-        rect,
-        palette,
-        Glass::of(Surface::Menu)
-            .opaque(palette.bg)
-            // Square where it meets the card's own edges, rounded only on the
-            // corner that faces into the page.
-            .radius_exact(0)
-            .border(palette.border),
-    ) {
-        painter.add(shape);
+    let desired = root
+        .painter()
+        .layout_no_wrap(text.clone(), font.clone(), palette.text)
+        .size();
+    let width = (desired.x + 20.0).min((content_rect.width() - 16.0).min(520.0));
+    let height = 24.0;
+    if width < 24.0 {
+        return;
     }
-    painter.galley(rect.min + pad, galley, palette.text_muted);
+    let rect = Rect::from_min_size(
+        pos2(
+            content_rect.left() + 8.0,
+            content_rect.bottom() - height - 8.0,
+        ),
+        vec2(width, height),
+    );
+    let role = crate::overlay_glass::Role::Status;
+    egui::Area::new(Id::new("zervo_link_preview"))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .fixed_pos(rect.min)
+        .constrain(false)
+        .fade_in(false)
+        .show(root.ctx(), |ui| {
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            if !surface.is_native() {
+                glass::paint(
+                    ui.painter(),
+                    rect,
+                    palette,
+                    Glass::of(Surface::Menu)
+                        .opaque(palette.bg)
+                        .radius_exact(role.radius())
+                        .border(palette.border),
+                );
+            }
+            crate::overlay_glass::row_label(
+                ui,
+                rect.shrink2(vec2(10.0, 0.0)),
+                &text,
+                font,
+                palette.text_muted,
+            );
+            surface.finish(ui, rect, role);
+            ui.advance_cursor_after_rect(rect);
+        });
 }
 
 #[cfg(test)]

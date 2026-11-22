@@ -285,11 +285,14 @@ same place, so nothing jumps when the kind of page changes.
 The docked sidebar uses AppKit’s `NSVisualEffectView.Material.sidebar` for
 translucency and its active-window tint. The **Liquid Glass** preset uses
 AppKit’s regular glass for dialogs, menus, popovers, the revealed sidebar, and
-the docked address field. Each floating surface places egui’s controls inside an
+the docked address field. Menus and dialogs use neutral tints for contrast on
+busy pages. Each floating surface places egui’s controls inside an
 `NSGlassEffectView` so AppKit samples the live page underneath. Egui handles
 input, focus, and accessibility. Related glass views share an
-`NSGlassEffectContainerView`. Settings cards and page content use standard
-surfaces. Reduce Transparency and the Solid setting use opaque surfaces.
+`NSGlassEffectContainerView`. The renderer creates its capture buffer when a
+surface opens and reuses the image while its contents stay the same. Settings
+cards and page content use standard surfaces. Reduce Transparency and the Solid
+setting use opaque surfaces.
 
 **The window's own backdrop** is an `NSVisualEffectView` behind a transparent
 framebuffer. The chrome paints a thin tint over it. That is why the chrome's
