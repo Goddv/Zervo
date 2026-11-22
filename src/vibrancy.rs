@@ -22,10 +22,9 @@ use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass};
 use objc2_app_kit::{
     NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSGlassEffectView,
-    NSGlassEffectViewStyle, NSTitlebarSeparatorStyle, NSToolbar, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowButton, NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle,
-    NSWorkspace,
+    NSTitlebarSeparatorStyle, NSToolbar, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowButton,
+    NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -35,11 +34,30 @@ pub struct Vibrancy {
     view: Retained<NSVisualEffectView>,
     content: Retained<NSView>,
     sidebar: Retained<NSVisualEffectView>,
+    address: Retained<NSVisualEffectView>,
 }
 
 impl Vibrancy {
     pub fn update_sidebar(&self, rect: Option<egui::Rect>, zoom: f32) {
         update_surface(&self.content, &self.sidebar, rect, zoom);
+    }
+
+    pub fn update_address(&self, rect: Option<(egui::Rect, f32)>, zoom: f32) {
+        if let Some((_, radius)) = rect
+            && let Some(layer) = self.address.layer()
+        {
+            let radius = f64::from(radius) * f64::from(zoom);
+            if layer.cornerRadius() != radius {
+                layer.setCornerRadius(radius);
+                layer.setMasksToBounds(true);
+            }
+        }
+        update_surface(
+            &self.content,
+            &self.address,
+            rect.map(|(rect, _)| rect),
+            zoom,
+        );
     }
 
     /// Swap material, crossfading over `duration` seconds.
@@ -226,10 +244,23 @@ pub fn install(
         Some(&content),
     );
 
+    let address = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), NSRect::ZERO);
+    address.setMaterial(NSVisualEffectMaterial::Popover);
+    address.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    address.setState(NSVisualEffectState::FollowsWindowActiveState);
+    address.setWantsLayer(true);
+    address.setHidden(true);
+    frame_view.addSubview_positioned_relativeTo(
+        &address,
+        NSWindowOrderingMode::Below,
+        Some(&content),
+    );
+
     Some(Vibrancy {
         view: effect,
         content,
         sidebar,
+        address,
     })
 }
 
@@ -250,51 +281,6 @@ pub fn force_layer_transparent(window: &impl HasWindowHandle) -> Option<()> {
         }
     }
     Some(())
-}
-
-/// AppKit owns the material. The window's OpenGL view above it owns the
-/// foreground, pointer routing and accessibility tree.
-pub struct LiquidGlass {
-    content: Retained<NSView>,
-    view: Retained<NSGlassEffectView>,
-    dark: std::cell::Cell<Option<bool>>,
-}
-
-impl LiquidGlass {
-    pub fn install(window: &impl HasWindowHandle) -> Option<Self> {
-        let _mtm = MainThreadMarker::new()?;
-        let content = content_view(window)?;
-        // SAFETY: the content view is live and we're on AppKit's main thread.
-        let frame = unsafe { content.superview() }?;
-        let view = new_glass_view()?;
-        view.setStyle(NSGlassEffectViewStyle::Regular);
-        view.setHidden(true);
-        frame.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(&content));
-        Some(Self {
-            content,
-            view,
-            dark: Default::default(),
-        })
-    }
-
-    pub fn update(&self, surface: Option<(egui::Rect, f32)>, zoom: f32, dark: bool) {
-        if let Some((_, radius)) = surface {
-            if self.dark.replace(Some(dark)) != Some(dark) {
-                self.view
-                    .setTintColor(Some(&crate::overlay_glass::Role::Panel.tint(dark)));
-            }
-            let radius = f64::from(radius) * f64::from(zoom);
-            if self.view.cornerRadius() != radius {
-                self.view.setCornerRadius(radius);
-            }
-        }
-        update_surface(
-            &self.content,
-            &self.view,
-            surface.map(|(rect, _)| rect),
-            zoom,
-        );
-    }
 }
 
 pub(crate) fn glass_class() -> Option<&'static AnyClass> {

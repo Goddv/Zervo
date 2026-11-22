@@ -257,12 +257,14 @@ fn save_as_preset(
     // text box holding the page hostage over a name it does not need.
     let opening = existing.is_none();
     let mut name = existing.unwrap_or_default();
-    let field = ui.add(
+    let field = crate::overlay_glass::text_field(
+        ui,
         TextEdit::singleline(&mut name)
             .font(FontId::proportional(12.5))
             .hint_text(RichText::new(tr("settings-name-it")).color(palette.text_muted))
             .desired_width(150.0),
-    );
+    )
+    .response;
     if opening {
         field.request_focus();
     }
@@ -1347,11 +1349,13 @@ pub(crate) fn settings_general(
                 .size(12.0)
                 .color(palette.text_muted),
         );
-        let response = ui.add(
+        let response = crate::overlay_glass::text_field(
+            ui,
             TextEdit::singleline(&mut chrome.settings.homepage)
                 .font(FontId::proportional(13.0))
                 .desired_width(f32::INFINITY),
-        );
+        )
+        .response;
         if response.lost_focus() {
             actions.push(UiAction::SettingsChanged);
         }
@@ -1550,12 +1554,14 @@ pub(crate) fn settings_layout(
                 .size(12.0)
                 .color(palette.text_muted),
         );
-        let response = ui.add(
+        let response = crate::overlay_glass::text_field(
+            ui,
             TextEdit::singleline(&mut chrome.settings.newtab_message)
                 .font(FontId::proportional(13.0))
                 .hint_text(tr("settings-leave-empty-for-the-time-of-day"))
                 .desired_width(f32::INFINITY),
-        );
+        )
+        .response;
         if response.lost_focus() {
             actions.push(UiAction::PersistSettings);
         }
@@ -1906,7 +1912,8 @@ pub(crate) fn settings_passwords(
                 ui.allocate_ui(vec2(90.0, 26.0), |ui| {
                     ui.label(RichText::new(label).size(12.5).color(palette.text_muted));
                 });
-                ui.add(
+                crate::overlay_glass::text_field(
+                    ui,
                     TextEdit::singleline(value)
                         .password(secret)
                         .font(FontId::proportional(13.0))

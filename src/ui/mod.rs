@@ -143,7 +143,6 @@ pub enum UiAction {
 #[derive(Default)]
 pub struct NativeGlass {
     pub sidebar_available: bool,
-    pub glass_available: bool,
     pub sidebar: Option<Rect>,
     pub address: Option<(Rect, f32)>,
 }
@@ -495,24 +494,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             });
     }
 
-    // What the hidden sidebar leaves behind, drawn over the page for the same
-    // reason the chrome's own tint is: it belongs to the window rather than to
-    // whatever is open in it.
-    // `sidebar_peek` returns `Some` whenever peeking is *available*, not only
-    // while it is open — so testing `is_none()` here meant the spine was drawn
-    // exactly when the sidebar was docked, which is the one case `draw_spine`
-    // itself refuses. The two conditions were complements and the spine was
-    // never once drawn. What is wanted is: whenever the reveal is not covering
-    // the edge it would sit on.
-    if !peek.is_some_and(|(_, open)| open) {
-        draw_spine(root, chrome);
-    }
-
     let sidebar_overlay = if sidebar_docked {
         None
     } else {
         draw_sidebar_peek(root, chrome, &mut actions, peek)
     };
+    if sidebar_overlay.is_none_or(|rect| rect.width() < spine_width(&chrome.palette.appearance)) {
+        draw_spine(root, chrome);
+    }
 
     if let Some(status) = chrome.status
         && chrome.controls.is_empty()
@@ -932,7 +921,10 @@ fn draw_history_page(
 
     // ── Search.
     let field = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(420.0), 32.0));
-    glass::paint(ui.painter(), field, &palette, Glass::tier(Tier::Card));
+    let material = crate::overlay_glass::Surface::begin(&ui);
+    if !material.is_native() {
+        glass::paint(ui.painter(), field, &palette, Glass::tier(Tier::Card));
+    }
     icons::draw_icon(
         ui.painter(),
         Rect::from_center_size(pos2(field.min.x + 16.0, field.center().y), vec2(14.0, 14.0)),
@@ -955,6 +947,7 @@ fn draw_history_page(
             .hint_text(RichText::new(tr("chrome-search-history")).color(palette.text_muted))
             .desired_width(editor.available_width()),
     );
+    material.finish(&ui, field, crate::overlay_glass::Role::Field);
     ui.advance_cursor_after_rect(field);
     ui.add_space(14.0);
 
@@ -1485,10 +1478,14 @@ fn draw_favourites_card(
                             pos2(row.max.x - 46.0, row.max.y - 2.0),
                         );
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+                        let material = crate::overlay_glass::Surface::begin(&child);
                         let editor = child.add_sized(
                             field.size(),
-                            TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
+                            material.text_edit(
+                                TextEdit::singleline(&mut draft).font(FontId::proportional(12.5)),
+                            ),
                         );
+                        material.finish(&child, field, crate::overlay_glass::Role::Field);
                         if !editor.has_focus() && !editor.lost_focus() {
                             // Once, when the editor opens. Requesting it every frame pins the
                             // keyboard here: clicking the address bar takes focus for a single
@@ -2449,12 +2446,15 @@ fn draw_address_pill(
     let (pill_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
 
     let radius = f32::from(palette.radius(Tier::Panel)).min(height * 0.5);
-    if chrome.native_glass.sidebar.is_some()
-        && chrome.native_glass.glass_available
-        && palette.translucency == theme::Translucency::LiquidGlass
-    {
+    let docked_glass = chrome.native_glass.sidebar.is_some()
+        && palette.translucency == theme::Translucency::LiquidGlass;
+    let material = (!docked_glass).then(|| crate::overlay_glass::Surface::begin(ui));
+    if docked_glass {
         chrome.native_glass.address = Some((pill_rect, radius));
-    } else {
+    } else if material
+        .as_ref()
+        .is_some_and(|surface| !surface.is_native())
+    {
         ui.painter().rect_filled(pill_rect, radius, palette.surface);
         ui.painter().rect_stroke(
             pill_rect,
@@ -2649,6 +2649,9 @@ fn draw_address_pill(
         } else {
             inner.add(egui::Spinner::new().size(14.0).color(palette.accent));
         }
+    }
+    if let Some(material) = material {
+        material.finish(ui, pill_rect, crate::overlay_glass::Role::Field);
     }
 }
 

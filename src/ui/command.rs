@@ -101,15 +101,15 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                         }
                     });
                 });
-                let mut editor = TextEdit::singleline(&mut bar.query)
+                let edit = TextEdit::singleline(&mut bar.query)
                     .id(id.with("query"))
                     .font(FontId::proportional(19.0))
                     .text_color(palette.text)
                     .hint_text(tr("command-search-placeholder"))
                     .desired_width(width)
                     .margin(Margin::symmetric(12, 11))
-                    .background_color(palette.surface)
-                    .show(ui);
+                    .background_color(palette.surface);
+                let mut editor = crate::overlay_glass::text_field(ui, edit);
                 editor.response.widget_info(|| {
                     egui::WidgetInfo::labeled(
                         egui::Role::TextInput,

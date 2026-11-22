@@ -14,6 +14,7 @@ pub(crate) enum Role {
     Sidebar,
     Dialog,
     Status,
+    Field,
 }
 
 impl Role {
@@ -23,6 +24,7 @@ impl Role {
             Self::Panel | Self::Sidebar => 18,
             Self::Dialog => 20,
             Self::Status => 10,
+            Self::Field => 12,
         }
     }
 
@@ -32,9 +34,11 @@ impl Role {
             (true, Self::Menu | Self::Status) => (0.045, 0.92),
             (true, Self::Dialog) => (0.055, 0.88),
             (true, Self::Panel | Self::Sidebar) => (0.065, 0.80),
+            (true, Self::Field) => (0.12, 0.62),
             (false, Self::Menu | Self::Status) => (0.90, 0.72),
             (false, Self::Dialog) => (0.89, 0.64),
             (false, Self::Panel | Self::Sidebar) => (0.88, 0.56),
+            (false, Self::Field) => (0.95, 0.48),
         };
         objc2_app_kit::NSColor::colorWithWhite_alpha(white, alpha)
     }
@@ -65,6 +69,14 @@ impl Surface {
         }
     }
 
+    pub(crate) fn text_edit<'a>(&self, edit: egui::TextEdit<'a>) -> egui::TextEdit<'a> {
+        if self.is_native() {
+            edit.background_color(egui::Color32::TRANSPARENT)
+        } else {
+            edit
+        }
+    }
+
     pub(crate) fn finish(self, ui: &Ui, rect: Rect, role: Role) {
         self.finish_on(ui.painter(), rect, role);
     }
@@ -76,6 +88,13 @@ impl Surface {
             capture.finish(painter, rect, role);
         }
     }
+}
+
+pub(crate) fn text_field(ui: &mut Ui, edit: egui::TextEdit<'_>) -> egui::text_edit::TextEditOutput {
+    let surface = Surface::begin(ui);
+    let output = surface.text_edit(edit).show(ui);
+    surface.finish(ui, output.response.rect, Role::Field);
+    output
 }
 
 /// Give a fixed-height panel a scrollable body while leaving its header and
@@ -222,9 +241,12 @@ mod macos {
     use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, runtime::AnyClass};
     use objc2_app_kit::{
         NSBitmapImageRep, NSDeviceRGBColorSpace, NSGlassEffectContainerView, NSGlassEffectView,
-        NSGlassEffectViewStyle, NSImage, NSImageScaling, NSImageView, NSView, NSWindowOrderingMode,
+        NSGlassEffectViewStyle, NSImage, NSImageScaling, NSImageView, NSView,
+        NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+        NSVisualEffectView, NSWindowOrderingMode,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use objc2_quartz_core::CATransaction;
     use winit::raw_window_handle::HasWindowHandle;
 
     define_class!(
@@ -249,10 +271,100 @@ mod macos {
         }
     );
 
+    enum Effect {
+        Glass(Retained<NSGlassEffectView>),
+        Frost(Retained<NSVisualEffectView>),
+    }
+
+    impl Role {
+        fn frost(self) -> Option<NSVisualEffectMaterial> {
+            match self {
+                Self::Field => Some(NSVisualEffectMaterial::Popover),
+                _ => None,
+            }
+        }
+    }
+
+    impl Effect {
+        fn new(role: Role, mtm: MainThreadMarker) -> Option<Self> {
+            if let Some(material) = role.frost() {
+                let frost =
+                    NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), NSRect::ZERO);
+                frost.setMaterial(material);
+                frost.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
+                frost.setState(NSVisualEffectState::FollowsWindowActiveState);
+                frost.setWantsLayer(true);
+                Some(Self::Frost(frost))
+            } else {
+                let glass = crate::vibrancy::new_glass_view()?;
+                glass.setStyle(NSGlassEffectViewStyle::Regular);
+                Some(Self::Glass(glass))
+            }
+        }
+
+        fn view(&self) -> &NSView {
+            match self {
+                Self::Glass(view) => view,
+                Self::Frost(view) => view,
+            }
+        }
+
+        fn set_radius(&self, radius: f64) {
+            match self {
+                Self::Glass(view) => {
+                    if view.cornerRadius() != radius {
+                        view.setCornerRadius(radius);
+                    }
+                },
+                Self::Frost(view) => {
+                    if let Some(layer) = view.layer()
+                        && layer.cornerRadius() != radius
+                    {
+                        layer.setCornerRadius(radius);
+                        layer.setMasksToBounds(true);
+                    }
+                },
+            }
+        }
+    }
+
+    struct Material {
+        effect: Effect,
+        role: Role,
+        dark: bool,
+    }
+
+    impl Material {
+        fn new(role: Role, dark: bool, mtm: MainThreadMarker) -> Option<Self> {
+            let effect = Effect::new(role, mtm)?;
+            if let Effect::Glass(view) = &effect {
+                view.setTintColor(Some(&role.tint(dark)));
+            }
+            Some(Self { effect, role, dark })
+        }
+
+        fn place(&mut self, frame: NSRect, dark: bool, zoom: f64) {
+            if dark != self.dark
+                && let Effect::Glass(view) = &self.effect
+            {
+                view.setTintColor(Some(&self.role.tint(dark)));
+            }
+            self.dark = dark;
+            let radius = (f64::from(self.role.radius()) * zoom)
+                .min(frame.size.width.min(frame.size.height) / 2.0);
+            self.effect.set_radius(radius);
+            if self.effect.view().frame() != frame {
+                self.effect.view().setFrame(frame);
+            }
+        }
+    }
+
     struct Layer {
-        glass: Retained<NSGlassEffectView>,
+        root: Retained<NSView>,
+        material: Material,
+        content: Retained<NSView>,
         ink: Retained<NSImageView>,
-        appearance: Option<(Role, bool)>,
+        decorations: Vec<Material>,
         image_size: Option<(NSSize, usize, usize)>,
         pixels: Vec<u8>,
     }
@@ -262,7 +374,9 @@ mod macos {
         host: Retained<Host>,
         container: Retained<NSGlassEffectContainerView>,
         surfaces: Retained<NSView>,
-        layers: Vec<Layer>,
+        sidebar: Option<Layer>,
+        sidebar_position: Option<usize>,
+        layers: Vec<Option<Layer>>,
         renderer: Arc<Mutex<Renderer>>,
     }
 
@@ -276,6 +390,7 @@ mod macos {
             let host: Retained<Host> =
                 unsafe { objc2::msg_send![super(allocated), initWithFrame: content.frame()] };
             host.setHidden(true);
+            host.setClipsToBounds(true);
             let class = AnyClass::get(c"NSGlassEffectContainerView")?;
             // SAFETY: the class exists on this OS and AppKit views are
             // allocated on the main thread.
@@ -289,6 +404,8 @@ mod macos {
                 host,
                 container,
                 surfaces,
+                sidebar: None,
+                sidebar_position: None,
                 layers: Vec::new(),
                 renderer: Default::default(),
             })
@@ -310,20 +427,21 @@ mod macos {
         }
 
         pub(crate) fn present(&mut self, ctx: &egui::Context, dark: bool) {
+            // The slide is already timed by egui. Publish the frame and ink
+            // together without a second implicit animation in Core Animation.
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
+            self.update_views(ctx, dark);
+            CATransaction::commit();
+        }
+
+        fn update_views(&mut self, ctx: &egui::Context, dark: bool) {
             let renderer = self.renderer.clone();
             let mut renderer = renderer.lock().unwrap();
             if std::mem::take(&mut renderer.repaint) {
                 ctx.request_repaint();
             }
             let count = renderer.active;
-            for layer in self.layers.iter_mut().skip(count) {
-                if !layer.glass.isHidden() {
-                    layer.ink.setImage(None);
-                    layer.glass.setHidden(true);
-                    layer.image_size = None;
-                    layer.pixels.clear();
-                }
-            }
             if count == 0 {
                 if !self.host.isHidden() {
                     self.host.setHidden(true);
@@ -358,87 +476,199 @@ mod macos {
 
             let mtm = self.host.mtm();
             let zoom = f64::from(ctx.zoom_factor());
-            for (index, frame) in renderer.frames[..count].iter_mut().enumerate() {
-                if index == self.layers.len() {
-                    let Some(glass) = crate::vibrancy::new_glass_view() else {
-                        break;
-                    };
-                    glass.setStyle(NSGlassEffectViewStyle::Regular);
-                    // AppKit sizes the glass's content view to the full effect
-                    // frame. Keep the rendered ink in a child with its own inset.
-                    let content = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
-                    let ink = NSImageView::initWithFrame(NSImageView::alloc(mtm), NSRect::ZERO);
-                    ink.setImageScaling(NSImageScaling::ScaleAxesIndependently);
-                    content.addSubview(&ink);
-                    glass.setContentView(Some(&content));
-                    self.surfaces.addSubview(&glass);
-                    self.layers.push(Layer {
-                        glass,
-                        ink,
-                        appearance: None,
-                        image_size: None,
-                        pixels: Vec::new(),
-                    });
-                }
-                let layer = &mut self.layers[index];
-                let size = NSSize::new(
-                    f64::from(frame.rect.width()) * zoom,
-                    f64::from(frame.rect.height()) * zoom,
-                );
-                let radius =
-                    (f64::from(frame.role.radius()) * zoom).min(size.width.min(size.height) * 0.5);
-                // Extend the left curve offscreen so the window clips the sidebar
-                // with its own outline. The right corners still belong to the glass.
-                let bleed = if frame.role == Role::Sidebar {
-                    radius + 2.0
+            let mut index = 0;
+            let mut sidebar_position = None;
+            for frame in &mut renderer.frames[..count] {
+                let slot = if frame.role == Role::Sidebar {
+                    sidebar_position = Some(index);
+                    &mut self.sidebar
                 } else {
-                    0.0
+                    if index == self.layers.len() {
+                        self.layers.push(None);
+                    }
+                    let slot = &mut self.layers[index];
+                    index += 1;
+                    slot
                 };
-                let local = NSRect::new(
-                    NSPoint::new(
-                        bounds.min().x + f64::from(frame.rect.left()) * zoom - bleed,
-                        bounds.max().y - f64::from(frame.rect.bottom()) * zoom,
-                    ),
-                    NSSize::new(size.width + bleed, size.height),
-                );
-                if layer.glass.frame() != local {
-                    layer.glass.setFrame(local);
-                }
-                if layer.glass.cornerRadius() != radius {
-                    layer.glass.setCornerRadius(radius);
-                }
-                let ink_frame = NSRect::new(NSPoint::new(bleed, 0.0), size);
-                if layer.ink.frame() != ink_frame {
-                    layer.ink.setFrame(ink_frame);
-                }
-                let appearance = Some((frame.role, dark));
-                if layer.appearance != appearance {
-                    let tint = frame.role.tint(dark);
-                    layer.glass.setTintColor(Some(&tint));
-                    layer.appearance = appearance;
-                }
-                let image_size = Some((size, frame.width, frame.height));
-                // The compositor updates the backdrop independently of the ink.
-                // An animating page doesn't need another copy of the same labels.
-                if layer.image_size != image_size || frame.rgba != layer.pixels {
-                    let Some(image) = frame.image(size) else {
-                        renderer.failed_size = Some(renderer.size);
-                        self.host.setHidden(true);
-                        ctx.request_repaint();
-                        return;
+                if slot
+                    .as_ref()
+                    .is_none_or(|layer| layer.material.role != frame.role)
+                {
+                    let Some(layer) = Layer::new(frame.role, dark, mtm) else {
+                        continue;
                     };
-                    layer.ink.setImage(Some(&image));
-                    layer.image_size = image_size;
-                    std::mem::swap(&mut frame.rgba, &mut layer.pixels);
+                    if frame.role != Role::Sidebar {
+                        let previous = slot.as_ref().map(|layer| &*layer.root);
+                        self.surfaces.addSubview_positioned_relativeTo(
+                            &layer.root,
+                            NSWindowOrderingMode::Above,
+                            previous,
+                        );
+                    }
+                    if let Some(previous) = slot.replace(layer) {
+                        previous.root.removeFromSuperview();
+                    }
                 }
-                if layer.glass.isHidden() {
-                    layer.glass.setHidden(false);
+                let layer = slot.as_mut().unwrap();
+                if !layer.update(frame, bounds, dark, zoom, mtm) {
+                    renderer.failed_size = Some(renderer.size);
+                    self.host.setHidden(true);
+                    ctx.request_repaint();
+                    return;
                 }
             }
+            for layer in self.layers.iter().skip(index).flatten() {
+                layer.root.setHidden(true);
+            }
+            if let Some(sidebar) = &self.sidebar {
+                if let Some(position) = sidebar_position {
+                    if self.sidebar_position != sidebar_position {
+                        let previous = position
+                            .checked_sub(1)
+                            .and_then(|index| self.layers[index].as_ref());
+                        let next = self.layers.first().and_then(Option::as_ref);
+                        let (order, relative) = if let Some(previous) = previous {
+                            (NSWindowOrderingMode::Above, Some(previous))
+                        } else {
+                            (NSWindowOrderingMode::Below, next)
+                        };
+                        self.surfaces.addSubview_positioned_relativeTo(
+                            &sidebar.root,
+                            order,
+                            relative.map(|layer| &*layer.root),
+                        );
+                    }
+                } else {
+                    sidebar.root.setHidden(true);
+                }
+            }
+            self.sidebar_position = sidebar_position;
         }
 
         pub(crate) fn destroy(&self, gl: &glow::Context) {
             self.renderer.lock().unwrap().destroy(gl);
+        }
+    }
+
+    impl Layer {
+        fn new(role: Role, dark: bool, mtm: MainThreadMarker) -> Option<Self> {
+            let root = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
+            let material = Material::new(role, dark, mtm)?;
+            root.addSubview(material.effect.view());
+            let content = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
+            match &material.effect {
+                Effect::Glass(view) => view.setContentView(Some(&content)),
+                Effect::Frost(view) => view.addSubview(&content),
+            }
+            let ink = NSImageView::initWithFrame(NSImageView::alloc(mtm), NSRect::ZERO);
+            ink.setImageScaling(NSImageScaling::ScaleAxesIndependently);
+            content.addSubview(&ink);
+            Some(Self {
+                root,
+                material,
+                content,
+                ink,
+                decorations: Vec::new(),
+                image_size: None,
+                pixels: Vec::new(),
+            })
+        }
+
+        fn update(
+            &mut self,
+            frame: &mut Frame,
+            bounds: NSRect,
+            dark: bool,
+            zoom: f64,
+            mtm: MainThreadMarker,
+        ) -> bool {
+            let rect = frame.material_rect();
+            let size = NSSize::new(
+                f64::from(rect.width()) * zoom,
+                f64::from(rect.height()) * zoom,
+            );
+            // The window owns the left corners. Move the full panel past the
+            // edge instead of resizing the visible slice on each frame.
+            let bleed = if frame.role == Role::Sidebar {
+                f64::from(frame.role.radius()) * zoom + 2.0
+            } else {
+                0.0
+            };
+            let local = NSRect::new(
+                NSPoint::new(
+                    bounds.min().x + f64::from(rect.left()) * zoom - bleed,
+                    bounds.max().y - f64::from(rect.bottom()) * zoom,
+                ),
+                NSSize::new(size.width + bleed, size.height),
+            );
+            if self.root.frame() != local {
+                self.root.setFrame(local);
+            }
+            let material_frame = NSRect::new(NSPoint::ZERO, local.size);
+            self.material.place(material_frame, dark, zoom);
+            if self.content.frame() != material_frame {
+                self.content.setFrame(material_frame);
+            }
+            let relative_rect = |part: Rect| {
+                NSRect::new(
+                    NSPoint::new(
+                        f64::from(part.left() - rect.left()) * zoom + bleed,
+                        f64::from(rect.bottom() - part.bottom()) * zoom,
+                    ),
+                    NSSize::new(
+                        f64::from(part.width()) * zoom,
+                        f64::from(part.height()) * zoom,
+                    ),
+                )
+            };
+            let ink_frame = relative_rect(frame.rect);
+            if self.ink.frame() != ink_frame {
+                self.ink.setFrame(ink_frame);
+            }
+            let image_size = Some((ink_frame.size, frame.width, frame.height));
+            // The compositor tracks the backdrop independently of the ink.
+            if self.image_size != image_size || frame.rgba != self.pixels {
+                let Some(image) = frame.image(ink_frame.size) else {
+                    return false;
+                };
+                self.ink.setImage(Some(&image));
+                self.image_size = image_size;
+                std::mem::swap(&mut frame.rgba, &mut self.pixels);
+            }
+            for (index, &(rect, role)) in frame.decorations.iter().enumerate() {
+                if self
+                    .decorations
+                    .get(index)
+                    .is_none_or(|material| material.role != role)
+                {
+                    let Some(material) = Material::new(role, dark, mtm) else {
+                        break;
+                    };
+                    self.content.addSubview_positioned_relativeTo(
+                        material.effect.view(),
+                        NSWindowOrderingMode::Below,
+                        Some(&self.ink),
+                    );
+                    if index == self.decorations.len() {
+                        self.decorations.push(material);
+                    } else {
+                        self.decorations[index].effect.view().removeFromSuperview();
+                        self.decorations[index] = material;
+                    }
+                }
+                let material = &mut self.decorations[index];
+                material.place(relative_rect(rect), dark, zoom);
+                if material.effect.view().isHidden() {
+                    material.effect.view().setHidden(false);
+                }
+            }
+            for material in self.decorations.iter().skip(frame.decorations.len()) {
+                material.effect.view().setHidden(true);
+            }
+            if self.root.isHidden() {
+                self.root.setHidden(false);
+            }
+            true
         }
     }
 
@@ -475,7 +705,12 @@ mod macos {
         pub(super) fn finish(self, painter: &egui::Painter, rect: Rect, role: Role) {
             let ctx = painter.ctx();
             let screen = ctx.content_rect();
-            let rect = rect.intersect(screen);
+            let surface_width = rect.width();
+            let clip = match role {
+                Role::Field => painter.clip_rect(),
+                _ => screen,
+            };
+            let rect = rect.intersect(screen).intersect(clip);
             if !rect.is_positive() || !rect.is_finite() {
                 return;
             }
@@ -495,7 +730,10 @@ mod macos {
             painter.add(egui::PaintCallback {
                 rect,
                 callback: Arc::new(CallbackFn::new(move |info, painter| {
-                    self.renderer.lock().unwrap().end(info, painter.gl(), role);
+                    self.renderer
+                        .lock()
+                        .unwrap()
+                        .end(info, painter.gl(), role, surface_width);
                 })),
             });
         }
@@ -504,12 +742,22 @@ mod macos {
     struct Frame {
         rect: Rect,
         role: Role,
+        surface_width: f32,
+        decorations: Vec<(Rect, Role)>,
         width: usize,
         height: usize,
         rgba: Vec<u8>,
     }
 
     impl Frame {
+        fn material_rect(&self) -> Rect {
+            if self.role == Role::Sidebar {
+                self.rect.with_min_x(self.rect.right() - self.surface_width)
+            } else {
+                self.rect
+            }
+        }
+
         fn image(&self, size: NSSize) -> Option<Retained<NSImage>> {
             let stride = self.width * 4;
             // SAFETY: a null plane pointer requests AppKit-owned, interleaved
@@ -548,11 +796,31 @@ mod macos {
         }
     }
 
+    #[cfg(test)]
+    #[test]
+    fn sidebar_keeps_its_material_width_during_reveal() {
+        let mut frame = Frame {
+            rect: Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(12.0, 800.0)),
+            role: Role::Sidebar,
+            surface_width: 248.0,
+            decorations: Vec::new(),
+            width: 24,
+            height: 1600,
+            rgba: Vec::new(),
+        };
+        assert_eq!(frame.material_rect().left(), -236.0);
+        assert_eq!(frame.material_rect().right(), 12.0);
+        frame.rect = frame.rect.with_max_x(248.0);
+        assert_eq!(frame.material_rect(), frame.rect);
+    }
+
     #[derive(Default)]
     struct Renderer {
         target: Option<(glow::Framebuffer, glow::Renderbuffer)>,
         size: [u32; 2],
         previous: Option<(Option<glow::Framebuffer>, Option<glow::Framebuffer>)>,
+        nested: usize,
+        decorations: Vec<(Rect, Role)>,
         frames: Vec<Frame>,
         active: usize,
         failed_size: Option<[u32; 2]>,
@@ -610,6 +878,12 @@ mod macos {
         }
 
         fn begin(&mut self, info: PaintCallbackInfo, gl: &glow::Context) {
+            if self.previous.is_some() {
+                // A material inside a captured overlay shares its foreground
+                // buffer. Its AppKit background is placed beneath that ink.
+                self.nested += 1;
+                return;
+            }
             let size = info.screen_size_px;
             if self.failed_size == Some(size) {
                 return;
@@ -644,7 +918,18 @@ mod macos {
             }
         }
 
-        fn end(&mut self, info: PaintCallbackInfo, gl: &glow::Context, role: Role) {
+        fn end(
+            &mut self,
+            info: PaintCallbackInfo,
+            gl: &glow::Context,
+            role: Role,
+            surface_width: f32,
+        ) {
+            if self.nested > 0 {
+                self.nested -= 1;
+                self.decorations.push((info.viewport, role));
+                return;
+            }
             let Some((draw, read)) = self.previous.take() else {
                 return;
             };
@@ -655,6 +940,8 @@ mod macos {
                 self.frames.push(Frame {
                     rect: Rect::NOTHING,
                     role,
+                    surface_width,
+                    decorations: Vec::new(),
                     width: 0,
                     height: 0,
                     rgba: Vec::new(),
@@ -698,6 +985,12 @@ mod macos {
                 gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
                 gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
             }
+            self.decorations.retain_mut(|(rect, _)| {
+                *rect = rect.intersect(info.viewport);
+                rect.is_positive()
+            });
+            std::mem::swap(&mut frame.decorations, &mut self.decorations);
+            self.decorations.clear();
             if frame.rgba.is_empty() {
                 return;
             }
@@ -712,6 +1005,7 @@ mod macos {
             frame.width = width;
             frame.height = height;
             frame.role = role;
+            frame.surface_width = surface_width;
             self.active += 1;
         }
 

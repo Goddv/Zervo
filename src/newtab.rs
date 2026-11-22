@@ -2108,6 +2108,7 @@ fn draw_search(
     look: Search,
 ) {
     let palette = chrome.palette;
+    let surface = crate::overlay_glass::Surface::begin(area);
     if look == Search::Hero {
         let response = area.interact(rect, id, Sense::click());
         let fill = if response.hovered() {
@@ -2115,13 +2116,25 @@ fn draw_search(
         } else {
             palette.surface
         };
-        area.painter().rect_filled(rect, 12, fill);
-        area.painter().rect_stroke(
-            rect,
-            12,
-            Stroke::new(1.0_f32, palette.border),
-            StrokeKind::Inside,
-        );
+        if !surface.is_native() || response.hovered() {
+            area.painter().rect_filled(
+                rect,
+                12,
+                if surface.is_native() {
+                    fill.gamma_multiply(0.35)
+                } else {
+                    fill
+                },
+            );
+        }
+        if !surface.is_native() {
+            area.painter().rect_stroke(
+                rect,
+                12,
+                Stroke::new(1.0_f32, palette.border),
+                StrokeKind::Inside,
+            );
+        }
         if response.has_focus() {
             icons::paint_focus(area, &palette, rect, Tier::Control);
         }
@@ -2166,6 +2179,7 @@ fn draw_search(
         {
             actions.push(UiAction::OpenCommand(crate::ui::CommandMode::CurrentTab));
         }
+        surface.finish(area, rect, crate::overlay_glass::Role::Field);
         return;
     }
     let height = rect.height().clamp(38.0, 52.0);
@@ -2185,22 +2199,24 @@ fn draw_search(
     // Over a photograph there is, and the material frosts against that instead
     // — this is what the pill falls back to on a plain or generated backdrop.
     let backing = palette.bg;
-    glass::paint(
-        area.painter(),
-        pill,
-        &palette,
-        Glass::tier(Tier::Pill)
-            .strength(1.0)
-            // `0 0 0 1px accent(.24)` on 5a's search field and .28 on 7a's
-            // hero, and lit before it is focused — focus deepens the ring
-            // rather than introducing it.
-            .ring(palette.accent_ring(0.24 + 0.4 * focus))
-            .glow((0.5 + 0.5 * focus).min(1.0))
-            // No `fades()`: it is a text field, not a card, and a text field
-            // nobody can find is not one. The history search field is solid
-            // for exactly this reason.
-            .opaque(backing),
-    );
+    if !surface.is_native() {
+        glass::paint(
+            area.painter(),
+            pill,
+            &palette,
+            Glass::tier(Tier::Pill)
+                .strength(1.0)
+                // `0 0 0 1px accent(.24)` on 5a's search field and .28 on 7a's
+                // hero, and lit before it is focused — focus deepens the ring
+                // rather than introducing it.
+                .ring(palette.accent_ring(0.24 + 0.4 * focus))
+                .glow((0.5 + 0.5 * focus).min(1.0))
+                // No `fades()`: it is a text field, not a card, and a text field
+                // nobody can find is not one. The history search field is solid
+                // for exactly this reason.
+                .opaque(backing),
+        );
+    }
     let glyph = 16.0;
     let lead = 20.0;
     icons::draw_icon(
@@ -2240,6 +2256,7 @@ fn draw_search(
             FontId::proportional(font),
             palette.text_muted,
         );
+        surface.finish(area, pill, crate::overlay_glass::Role::Field);
         return;
     }
 
@@ -2265,7 +2282,11 @@ fn draw_search(
     // not have known to give it: the ink `Palette::over` picks for whatever is
     // behind this particular pill.
     if chrome.browser.newtab_query.is_empty() {
-        let over = ink.over(&palette, pill, true);
+        let muted = if surface.is_native() {
+            palette.text_muted
+        } else {
+            ink.over(&palette, pill, true).muted
+        };
         area.painter().text(
             pos2(field.min.x, field.center().y),
             Align2::LEFT_CENTER,
@@ -2276,7 +2297,7 @@ fn draw_search(
                 field.width(),
             ),
             FontId::proportional(font),
-            over.muted,
+            muted,
         );
     }
     let editor = TextEdit::singleline(&mut chrome.browser.newtab_query)
@@ -2298,6 +2319,10 @@ fn draw_search(
         chrome.browser.newtab_query.clear();
         actions.push(UiAction::Navigate(target));
     }
+    if has_focus && surface.is_native() {
+        icons::paint_focus(area, &palette, pill, Tier::Control);
+    }
+    surface.finish(area, pill, crate::overlay_glass::Role::Field);
 }
 
 fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {

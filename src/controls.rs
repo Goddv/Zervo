@@ -868,10 +868,14 @@ fn draw_dialog(
                 };
                 let mut value = prompt.current_value().to_owned();
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+                let material = crate::overlay_glass::Surface::begin(&child);
                 let response = child.add_sized(
                     field.size(),
-                    TextEdit::singleline(&mut value).font(FontId::proportional(13.0)),
+                    material.text_edit(
+                        TextEdit::singleline(&mut value).font(FontId::proportional(13.0)),
+                    ),
                 );
+                material.finish(&child, field, crate::overlay_glass::Role::Field);
                 if response.changed() {
                     prompt.set_current_value(&value);
                 }

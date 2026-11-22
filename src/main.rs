@@ -317,8 +317,6 @@ struct RunningApp {
     #[cfg(target_os = "macos")]
     _vibrancy: Option<vibrancy::Vibrancy>,
     #[cfg(target_os = "macos")]
-    liquid_glass: Option<vibrancy::LiquidGlass>,
-    #[cfg(target_os = "macos")]
     glass_overlays: Option<overlay_glass::GlassOverlays>,
 }
 
@@ -367,8 +365,6 @@ impl ApplicationHandler<WakerEvent> for App {
         // an erased corner would be a hole onto nothing.
         #[cfg(target_os = "macos")]
         let translucent_window = vibrancy.is_some();
-        #[cfg(target_os = "macos")]
-        let liquid_glass = vibrancy::LiquidGlass::install(&window);
         #[cfg(target_os = "macos")]
         let glass_overlays = overlay_glass::GlassOverlays::install(&window);
         #[cfg(not(target_os = "macos"))]
@@ -669,8 +665,6 @@ impl ApplicationHandler<WakerEvent> for App {
             wallpaper_frost: None,
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
-            #[cfg(target_os = "macos")]
-            liquid_glass,
             #[cfg(target_os = "macos")]
             glass_overlays,
         });
@@ -1258,7 +1252,7 @@ impl RunningApp {
 
         let palette = self.palette();
         #[cfg(target_os = "macos")]
-        let (palette, native_available, glass_available) = {
+        let (palette, native_available) = {
             let (reduce_transparency, reduce_motion) = vibrancy::accessibility_preferences();
             let mut palette = if reduce_transparency {
                 palette.with_translucency(theme::Translucency::Solid)
@@ -1268,14 +1262,10 @@ impl RunningApp {
             if reduce_motion {
                 palette.material.animation = 0.0;
             }
-            (
-                palette,
-                self._vibrancy.is_some() && !reduce_transparency,
-                self.liquid_glass.is_some() && !reduce_transparency,
-            )
+            (palette, self._vibrancy.is_some() && !reduce_transparency)
         };
         #[cfg(not(target_os = "macos"))]
-        let (native_available, glass_available) = (false, false);
+        let native_available = false;
         #[cfg(target_os = "macos")]
         let window_controls =
             vibrancy::window_controls(&state.window, self.egui_glow.egui_ctx.zoom_factor());
@@ -1311,8 +1301,7 @@ impl RunningApp {
         #[cfg(target_os = "macos")]
         let native_overlays = self.glass_overlays.as_ref().is_some_and(|overlays| {
             let size = state.window.inner_size();
-            let enabled =
-                glass_available && palette.translucency == theme::Translucency::LiquidGlass;
+            let enabled = palette.translucency == theme::Translucency::LiquidGlass;
             overlays.prepare(&self.egui_glow.egui_ctx, [size.width, size.height], enabled)
         });
         #[cfg(not(target_os = "macos"))]
@@ -1421,7 +1410,6 @@ impl RunningApp {
                 device_pixels_per_css_pixel,
                 native_glass: ui::NativeGlass {
                     sidebar_available: native_available,
-                    glass_available,
                     ..Default::default()
                 },
                 favicons: &self.favicons,
@@ -1601,8 +1589,12 @@ impl RunningApp {
                 let zoom = ctx.zoom_factor();
                 let controls_over_page = !output.settings_open
                     && active_webview.is_some()
-                    && window_controls.is_some_and(|rect| output.content_rect.intersects(rect))
-                    && output.sidebar_overlay.is_none();
+                    && window_controls.is_some_and(|rect| {
+                        output.content_rect.intersects(rect)
+                            && !output
+                                .sidebar_overlay
+                                .is_some_and(|sidebar| sidebar.contains_rect(rect))
+                    });
                 let controls_hovered = window_controls.is_some_and(|rect| {
                     cursor.is_some_and(|point| rect.expand(8.0 / zoom).contains(point))
                 });
@@ -1614,9 +1606,7 @@ impl RunningApp {
                 vibrancy::set_window_controls_opacity(&state.window, opacity);
                 if let Some(backdrop) = &self._vibrancy {
                     backdrop.update_sidebar(output.native_glass.sidebar, zoom);
-                }
-                if let Some(glass) = &self.liquid_glass {
-                    glass.update(output.native_glass.address, zoom, palette.dark);
+                    backdrop.update_address(output.native_glass.address, zoom);
                 }
             }
             state

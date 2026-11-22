@@ -168,7 +168,7 @@ objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "NSString",
     "NSURL",
 ] }
-objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CALayer"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CALayer", "CATransaction"] }
 resvg = "0.50.0"
 
 [profile.release]
