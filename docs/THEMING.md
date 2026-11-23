@@ -10,13 +10,9 @@ the binary, with no file format and nothing to load one at runtime. That is no
 longer true, and the way it stopped being true is worth stating, because it was
 not by writing a loader.
 
-Every value a material is built from is now a field of [`Appearance`], and
-`Appearance` is an ordinary setting: it is on `zervo://settings` → Appearance
-with one control per field, and it serialises into `settings.json` with
-everything else. So the loader already existed — it is the settings file — and
-the file format is whatever that panel writes out. `Appearance::as_json` hands
-you it, and `Material::as_rust` hands you the same arrangement as the `const`
-you would have had to write by hand.
+[`Appearance`] stores the material and serialises into `settings.json`.
+Linux and Windows expose material controls in Settings. `Appearance::as_json`
+exports the arrangement, and `Material::as_rust` generates a Rust constant.
 
 [`Appearance`]: ../zervo-core/src/theme.rs
 
@@ -89,16 +85,18 @@ corners are half its height.
 
 ## Translucency
 
-The `Translucency` setting offers **Solid**, **Frosted**, and **Liquid Glass**.
+On Linux and Windows, the `Translucency` setting offers **Solid**, **Frosted**,
+and a portable **Liquid Glass** preset. macOS uses Liquid Glass automatically
+and follows the system’s Reduce Transparency setting.
 It controls the window backdrop, chrome and overlay materials:
 
 - what the *window* asks the platform for (`SystemBackdrop::Opaque` or
   `Frosted`),
 - the tint over the window's own chrome,
 - the tint on everything the material draws over that chrome,
-- the use of AppKit glass in the docked sidebar and toolbar with `LiquidGlass`
-  on macOS 26 and later. In-page overlays and other operating systems use
-  Zervo’s frosted material.
+- the use of AppKit glass for dialogs, menus, popovers, and floating controls
+  with `LiquidGlass` on macOS 26 and later. Earlier macOS versions and other
+  operating systems use Zervo’s frosted material.
 
 A material can opt out (`translucency: false`) and then the setting does
 nothing, which is what a flat desktop toolkit wants.
@@ -134,10 +132,9 @@ frosting against its own previous reflection.
 ### Reach
 
 A backdrop can be sampled a stated distance beyond its own rectangle
-(`Palette::reaching`). The widget shelf slides out of the top of the new tab
-page and a hover card drops out of a toolbar button; both sit *beside* the page
-rather than on it, and both should read as part of it. The sampler clamps, so
-what a surface off the edge gets is the page's own edge carried out to it.
+(`Palette::reaching`). The sidebar shelf and cards anchored to sidebar buttons
+can sample the page from beside it. The sampler clamps these samples to the
+page edge.
 
 Reach is a distance, not a licence: a menu at the far end of the window still
 finds nothing.
@@ -196,15 +193,14 @@ would only be a way to get them wrong:
 
 ## Presets
 
-Five named arrangements, which are the table this document used to describe in
-prose. `Preset::appearance` is the whole definition of each.
+Linux and Windows offer five named arrangements. `Preset::appearance` defines each.
 
 | Preset | What it is |
 | --- | --- |
-| `Zervo` | The one that is finished: the chrome laid on the page, favicons down the spine, the shelf wherever the chrome is, every motion on, and the accent taken from the space you are in. **The colours are still the ones that shipped** — `candy` is the only field the palette reads for them and it has not moved — and there is a test pinning them for all ten accents in both themes. |
+| `Zervo` | The one that is finished: the chrome laid on the page, favicons down the spine, every motion on, and the accent taken from the space you are in. **The colours are still the ones that shipped** — `candy` is the only field the palette reads for them and it has not moved — and there is a test pinning them for all ten accents in both themes. |
 | `Candy` | The accent as a light source, no seam, everything glowing. The default. |
 | `Flat` | Solid, a small radius, no sheen — a flat desktop toolkit. |
-| `Liquid Glass` | Native AppKit glass for docked chrome on macOS 26 and later, with restrained borders, a card seam and a frosted fallback. |
+| `Liquid Glass` | Native AppKit glass for dialogs, menus and floating chrome on macOS 26 and later, with restrained borders, a card seam and a frosted fallback. |
 | `Material` | A generous radius, a longer shadow, no sheen, and glow standing in for the ripple's resting state. |
 
 Beside them sit whatever the reader has kept: "Save as a preset…" names the
@@ -242,9 +238,8 @@ panel:
 | `candy` | How far the accent reaches into the chrome, measured against the 0.045 that shipped. |
 | `workspace_accent` | Take the accent from the active workspace instead of one global choice. |
 | `spine` | What a hidden sidebar leaves at the window's edge: nothing, tab ticks, or favicons. |
-| `shelf` | Where the widget shelf is reachable from. |
 | `align_nav` | Centre the sidebar's nav row on the macOS window controls. |
-| `sweep`, `liquid`, `pill_progress` | Three pieces of motion, each described where it is declared. |
+| `sweep`, `pill_progress` | The sidebar resize highlight and address field progress. |
 
 ### The seam
 
@@ -284,11 +279,17 @@ same place, so nothing jumps when the kind of page changes.
 
 ## macOS-specific pieces
 
-**Liquid Glass** uses `NSGlassEffectView` for the docked sidebar and grouped
-toolbar surfaces. The views sit below winit’s transparent, layer-hosting
-content view. Zervo still draws the text, icons and focus indicators and handles
-input through egui. Page overlays frost against the rendered page. With macOS
-Reduce Transparency enabled, Zervo renders solid surfaces.
+The docked sidebar uses AppKit’s `NSVisualEffectView.Material.sidebar` for
+translucency and its active-window tint. Zervo uses
+AppKit’s regular glass for dialogs, menus, popovers, the revealed sidebar, and
+the docked address field. Menus and dialogs use neutral tints for contrast on
+busy pages. Each floating surface places egui’s controls inside an
+`NSGlassEffectView` so AppKit samples the live page underneath. Egui handles
+input, focus, and accessibility. Related glass views share an
+`NSGlassEffectContainerView`. The renderer creates its capture buffer when a
+surface opens and reuses the image while its contents stay the same. Settings
+cards and page content use standard surfaces. Reduce Transparency and the Solid
+setting use opaque surfaces.
 
 **The window's own backdrop** is an `NSVisualEffectView` behind a transparent
 framebuffer. The chrome paints a thin tint over it. That is why the chrome's
@@ -312,9 +313,8 @@ mask read as a dark notch hugging the arc — visible on a web page, where the
 card is a blit that needs masking, and never on `zervo://settings` or the new
 tab page, which round themselves and are never masked at all.
 
-The window's own backdrop covers the whole frame view, not just the area below
-the toolbar, so a hole at the top shows the same frosted backdrop as a hole at
-the bottom.
+The window backdrop covers the whole frame, including the top and bottom
+corners of the card.
 
 On platforms without a system backdrop, plain rounded rectangles frame the
 content card.
@@ -323,7 +323,7 @@ content card.
 
 | File | What it holds |
 | --- | --- |
-| [`zervo-core/src/theme.rs`](../zervo-core/src/theme.rs) | `Appearance`, `Preset`, `Palette`, `Material`, `Surface`, `Tier`, `Edge`, `Seam`, `Spine`, `ShelfHome`, `Translucency`, `Backdrop` |
+| [`zervo-core/src/theme.rs`](../zervo-core/src/theme.rs) | `Appearance`, `Preset`, `Palette`, `Material`, `Surface`, `Tier`, `Edge`, `Seam`, `Spine`, `Translucency`, `Backdrop` |
 | [`zervo-core/src/glass.rs`](../zervo-core/src/glass.rs) | `glass::shapes` — every surface is drawn here, the bevel included |
 | [`src/ui/settings_page.rs`](../src/ui/settings_page.rs) | The Appearance page: the presets, the pinned specimen, one control per field |
 | [`src/backdrop.rs`](../src/backdrop.rs) | The framebuffer copy, and the per-corner erase |
@@ -340,7 +340,7 @@ arrangement is most likely to break without meaning to:
 - `the_classic_arrangement_resolves_to_what_shipped` pins `Preset::Zervo` to
   the exact colours that shipped, for all ten accents in both themes, against a
   spelled-out copy of the old arithmetic rather than against a reference to it.
-  The preset's *shape* moved in 0.5.0 — the seam, the spine, the shelf and the
+  The preset's *shape* moved in 0.5.0 — the seam, the spine and the
   motion switches all changed — and this is why that could be done without
   anybody's greys moving: `candy` is the only field the colours depend on.
 - `every_preset_can_be_frosted` pins the Solid/Frosted control to doing

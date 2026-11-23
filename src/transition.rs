@@ -33,7 +33,7 @@
 //! whole as they stand, because the design says of both that the arriving page
 //! does not translate.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use egui::{Rect, TextureHandle, pos2, vec2};
 
@@ -235,11 +235,6 @@ impl Crossing {
     /// Where the departing page may be drawn.
     pub fn clip(&self) -> Rect {
         self.seen
-    }
-
-    /// How long until this wants painting again.
-    pub fn again(&self) -> Duration {
-        Duration::from_millis(8)
     }
 }
 

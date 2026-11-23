@@ -4,8 +4,8 @@
 //! same accent, same animation timings.
 
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Sense, Stroke, StrokeKind, Ui,
-    WidgetInfo, WidgetType, pos2, vec2,
+    Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Role, Sense, Stroke, StrokeKind, Ui,
+    WidgetInfo, pos2, vec2,
 };
 
 use crate::glass;
@@ -30,8 +30,7 @@ pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str, palette: &Palette) -> 
     // What this control *is*, for the accessibility tree. A hand-drawn widget
     // that only paints is an unlabelled generic node to a screen reader; egui
     // fills in the role, label and value from here and nowhere else.
-    response
-        .widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, ui.is_enabled(), *value, label));
+    response.widget_info(|| WidgetInfo::selected(Role::CheckBox, ui.is_enabled(), *value, label));
 
     let on = glass::ease_out(
         ui.ctx()
@@ -221,16 +220,16 @@ pub fn segmented(
         );
         let response = ui.interact(
             slot_rect,
-            ui.id().with(("segment", index, *option)),
+            ui.scope_id().with(("segment", index, *option)),
             Sense::click(),
         );
         let on = glass::ease_out(ui.ctx().animate_bool_with_time(
-            ui.id().with(("segment_on", index, *option)),
+            ui.scope_id().with(("segment_on", index, *option)),
             index == selected,
             0.16,
         ));
         let hover = glass::ease_out(ui.ctx().animate_bool_with_time(
-            ui.id().with(("segment_hover", index, *option)),
+            ui.scope_id().with(("segment_hover", index, *option)),
             response.hovered() && index != selected,
             0.12,
         ));
@@ -261,7 +260,7 @@ pub fn segmented(
         let mut response = response.on_hover_cursor(CursorIcon::PointingHand);
         response.widget_info(|| {
             WidgetInfo::selected(
-                WidgetType::RadioButton,
+                Role::RadioButton,
                 ui.is_enabled(),
                 index == selected,
                 *option,

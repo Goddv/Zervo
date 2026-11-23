@@ -12,7 +12,7 @@ engine bump or a chrome change, walk this list.
 - [ ] Address bar: ⌘L focuses; a URL navigates; a phrase searches.
 - [ ] Use ⌘L or Ctrl+L twice and type over the selection. Press Escape to
       restore the page address. Press Enter on an empty new-tab field.
-- [ ] Shrink the window to its minimum size with the top bar and shelf open.
+- [ ] Shrink the window to its minimum size with the sidebar shelf open.
       Keep the address field clear of both button groups. Widen the window
       again and check that the saved field width returns.
 - [ ] With the shelf open above a short new-tab page, the clock and search
@@ -77,8 +77,6 @@ engine bump or a chrome change, walk this list.
 - [ ] Wallpaper → Choose a file… takes a local picture.
 - [ ] Pull the network cable and shuffle: the page keeps its backdrop and
       Settings → Wallpaper says what failed.
-- [ ] With a photograph up, collapse the sidebar and drag the bar taller: the
-      picture does not rescale, and drifts down more slowly than the page.
 - [ ] Over a bright photograph in the light theme: the header pills, the
       credit line and every card are readable, and no card has a bright rim
       along its underside.
@@ -177,17 +175,15 @@ nothing can tell the embedder why an ordinary load ended. See PARITY.md.
       readable and nothing rings or glows where the arrangement says it should
       not.
 
-## Navigation bar (sidebar collapsed)
-- [ ] The address pill stays centred on the window as it is resized, and drags
-      wider and narrower.
-- [ ] Dragging the bar's bottom edge changes its height and uncovers the widget
-      shelf; the webview card follows.
-- [ ] Arrange mode (the wand): items drag within a side and across the pill, the
-      caret shows where a drop lands, x moves an item to the tray, and the tray
-      puts it back. Reset to defaults restores the bar *and* the sidebar width.
-- [ ] Widget shelf: place a widget anywhere including an empty row, resize it
-      from the corner, remove it. Positions survive resizing the window — cells
-      narrow, the grid does not reflow.
+## Sidebar and Full Page
+
+- [ ] Onboarding and Settings → Layout offer Sidebar and Full Page.
+- [ ] Toggle Full Page and hover the left edge. The sidebar reveals with its
+      controls and optional shelf. Hovering the edge leaves the page size alone.
+- [ ] Open the sidebar shelf, add a widget, move it to a free row, resize it
+      vertically and remove it. Restart the app to check the saved positions.
+- [ ] Open a profile saved with the old layout. It uses Sidebar and stacks its
+      saved widgets in reading order.
 
 ## Cards that open on hover
 - [ ] Favourites (the star) and downloads: the card opens on hover, stays open

@@ -1036,7 +1036,7 @@ fn draw_message(
         );
         let response = root.interact(
             button,
-            Id::new("zervo_trouble_button").with(index),
+            Id::unique("zervo_trouble_button").with(index),
             Sense::click(),
         );
         let hover = glass::ease_out(root.ctx().animate_bool_with_time(
@@ -1127,7 +1127,7 @@ fn draw_message(
             pos2(card.min.x + CARD_PAD, card.max.y + 8.0),
             proceed.size(),
         );
-        let response = root.interact(text, Id::new("zervo_trouble_proceed"), Sense::click());
+        let response = root.interact(text, Id::unique("zervo_trouble_proceed"), Sense::click());
         root.painter().galley(
             text.min,
             proceed.clone(),
@@ -1203,7 +1203,7 @@ fn draw_game(root: &mut Ui, palette: &Palette, panel: Rect, tab: crate::state::T
     // are monotonic, so a new tab is always a new board — and the state still
     // survives a redraw and a rewritten address within one tab, which is what
     // it is for.
-    let id = Id::new("zervo_feature_creep").with(tab);
+    let id = Id::unique("zervo_feature_creep").with(tab);
     let mut state: Creep = root
         .ctx()
         .data_mut(|data| data.get_temp::<Creep>(id))
@@ -1607,7 +1607,7 @@ mod tests {
     fn plan_at(width: f32, trouble: Trouble, buttons: &[Press]) -> Plan {
         let ctx = egui::Context::default();
         let mut out = None;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
             let body = vec![
                 Run::fixed("watch.example.com"),
                 Run::plain(" needs "),
@@ -1625,6 +1625,7 @@ mod tests {
                 Color32::YELLOW,
             ));
         });
+        frame.textures_delta.clear();
         out.expect("the frame ran")
     }
 

@@ -3,9 +3,20 @@
 //! Engine state (the `WebView` for each tab) is attached by `main.rs`.
 
 use crate::l10n::text as tr;
+use serde::{Deserialize, Serialize};
 use servo::WebView;
+use url::Url;
 
 pub type TabId = u64;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct FolderId(u64);
+
+pub struct TabFolder {
+    pub id: FolderId,
+    pub name: String,
+    pub collapsed: bool,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TabKind {
@@ -46,8 +57,10 @@ impl TabKind {
 pub struct Tab {
     pub id: TabId,
     pub kind: TabKind,
-    /// Pinned tabs render as essential tiles in the sidebar grid.
+    /// Pinned tabs stay above the open tabs in their space.
     pub pinned: bool,
+    pub pin_anchor: Option<crate::library::Favourite>,
+    pub folder: Option<FolderId>,
     pub title: String,
     pub url: String,
     /// The engine view backing this tab. `None` until the tab is first activated
@@ -65,6 +78,8 @@ impl Tab {
             id,
             kind: TabKind::Web,
             pinned: false,
+            pin_anchor: None,
+            folder: None,
             title: url.clone(),
             url,
             webview: None,
@@ -79,6 +94,8 @@ impl Tab {
             id,
             kind: TabKind::Settings,
             pinned: false,
+            pin_anchor: None,
+            folder: None,
             title: TabKind::Settings
                 .internal_title()
                 .unwrap_or_default()
@@ -96,6 +113,8 @@ impl Tab {
             id,
             kind: TabKind::History,
             pinned: false,
+            pin_anchor: None,
+            folder: None,
             title: TabKind::History
                 .internal_title()
                 .unwrap_or_default()
@@ -113,6 +132,8 @@ impl Tab {
             id,
             kind: TabKind::Downloads,
             pinned: false,
+            pin_anchor: None,
+            folder: None,
             title: TabKind::Downloads
                 .internal_title()
                 .unwrap_or_default()
@@ -133,6 +154,8 @@ impl Tab {
             id,
             kind: TabKind::Trouble(trouble),
             pinned: false,
+            pin_anchor: None,
+            folder: None,
             title: trouble.title().to_owned(),
             url,
             webview: None,
@@ -147,6 +170,8 @@ impl Tab {
             id,
             kind: TabKind::NewTab,
             pinned: false,
+            pin_anchor: None,
+            folder: None,
             title: TabKind::NewTab
                 .internal_title()
                 .unwrap_or_default()
@@ -161,7 +186,7 @@ impl Tab {
 }
 
 /// Categories in the settings page's left-hand navigation.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     Appearance,
     General,
@@ -193,6 +218,8 @@ impl SettingsSection {
 pub struct Workspace {
     pub name: String,
     pub tabs: Vec<Tab>,
+    pub folders: Vec<TabFolder>,
+    last_active: Option<TabId>,
 }
 
 pub struct BrowserState {
@@ -200,22 +227,18 @@ pub struct BrowserState {
     pub active_workspace: usize,
     pub active_tab: Option<TabId>,
     pub address_bar: String,
-    /// True while the address bar has focus and the user is editing it, so we
-    /// don't clobber their typing with engine-driven URL updates.
-    pub editing_address: bool,
     /// The favourite being renamed, and the name so far.
     pub favourite_edit: Option<(String, String)>,
-    /// The workspace being named, and the name so far. Set the moment one tab
-    /// is dropped on another, so the group opens asking what it is.
+    /// The workspace or folder being named, and the draft name.
     pub workspace_edit: Option<(usize, String)>,
+    pub folder_edit: Option<(FolderId, String)>,
     /// Search box on the history page.
     pub history_query: String,
     /// The half-typed login on the passwords page: site, username, password.
     pub password_draft: (String, String, String),
     /// What the passwords page last did, shown under the form.
     pub password_notice: String,
-    /// One-shot request for the address bar to grab keyboard focus (⌘L).
-    pub focus_address: bool,
+    pub command_bar: Option<crate::ui::CommandBar>,
     /// Text in the zervo://newtab page's search box.
     pub newtab_query: String,
     /// The half-typed line on the new tab page's to-do card.
@@ -225,8 +248,10 @@ pub struct BrowserState {
     pub newtab_editing: bool,
     /// Which settings category the settings page is showing.
     pub settings_section: SettingsSection,
+    pub settings_query: String,
 
     next_tab_id: TabId,
+    next_folder_id: u64,
 }
 
 impl BrowserState {
@@ -247,26 +272,201 @@ impl BrowserState {
             workspaces: vec![Workspace {
                 name: tr("common-home").to_owned(),
                 tabs: Vec::new(),
+                folders: Vec::new(),
+                last_active: None,
             }],
             active_workspace: 0,
             active_tab: None,
             address_bar: initial_url.to_owned(),
-            editing_address: false,
             favourite_edit: None,
             workspace_edit: None,
+            folder_edit: None,
             history_query: String::new(),
             password_draft: (String::new(), String::new(), String::new()),
             password_notice: String::new(),
-            focus_address: false,
+            command_bar: None,
             newtab_query: String::new(),
             newtab_task_draft: String::new(),
             newtab_editing: false,
             settings_section: SettingsSection::Appearance,
+            settings_query: String::new(),
             next_tab_id: 0,
+            next_folder_id: 0,
         };
         let id = state.add_tab(0, initial_url);
-        state.active_tab = Some(id);
+        state.select_tab(id);
         state
+    }
+
+    pub fn restore(homepage: &str, first_name: &str, explicit_url: bool) -> Self {
+        let saved: SavedSpaces = crate::store::load_or_default(spaces_path());
+        Self::from_saved(saved, homepage, first_name, explicit_url)
+    }
+
+    fn from_saved(
+        saved: SavedSpaces,
+        homepage: &str,
+        first_name: &str,
+        explicit_url: bool,
+    ) -> Self {
+        let mut state = Self::new(homepage);
+        if saved.spaces.is_empty() {
+            if !first_name.trim().is_empty() {
+                state.workspaces[0].name = first_name.trim().to_owned();
+            }
+            return state;
+        }
+
+        state.workspaces.clear();
+        for space in saved.spaces {
+            let index = state.add_workspace(space.name);
+            for pin in space.pins {
+                state.restore_web_tab(index, None, pin, true);
+            }
+            for saved in space.folders {
+                let folder = state.add_folder(index, saved.name);
+                state.workspaces[index]
+                    .folders
+                    .last_mut()
+                    .unwrap()
+                    .collapsed = saved.collapsed;
+                for tab in saved.tabs {
+                    state.restore_web_tab(index, Some(folder), tab.site, tab.pinned);
+                }
+            }
+        }
+        state.active_workspace = saved.active.min(state.workspaces.len() - 1);
+        let index = state.active_workspace;
+        let tab = match (explicit_url, state.tab_for_workspace(index)) {
+            (false, Some(tab)) => tab,
+            _ => state.add_tab(index, homepage),
+        };
+        state.select_tab(tab);
+        if let Some(tab) = state.tab(tab) {
+            state.address_bar = tab.url.clone();
+        }
+        state
+    }
+
+    fn restore_web_tab(
+        &mut self,
+        workspace: usize,
+        folder: Option<FolderId>,
+        site: crate::library::Favourite,
+        pinned: bool,
+    ) {
+        if Url::parse(&site.url).is_ok_and(|url| url.scheme() != "zervo") {
+            let tab = self.add_tab(workspace, &site.url);
+            if let Some(tab) = self.tab_mut(tab) {
+                tab.title.clone_from(&site.title);
+                tab.folder = folder;
+                tab.pinned = pinned;
+                tab.pin_anchor = pinned.then_some(site);
+            }
+        }
+    }
+
+    fn saved_spaces(&self) -> SavedSpaces {
+        SavedSpaces {
+            active: self.active_workspace,
+            spaces: self
+                .workspaces
+                .iter()
+                .map(|space| SavedSpace {
+                    name: space.name.clone(),
+                    pins: space
+                        .tabs
+                        .iter()
+                        .filter(|tab| tab.folder.is_none())
+                        .filter_map(|tab| tab.pin_anchor.clone())
+                        .collect(),
+                    folders: space
+                        .folders
+                        .iter()
+                        .map(|folder| SavedFolder {
+                            name: folder.name.clone(),
+                            collapsed: folder.collapsed,
+                            tabs: space
+                                .tabs
+                                .iter()
+                                .filter(|tab| {
+                                    tab.folder == Some(folder.id) && tab.kind == TabKind::Web
+                                })
+                                .map(|tab| SavedFolderTab {
+                                    site: tab.pin_anchor.clone().unwrap_or_else(|| {
+                                        crate::library::Favourite {
+                                            title: tab.title.clone(),
+                                            url: tab.url.clone(),
+                                        }
+                                    }),
+                                    pinned: tab.pinned,
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn save_spaces(&self) {
+        let _ = crate::store::save(spaces_path(), &self.saved_spaces());
+    }
+
+    pub fn tab_for_workspace(&self, index: usize) -> Option<TabId> {
+        let workspace = self.workspaces.get(index)?;
+        workspace
+            .last_active
+            .filter(|id| workspace.tabs.iter().any(|tab| tab.id == *id))
+            .or_else(|| workspace.tabs.last().map(|tab| tab.id))
+    }
+
+    pub fn select_tab(&mut self, id: TabId) -> bool {
+        let Some(index) = self
+            .workspaces
+            .iter()
+            .position(|space| space.tabs.iter().any(|tab| tab.id == id))
+        else {
+            return false;
+        };
+        if index != self.active_workspace {
+            self.folder_edit = None;
+            if self
+                .workspace_edit
+                .as_ref()
+                .is_some_and(|(editing, _)| *editing != index)
+            {
+                self.workspace_edit = None;
+            }
+        }
+        self.active_workspace = index;
+        self.active_tab = Some(id);
+        self.workspaces[index].last_active = Some(id);
+        true
+    }
+
+    pub fn can_remove_workspace(&self, index: usize) -> bool {
+        self.workspaces.len() > 1
+            && self.workspaces.get(index).is_some_and(|space| {
+                space.folders.is_empty()
+                    && (space.tabs.is_empty()
+                        || matches!(space.tabs.as_slice(), [tab] if tab.kind == TabKind::NewTab))
+            })
+    }
+
+    pub fn remove_workspace(&mut self, index: usize) -> bool {
+        if !self.can_remove_workspace(index) {
+            return false;
+        }
+        self.workspaces.remove(index);
+        if self.active_workspace == index {
+            self.active_tab = None;
+        } else if self.active_workspace > index {
+            self.active_workspace -= 1;
+        }
+        self.active_workspace = self.active_workspace.min(self.workspaces.len() - 1);
+        self.workspace_edit = None;
+        true
     }
 
     pub fn add_tab(&mut self, workspace: usize, url: impl Into<String>) -> TabId {
@@ -341,8 +541,59 @@ impl BrowserState {
         self.workspaces.push(Workspace {
             name: name.into(),
             tabs: Vec::new(),
+            folders: Vec::new(),
+            last_active: None,
         });
         self.workspaces.len() - 1
+    }
+
+    pub fn adjacent_workspace(&self, forward: bool) -> Option<usize> {
+        let count = self.workspaces.len();
+        if count < 2 {
+            return None;
+        }
+        let offset = if forward { 1 } else { count - 1 };
+        Some((self.active_workspace + offset) % count)
+    }
+
+    pub fn add_folder(&mut self, workspace: usize, name: String) -> FolderId {
+        let id = FolderId(self.next_folder_id);
+        self.next_folder_id += 1;
+        self.workspaces[workspace].folders.push(TabFolder {
+            id,
+            name,
+            collapsed: false,
+        });
+        id
+    }
+
+    pub fn folder_mut(&mut self, id: FolderId) -> Option<&mut TabFolder> {
+        self.workspaces
+            .iter_mut()
+            .flat_map(|workspace| &mut workspace.folders)
+            .find(|folder| folder.id == id)
+    }
+
+    pub fn remove_folder(&mut self, id: FolderId) -> bool {
+        for workspace in &mut self.workspaces {
+            if let Some(index) = workspace.folders.iter().position(|folder| folder.id == id) {
+                workspace.folders.remove(index);
+                for tab in &mut workspace.tabs {
+                    if tab.folder == Some(id) {
+                        tab.folder = None;
+                    }
+                }
+                if self
+                    .folder_edit
+                    .as_ref()
+                    .is_some_and(|(editing, _)| *editing == id)
+                {
+                    self.folder_edit = None;
+                }
+                return true;
+            }
+        }
+        false
     }
 
     pub fn tab(&self, id: TabId) -> Option<&Tab> {
@@ -380,47 +631,59 @@ impl BrowserState {
     /// back only the `WebView` and drops everything else about the tab, and
     /// `add_tab` builds a fresh one. Round-tripping through them would close
     /// the page and reopen it, losing scroll position, form state and history.
-    pub fn move_tab(&mut self, id: TabId, workspace: usize, index: usize) -> bool {
-        if workspace >= self.workspaces.len() {
-            return false;
-        }
-        let Some(from) = self
-            .workspaces
-            .iter()
-            .position(|space| space.tabs.iter().any(|tab| tab.id == id))
-        else {
-            return false;
-        };
-        let Some(at) = self.workspaces[from]
-            .tabs
-            .iter()
-            .position(|tab| tab.id == id)
-        else {
+    pub fn move_tab(
+        &mut self,
+        id: TabId,
+        workspace: usize,
+        index: usize,
+        folder: Option<FolderId>,
+    ) -> bool {
+        let Some(target) = self.workspaces.get(workspace) else {
             return false;
         };
-        let tab = self.workspaces[from].tabs.remove(at);
-        // Within one workspace the caller's index was worked out against the
-        // list as it looked *before* the removal, so everything after the tab
-        // has since shifted down one. Correct for that first and clamp
-        // second: clamping to the post-removal length already accounts for
-        // the shift, so doing it the other way round subtracts it twice and
-        // a tab dragged to the end of its own list lands one slot short.
-        let mut index = index;
-        if from == workspace && at < index {
-            index -= 1;
+        if folder.is_some_and(|id| target.folders.iter().all(|folder| folder.id != id)) {
+            return false;
         }
-        let index = index.min(self.workspaces[workspace].tabs.len());
-        self.workspaces[workspace].tabs.insert(index, tab);
+        let Some((from, at)) = self.tab_location(id) else {
+            return false;
+        };
+
+        let mut tab = self.workspaces[from].tabs.remove(at);
+        tab.folder = folder;
+        // Within one workspace the drop index was calculated before removal.
+        let index = index - usize::from(from == workspace && at < index);
+        let tabs = &mut self.workspaces[workspace].tabs;
+        tabs.insert(index.min(tabs.len()), tab);
         true
     }
 
-    /// Put two tabs in a workspace of their own and return its index. The tab
-    /// that was dropped on keeps its place at the front.
-    pub fn group_tabs(&mut self, name: impl Into<String>, onto: TabId, dragged: TabId) -> usize {
-        let workspace = self.add_workspace(name);
-        self.move_tab(onto, workspace, 0);
-        self.move_tab(dragged, workspace, 1);
-        workspace
+    fn tab_location(&self, id: TabId) -> Option<(usize, usize)> {
+        self.workspaces
+            .iter()
+            .enumerate()
+            .find_map(|(space, workspace)| {
+                workspace
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.id == id)
+                    .map(|index| (space, index))
+            })
+    }
+
+    /// Dropping on an unfiled tab groups both in their existing workspace.
+    /// Dropping on a folder member inserts immediately after that tab.
+    pub fn group_tabs(&mut self, onto: TabId, dragged: TabId) -> Option<(FolderId, bool)> {
+        let (workspace, index) = self.tab_location(onto)?;
+        if onto == dragged || self.tab_location(dragged)?.0 != workspace {
+            return None;
+        }
+        let folder = self.workspaces[workspace].tabs[index].folder;
+        let created = folder.is_none();
+        let folder = folder
+            .unwrap_or_else(|| self.add_folder(workspace, tr("sidebar-new-folder").to_owned()));
+        self.workspaces[workspace].tabs[index].folder = Some(folder);
+        self.move_tab(dragged, workspace, index + 1, Some(folder));
+        Some((folder, created))
     }
 
     /// Remove a tab, returning its webview (if any) so the caller can drop it
@@ -439,5 +702,177 @@ impl BrowserState {
             }
         }
         None
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default)]
+struct SavedSpaces {
+    active: usize,
+    spaces: Vec<SavedSpace>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedSpace {
+    name: String,
+    pins: Vec<crate::library::Favourite>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    folders: Vec<SavedFolder>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedFolder {
+    name: String,
+    #[serde(default)]
+    collapsed: bool,
+    #[serde(default)]
+    tabs: Vec<SavedFolderTab>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedFolderTab {
+    site: crate::library::Favourite,
+    #[serde(default)]
+    pinned: bool,
+}
+
+fn spaces_path() -> Option<std::path::PathBuf> {
+    Some(crate::settings::data_dir()?.join("spaces.json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restores_spaces_and_pins_without_discarding_an_explicit_url() {
+        let mut state = BrowserState::new("https://example.com");
+        let first = state.active_tab.unwrap();
+        let second = state.add_workspace("Research");
+        let pinned = state.add_tab(second, "https://example.org/visited");
+        let tab = state.tab_mut(pinned).unwrap();
+        tab.pinned = true;
+        tab.pin_anchor = Some(crate::library::Favourite {
+            title: "Notes".to_owned(),
+            url: "https://example.org/notes".to_owned(),
+        });
+        assert!(state.select_tab(pinned));
+        assert_eq!(state.active_workspace, second);
+        assert_eq!(state.tab_for_workspace(0), Some(first));
+
+        let saved = serde_json::to_string(&state.saved_spaces()).unwrap();
+        let restored = BrowserState::from_saved(
+            serde_json::from_str(&saved).unwrap(),
+            "https://example.com",
+            "",
+            false,
+        );
+        assert_eq!(restored.active_workspace, second);
+        let tab = restored.active_tab().unwrap();
+        assert!(tab.pinned);
+        assert_eq!(tab.title, "Notes");
+        assert_eq!(tab.url, "https://example.org/notes");
+
+        let opened = BrowserState::from_saved(
+            serde_json::from_str(&saved).unwrap(),
+            "https://example.net",
+            "",
+            true,
+        );
+        assert_eq!(opened.active_workspace, second);
+        let tab = opened.active_tab().unwrap();
+        assert!(!tab.pinned);
+        assert_eq!(tab.url, "https://example.net");
+        assert_eq!(opened.workspaces[second].tabs.len(), 2);
+    }
+
+    #[test]
+    fn grouping_creates_a_folder_in_the_same_workspace() {
+        let mut state = BrowserState::new("https://example.com/a");
+        let first = state.active_tab.unwrap();
+        let second = state.add_tab(0, "https://example.com/b");
+        let third = state.add_tab(0, "https://example.com/c");
+        let unrelated = state.add_workspace("Research");
+        let foreign = state.add_tab(unrelated, "https://example.org");
+        let (folder, true) = state.group_tabs(second, first).unwrap() else {
+            panic!("dropping on a loose tab should create a folder");
+        };
+        assert_eq!(state.group_tabs(second, third), Some((folder, false)));
+        assert_eq!(state.group_tabs(second, foreign), None);
+        assert_eq!(state.workspaces.len(), 2);
+        let tabs = &state.workspaces[0].tabs;
+        assert_eq!(
+            tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            [second, third, first]
+        );
+        assert!(tabs.iter().all(|tab| tab.folder == Some(folder)));
+        assert!(!state.move_tab(first, unrelated, 0, Some(folder)));
+        assert!(state.move_tab(third, unrelated, 1, None));
+        assert_eq!(state.tab(third).unwrap().folder, None);
+        assert!(state.remove_folder(folder));
+        assert_eq!(state.active_tab, Some(first));
+        assert_eq!(state.workspaces[0].tabs.len(), 2);
+        assert!(
+            state.workspaces[0]
+                .tabs
+                .iter()
+                .all(|tab| tab.folder.is_none())
+        );
+    }
+
+    #[test]
+    fn restores_folder_members_and_collapsed_state_alongside_legacy_pins() {
+        let saved: SavedSpaces = serde_json::from_str(
+            r#"{
+            "spaces": [
+                {"name": "Home", "pins": [{"url": "https://example.com", "title": "Home pin"}]},
+                {"name": "Work", "pins": [], "folders": [
+                    {"name": "Notes", "collapsed": true, "tabs": [
+                        {"site": {"url": "https://example.org/a", "title": "A"}},
+                        {"site": {"url": "https://example.org/b", "title": "B"}, "pinned": true}
+                    ]}
+                ]}
+            ],
+            "active": 1
+        }"#,
+        )
+        .unwrap();
+        let state = BrowserState::from_saved(saved, "https://example.net", "", false);
+        let saved = state.saved_spaces();
+        let restored = BrowserState::from_saved(saved, "https://example.net", "", false);
+        assert_eq!(restored.active_workspace, 1);
+        assert_eq!(restored.adjacent_workspace(true), Some(0));
+        assert_eq!(restored.adjacent_workspace(false), Some(0));
+        let workspace = &restored.workspaces[1];
+        let folder = &workspace.folders[0];
+        assert_eq!(folder.name, "Notes");
+        assert!(folder.collapsed);
+        assert_eq!(workspace.tabs.len(), 2);
+        assert!(
+            workspace
+                .tabs
+                .iter()
+                .all(|tab| tab.folder == Some(folder.id))
+        );
+        assert_eq!(workspace.tabs[0].title, "A");
+        assert!(!workspace.tabs[0].pinned);
+        assert_eq!(workspace.tabs[1].pin_anchor.as_ref().unwrap().title, "B");
+        assert!(restored.workspaces[0].tabs[0].pinned);
+        assert!(restored.workspaces[0].folders.is_empty());
+    }
+
+    #[test]
+    fn moving_a_tab_updates_the_space_and_invalidates_the_old_selection() {
+        let mut state = BrowserState::new("https://example.com");
+        let initial = state.active_tab.unwrap();
+        let replacement = state.add_zervo_page(0);
+        let second = state.add_workspace("Work");
+        assert!(state.move_tab(initial, second, 0, None));
+        assert!(state.select_tab(initial));
+        assert_eq!(state.active_workspace, second);
+        assert_eq!(state.tab_for_workspace(0), Some(replacement));
+        assert!(state.remove_workspace(0));
+        assert_eq!(state.active_workspace, 0);
+        assert_eq!(state.active_tab, Some(initial));
     }
 }

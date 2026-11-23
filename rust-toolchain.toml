@@ -1,7 +1,6 @@
-# Matches the toolchain Servo pins, since Zervo builds the engine from source.
-# When bumping Servo in Cargo.toml, check servo/rust-toolchain.toml too.
+# Pin Zervo's stable toolchain so local builds and CI use the same compiler.
 [toolchain]
-channel = "1.99.1"
+channel = "1.100.0"
 # Minimal plus exactly what is used. The default profile also pulls rust-docs
 # and the full standard library documentation — several hundred megabytes that
 # every CI job downloaded and nothing ever read.

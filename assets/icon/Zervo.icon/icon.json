@@ -1,42 +1,54 @@
 {
-  "fill" : {
-    "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
-  },
+  "fill" : "system-light",
   "groups" : [
     {
       "layers" : [
         {
           "glass" : true,
-          "image-name" : "zervo-3-glyph.svg",
-          "name" : "zervo-3-glyph"
+          "image-name" : "04 Green segment.svg",
+          "name" : "Green segment"
         },
         {
-          "image-name" : "zervo-2-ring.svg",
-          "name" : "zervo-2-ring"
-        },
-        {
-          "blend-mode" : "normal",
-          "fill" : "automatic",
           "glass" : true,
-          "hidden" : false,
-          "image-name" : "zervo-1-background.svg",
-          "name" : "zervo-1-background"
+          "image-name" : "03 Teal segments.svg",
+          "name" : "Teal segments"
+        },
+        {
+          "glass" : true,
+          "image-name" : "02 Blue segments.svg",
+          "name" : "Blue segments"
         }
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0.25
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.3
+        "value" : 0.2
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "01 Frosted hub.svg",
+          "name" : "Frosted hub"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.24
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.36
       }
     }
   ],
   "supported-platforms" : {
-    "circles" : [
-      "watchOS"
-    ],
-    "squares" : "shared"
+    "squares" : [
+      "macOS"
+    ]
   }
 }

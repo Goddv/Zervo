@@ -108,7 +108,7 @@ impl Card {
             Card::Notes => tr("newtab-note"),
             Card::Tasks => tr("newtab-to-do"),
             Card::Workspaces => tr("newtab-workspaces"),
-            Card::Mark => tr("newtab-zervo-mark"),
+            Card::Mark => tr("newtab-zervo-icon"),
         }
     }
 
@@ -312,7 +312,14 @@ pub fn draw(
     // drawn against. They are not the same once the seam closes: the page
     // stops painting a base and shows the window's backdrop through a veil,
     // but a gradient still has to be a gradient *of* something.
-    let ground = theme::page_ground(&palette);
+    let native_frost =
+        chrome.native_glass.vibrancy_available && palette.translucency.is_translucent();
+    let ground = if native_frost {
+        // Leave the AppKit window backdrop visible through the new-tab page.
+        theme::page_veil(&palette, 0.18)
+    } else {
+        theme::page_ground(&palette)
+    };
     let base = theme::page_base(&palette);
     let radius = theme::content_corners(&palette);
 
@@ -350,9 +357,14 @@ pub fn draw(
         }));
     }
     if !over_photo {
+        let mut pattern = backdrop.clone();
+        if native_frost {
+            // Patterns and animations remain visible as a tint on the frost.
+            pattern.multiply_opacity(0.52);
+        }
         ambient |= crate::ui::paint_newtab_background(
             root,
-            &backdrop,
+            &pattern,
             page_rect,
             &palette,
             chrome.settings.new_tab_background,
@@ -378,12 +390,7 @@ pub fn draw(
 
     // ── The page's own margins, and a ceiling on how wide the grid gets.
     //
-    // Full-page mode's address pill floats over the page rather than taking
-    // space off it, so nothing else will leave room for it and the page's own
-    // bottom row was landing underneath it.
-    let inner = content_rect
-        .shrink2(vec2(PAGE_PAD, PAGE_PAD * 0.8))
-        .with_max_y(content_rect.max.y - crate::ui::floating_chrome_room(chrome.settings));
+    let inner = content_rect.shrink2(vec2(PAGE_PAD, PAGE_PAD * 0.8));
     let width = inner.width().min(CANVAS_MAX);
     let canvas = Rect::from_center_size(
         pos2(inner.center().x, inner.center().y),
@@ -573,7 +580,7 @@ fn paint_photo(
     // all: epaint never reuses a texture id, and egui hands back the target
     // value immediately for an id it has not seen before — so every wallpaper
     // arrived at full strength on its first frame and none of them ever faded.
-    let seen = Id::new("zervo_newtab_photo");
+    let seen = Id::unique("zervo_newtab_photo");
     let ramp = seen.with("fade");
     let ctx = root.ctx();
     if ctx.data(|data| data.get_temp::<egui::TextureId>(seen)) != Some(texture.id()) {
@@ -588,38 +595,19 @@ fn paint_photo(
     // all. A frame that draws nothing still has to ask for the next one.
     *ambient |= fade < 1.0;
 
-    // The picture is fitted to the page at its *full* height and then cropped
-    // as the widget shelf takes space off the top, rather than refitted to
-    // whatever is left. Refitting rescales the photograph on every frame of
-    // the drag, which reads as the wallpaper breathing in and out; cropping
-    // holds it still.
-    //
-    // Between held-still and moving-with-the-page, it drifts down at half the
-    // rate the page does. That is what makes opening the shelf read as a bar
-    // sliding down over a wallpaper that is behind it, rather than the whole
-    // page moving as one sheet.
-    const PARALLAX: f32 = 0.5;
-    let reveal = crate::ui::shelf_reveal(chrome.settings).max(0.0);
-    let full = Rect::from_min_max(
-        pos2(content_rect.min.x, content_rect.min.y - reveal),
-        content_rect.max,
-    );
-    let fitted = cover(texture.size_vec2(), full);
-    let hidden = if full.height() > 1.0 {
-        (reveal / full.height()).clamp(0.0, 1.0)
-    } else {
-        0.0
+    let uv = cover(texture.resolution_vec2(), content_rect);
+    let frosted = chrome.native_glass.vibrancy_available && palette.translucency.is_translucent();
+    let (background, opacity) = match (frosted, chrome.wallpaper.frost) {
+        (true, Some(frost)) => (frost.id(), 0.88),
+        _ => (texture.id(), 1.0),
     };
-    // The band's height is the visible fraction of the full page, so the
-    // points-per-pixel of the picture never changes — only which part shows.
-    let top = fitted.min.y + fitted.height() * hidden * PARALLAX;
-    let uv = Rect::from_min_max(
-        pos2(fitted.min.x, top),
-        pos2(fitted.max.x, top + fitted.height() * (1.0 - hidden)),
-    );
     backdrop.add(
-        egui::epaint::RectShape::filled(content_rect, radius, Color32::WHITE.gamma_multiply(fade))
-            .with_texture(texture.id(), uv),
+        egui::epaint::RectShape::filled(
+            content_rect,
+            radius,
+            Color32::WHITE.gamma_multiply(fade * opacity),
+        )
+        .with_texture(background, uv),
     );
     // The veil: a light wash over the whole picture, and a heavier scrim at
     // the top and bottom edges.
@@ -786,7 +774,7 @@ fn draw_header(
         false,
     );
     let add_anchor = add.rect;
-    let menu_id = Id::new("zervo_newtab_add_open");
+    let menu_id = Id::unique("zervo_newtab_add_open");
     if add.clicked() {
         // Adding puts the page into edit mode: the card lands somewhere, and
         // somewhere is rarely where it is wanted.
@@ -817,7 +805,7 @@ fn draw_header(
             Some(card) => {
                 root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
                 root.ctx()
-                    .data_mut(|data| data.insert_temp(Id::new("zervo_newtab_added"), card));
+                    .data_mut(|data| data.insert_temp(Id::unique("zervo_newtab_added"), card));
             },
             None if root.input(|input| input.pointer.any_pressed())
                 && !crate::dashboard::over_menu(root.ctx())
@@ -855,7 +843,7 @@ fn draw_header(
         );
         if reset.clicked() {
             root.ctx()
-                .data_mut(|data| data.insert_temp(Id::new("zervo_newtab_reset"), true));
+                .data_mut(|data| data.insert_temp(Id::unique("zervo_newtab_reset"), true));
         }
     }
 }
@@ -892,7 +880,7 @@ fn header_button(
 
     let response = root.interact(
         rect,
-        Id::new("zervo_newtab_header").with(label),
+        Id::unique("zervo_newtab_header").with(label),
         Sense::click(),
     );
     let hover = glass::ease_out(root.ctx().animate_bool_with_time(
@@ -961,7 +949,7 @@ fn draw_backdrop_menu(
     use crate::wallpaper::{Source, Subject};
 
     let palette = chrome.palette;
-    let menu_id = Id::new("zervo_newtab_backdrop_open");
+    let menu_id = Id::unique("zervo_newtab_backdrop_open");
     if trigger.clicked() {
         let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
         root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
@@ -1099,7 +1087,7 @@ fn draw_credit(
     let clickable = !credit.page.is_empty();
     let response = root.interact(
         hit,
-        Id::new("zervo_newtab_credit"),
+        Id::unique("zervo_newtab_credit"),
         if clickable {
             Sense::click()
         } else {
@@ -1147,13 +1135,13 @@ fn draw_board(
 
     // Deferred asks from the header, which cannot reach the change list from
     // where it is drawn.
-    let added = Id::new("zervo_newtab_added");
+    let added = Id::unique("zervo_newtab_added");
     if let Some(card) = ctx.data(|data| data.get_temp::<Card>(added)) {
         ctx.data_mut(|data| data.remove::<Card>(added));
         changes.push(Change::Add(card));
     }
     if ctx
-        .data_mut(|data| data.remove_temp::<bool>(Id::new("zervo_newtab_reset")))
+        .data_mut(|data| data.remove_temp::<bool>(Id::unique("zervo_newtab_reset")))
         .is_some()
     {
         changes.push(Change::Reset);
@@ -1172,7 +1160,7 @@ fn draw_board(
     let rows = needed.max(metrics.rows);
     let overflow = (metrics.height_for(rows) - board.height()).max(0.0);
 
-    let scroll_id = Id::new("zervo_newtab_scroll");
+    let scroll_id = Id::unique("zervo_newtab_scroll");
     let mut scroll = ctx
         .data(|data| data.get_temp::<f32>(scroll_id))
         .unwrap_or(0.0);
@@ -1218,9 +1206,9 @@ fn draw_board(
         );
     }
 
-    let drag_id = Id::new("zervo_newtab_drag");
-    let grab_id = Id::new("zervo_newtab_grab");
-    let resize_id = Id::new("zervo_newtab_resize");
+    let drag_id = Id::unique("zervo_newtab_drag");
+    let grab_id = Id::unique("zervo_newtab_grab");
+    let resize_id = Id::unique("zervo_newtab_resize");
     let held = ctx.data(|data| data.get_temp::<usize>(drag_id));
     let resizing = ctx.data(|data| data.get_temp::<usize>(resize_id));
     // Where inside the card the pointer went down. Kept, so a card follows the
@@ -1311,6 +1299,7 @@ fn draw_board(
             continue;
         }
 
+        let widget = crate::overlay_glass::Surface::begin(area);
         ambient |= draw_tile(
             area,
             chrome,
@@ -1318,6 +1307,7 @@ fn draw_board(
             drawn,
             ink,
             false,
+            widget.is_native(),
             card_id(index),
             actions,
         );
@@ -1335,9 +1325,11 @@ fn draw_board(
                 area, &palette, &metrics, *tile, index, drawn, changes, resizing,
             );
         }
+        widget.finish(area, drawn, crate::overlay_glass::Role::Widget);
     }
 
     if let Some((index, tile, drawn)) = carried {
+        let widget = crate::overlay_glass::Surface::begin(area);
         ambient |= draw_tile(
             area,
             chrome,
@@ -1345,9 +1337,11 @@ fn draw_board(
             drawn,
             ink,
             true,
+            widget.is_native(),
             card_id(index),
             actions,
         );
+        widget.finish(area, drawn, crate::overlay_glass::Role::Widget);
     }
 
     if overflow > 0.0 {
@@ -1395,7 +1389,7 @@ fn draw_handles(
     if area
         .interact(
             close,
-            Id::new("zervo_newtab_remove").with(index),
+            Id::unique("zervo_newtab_remove").with(index),
             Sense::click(),
         )
         .on_hover_cursor(CursorIcon::PointingHand)
@@ -1426,7 +1420,7 @@ fn draw_resizer(
     resizing: Option<usize>,
 ) {
     let ctx = area.ctx().clone();
-    let resize_id = Id::new("zervo_newtab_resize");
+    let resize_id = Id::unique("zervo_newtab_resize");
     let corner =
         Rect::from_center_size(pos2(rect.max.x - 12.0, rect.max.y - 12.0), vec2(22.0, 22.0));
     icons::draw_icon(
@@ -1437,7 +1431,7 @@ fn draw_resizer(
     );
     let handle = area.interact(
         corner,
-        Id::new("zervo_newtab_size").with(index),
+        Id::unique("zervo_newtab_size").with(index),
         Sense::click_and_drag(),
     );
     if handle.hovered() || resizing == Some(index) {
@@ -1541,7 +1535,7 @@ fn apply(chrome: &mut ChromeContext, changes: Vec<Change>) -> bool {
 /// exactly the same height — either would collide on any other key, and egui
 /// answers a collision with a red banner across the page.
 fn card_id(index: usize) -> Id {
-    Id::new("zervo_newtab_card").with(index)
+    Id::unique("zervo_newtab_card").with(index)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -1552,6 +1546,7 @@ fn draw_tile(
     rect: Rect,
     ink: &Ink,
     carried: bool,
+    native_material: bool,
     id: Id,
     actions: &mut Vec<UiAction>,
 ) -> bool {
@@ -1564,9 +1559,20 @@ fn draw_tile(
     // only for a card that happens to sit where the page was sampled — a
     // photograph is dark sky at the top and bright water at the bottom, and
     // pale text set for the sky disappears into the water.
-    let card_ink = ink.over(&palette, rect, framed);
+    let card_ink = if native_material {
+        Ink::new(&palette, false)
+    } else {
+        ink.over(&palette, rect, framed)
+    };
     let ink = &card_ink;
-    if framed && tile.card != Card::Search {
+    if native_material && editing {
+        area.painter().rect_stroke(
+            rect,
+            crate::overlay_glass::Role::Widget.radius(),
+            Stroke::new(1.0, palette.accent.gamma_multiply(0.55)),
+            StrokeKind::Inside,
+        );
+    } else if !native_material && framed && tile.card != Card::Search {
         let material = if carried {
             Glass::tier(Tier::Card)
         } else if editing {
@@ -1616,7 +1622,18 @@ fn draw_tile(
     let live = !editing && !carried;
 
     match tile.card {
-        Card::Search => draw_search(area, chrome, rect, ink, live, id, actions, Search::Card),
+        Card::Search => draw_search(
+            area,
+            chrome,
+            rect,
+            ink,
+            live,
+            id,
+            actions,
+            Search::Card {
+                native_widget: native_material,
+            },
+        ),
         Card::Clock => return draw_clock(area, rect, ink),
         Card::WorldClocks => return draw_world_clocks(area, chrome, body, ink),
         Card::QuickLinks => draw_quick_links(area, chrome, body, live, id, actions),
@@ -1628,7 +1645,7 @@ fn draw_tile(
         Card::Notes => draw_notes(area, chrome, body, live, id),
         Card::Tasks => draw_tasks(area, chrome, body, live, id),
         Card::Workspaces => draw_workspaces(area, chrome, body, live, id, actions),
-        Card::Mark => draw_mark(area, &palette, rect, ink),
+        Card::Mark => draw_mark(area, &palette, rect),
     }
     false
 }
@@ -1664,11 +1681,9 @@ fn draw_composed(
     ink: &Ink,
     actions: &mut Vec<UiAction>,
 ) -> bool {
-    let now = jiff::ZonedDateTime::now();
-
     // Reserve enough room for the clock, greeting and search before showing
     // recent sites. The shelf can leave this page only a few rows high.
-    const MIN_HERO_HEIGHT: f32 = 124.0;
+    const MIN_HERO_HEIGHT: f32 = 148.0;
     let resume: Vec<Resume> = Resume::recent(chrome, 3);
     let strip = resume_height(&resume);
     let strip = if canvas.height() >= strip + MIN_HERO_HEIGHT {
@@ -1686,28 +1701,19 @@ fn draw_composed(
     let hero_ink = ink.over(&chrome.palette, hero, false);
     let centre = hero.center();
     let field_height = (hero.height() * 0.28).clamp(44.0, HERO_HEIGHT);
-    let size = (hero.height() * 0.30)
-        .clamp(40.0, 92.0)
-        .min(hero.height() - field_height - 36.0);
-    let top = centre.y - (size + 36.0 + field_height) / 2.0;
-    hero_ink.write(
-        root.painter(),
-        pos2(centre.x, top + size / 2.0),
-        Align2::CENTER_CENTER,
-        now.strftime("%H:%M").to_string(),
-        crate::ui::display_font(size),
-        hero_ink.text,
+    let size = 42.0;
+    let top = centre.y - (size + 46.0 + field_height) / 2.0;
+    crate::ui::paint_application_icon(
+        root,
+        Rect::from_center_size(pos2(centre.x, top + size / 2.0), vec2(size, size)),
+        chrome.palette.dark,
     );
     hero_ink.write(
         root.painter(),
-        pos2(centre.x, top + size + 10.0),
+        pos2(centre.x, top + size + 12.0),
         Align2::CENTER_CENTER,
-        format!(
-            "{} · {}",
-            now.strftime("%A, %-d %B"),
-            greeting(chrome.settings)
-        ),
-        FontId::proportional(14.0),
+        tr("common-new-tab"),
+        FontId::proportional(15.5),
         hero_ink.muted,
     );
     let field = Rect::from_center_size(
@@ -1720,13 +1726,10 @@ fn draw_composed(
         field,
         ink,
         true,
-        Id::new("zervo_newtab_hero"),
+        Id::unique("zervo_newtab_hero"),
         actions,
         Search::Hero,
     );
-    root.ctx()
-        .request_repaint_after(std::time::Duration::from_secs(20));
-
     // ── Pick up where you left off.
     if strip <= 0.0 {
         return false;
@@ -1820,7 +1823,7 @@ fn draw_composed(
         tr("newtab-pin-a-site"),
         true,
     ) {
-        let menu_id = Id::new("zervo_newtab_pin_open");
+        let menu_id = Id::unique("zervo_newtab_pin_open");
         if response.clicked() {
             let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
             root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
@@ -1932,7 +1935,7 @@ fn draw_resume(
     let palette = &chrome.palette;
     let response = root.interact(
         rect,
-        Id::new("zervo_newtab_resume").with(index),
+        Id::unique("zervo_newtab_resume").with(index),
         Sense::click(),
     );
     let hover = glass::ease_out(root.ctx().animate_bool_with_time(
@@ -1940,16 +1943,32 @@ fn draw_resume(
         response.hovered(),
         0.12,
     ));
-    glass::paint(
-        root.painter(),
-        rect,
-        palette,
-        Glass::tier(Tier::Panel)
-            .strength(0.82 + 0.18 * hover)
-            .ring(palette.accent_ring(0.14 + 0.14 * hover))
-            .opaque(palette.bg),
-    );
-    let ink = Ink::new(palette, false).over(palette, rect, true);
+    let widget = crate::overlay_glass::Surface::begin(root);
+    if widget.is_native() {
+        if hover > 0.0 {
+            root.painter().rect_filled(
+                rect,
+                crate::overlay_glass::Role::Widget.radius(),
+                palette.surface_hover.gamma_multiply(hover * 0.24),
+            );
+        }
+    } else {
+        glass::paint(
+            root.painter(),
+            rect,
+            palette,
+            Glass::tier(Tier::Panel)
+                .strength(0.82 + 0.18 * hover)
+                .ring(palette.accent_ring(0.14 + 0.14 * hover))
+                .opaque(palette.bg),
+        );
+    }
+    let ink = Ink::new(palette, false);
+    let ink = if widget.is_native() {
+        ink
+    } else {
+        ink.over(palette, rect, true)
+    };
 
     // The badge: the host's initial on a small square, which is what a favicon
     // would occupy if the page had one to hand.
@@ -1998,6 +2017,7 @@ fn draw_resume(
         FontId::proportional(11.0),
         ink.muted,
     );
+    widget.finish(root, rect, crate::overlay_glass::Role::Widget);
     response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -2027,7 +2047,7 @@ fn draw_site_chip(
 
     let response = root.interact(
         rect,
-        Id::new("zervo_newtab_chip").with(label),
+        Id::unique("zervo_newtab_chip").with(label),
         Sense::click(),
     );
     let hover = glass::ease_out(root.ctx().animate_bool_with_time(
@@ -2122,9 +2142,11 @@ fn draw_narrow(
         pill,
         ink,
         true,
-        Id::new("zervo_newtab_narrow"),
+        Id::unique("zervo_newtab_narrow"),
         actions,
-        Search::Card,
+        Search::Card {
+            native_widget: false,
+        },
     );
 }
 
@@ -2135,7 +2157,7 @@ fn draw_narrow(
 enum Search {
     /// A card on the board: the pill tier's corner, and the card's own height
     /// held between a readable minimum and maximum.
-    Card,
+    Card { native_widget: bool },
     /// 7a's hero: a capsule sixty points tall, ringed and lit, with the
     /// keyboard shortcut on the end. "The field, big and centred" is most of
     /// what that page is.
@@ -2154,12 +2176,93 @@ fn draw_search(
     look: Search,
 ) {
     let palette = chrome.palette;
-    let hero = look == Search::Hero;
-    let height = if hero {
-        rect.height()
-    } else {
-        rect.height().clamp(38.0, 52.0)
-    };
+    let native_widget = matches!(
+        look,
+        Search::Card {
+            native_widget: true
+        }
+    );
+    let surface = (!native_widget).then(|| crate::overlay_glass::Surface::begin(area));
+    let native_material = native_widget
+        || surface
+            .as_ref()
+            .is_some_and(crate::overlay_glass::Surface::is_native);
+    if look == Search::Hero {
+        let response = area.interact(rect, id, Sense::click());
+        let fill = if response.hovered() {
+            palette.surface_hover
+        } else {
+            palette.surface
+        };
+        if !native_material || response.hovered() {
+            area.painter().rect_filled(
+                rect,
+                12,
+                if native_material {
+                    fill.gamma_multiply(0.35)
+                } else {
+                    fill
+                },
+            );
+        }
+        if !native_material {
+            area.painter().rect_stroke(
+                rect,
+                12,
+                Stroke::new(1.0_f32, palette.border),
+                StrokeKind::Inside,
+            );
+        }
+        if response.has_focus() {
+            icons::paint_focus(area, &palette, rect, Tier::Control);
+        }
+        let label = tr("chrome-search-or-enter-an-address");
+        icons::draw_icon(
+            area.painter(),
+            Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), vec2(17.0, 17.0)),
+            Icon::Search,
+            palette.text_muted,
+        );
+        let key = if cfg!(target_os = "macos") {
+            "⌘L"
+        } else {
+            "Ctrl+L"
+        };
+        if rect.width() >= 260.0 {
+            area.painter().text(
+                pos2(rect.right() - 16.0, rect.center().y),
+                Align2::RIGHT_CENTER,
+                key,
+                FontId::proportional(12.0),
+                palette.text_muted,
+            );
+        }
+        let mut text = egui::text::LayoutJob::simple_singleline(
+            label.to_owned(),
+            FontId::proportional(15.0),
+            palette.text,
+        );
+        text.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 106.0).max(48.0));
+        let text = area.painter().layout_job(text);
+        area.painter().galley(
+            pos2(rect.left() + 46.0, rect.center().y - text.size().y / 2.0),
+            text,
+            palette.text,
+        );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, live, label));
+        if live
+            && response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+        {
+            actions.push(UiAction::OpenCommand(crate::ui::CommandMode::CurrentTab));
+        }
+        if let Some(surface) = surface {
+            surface.finish(area, rect, crate::overlay_glass::Role::Field);
+        }
+        return;
+    }
+    let height = rect.height().clamp(38.0, 52.0);
     let pill = Rect::from_center_size(rect.center(), vec2(rect.width(), height));
 
     // Focus is read from what last frame recorded. A frame's lag on a
@@ -2176,31 +2279,26 @@ fn draw_search(
     // Over a photograph there is, and the material frosts against that instead
     // — this is what the pill falls back to on a plain or generated backdrop.
     let backing = palette.bg;
-    let material = if hero {
-        // A capsule, per 7a — the one surface in the design whose corner is
-        // half its own height rather than a tier.
-        Glass::new((height * 0.5) as u8)
-    } else {
-        Glass::tier(Tier::Pill)
-    };
-    glass::paint(
-        area.painter(),
-        pill,
-        &palette,
-        material
-            .strength(1.0)
-            // `0 0 0 1px accent(.24)` on 5a's search field and .28 on 7a's
-            // hero, and lit before it is focused — focus deepens the ring
-            // rather than introducing it.
-            .ring(palette.accent_ring(if hero { 0.28 } else { 0.24 } + 0.4 * focus))
-            .glow((0.5 + 0.5 * focus).min(1.0))
-            // No `fades()`: it is a text field, not a card, and a text field
-            // nobody can find is not one. The history search field is solid
-            // for exactly this reason.
-            .opaque(backing),
-    );
-    let glyph = if hero { 19.0 } else { 16.0 };
-    let lead = if hero { 26.0 } else { 20.0 };
+    if !native_material {
+        glass::paint(
+            area.painter(),
+            pill,
+            &palette,
+            Glass::tier(Tier::Pill)
+                .strength(1.0)
+                // `0 0 0 1px accent(.24)` on 5a's search field and .28 on 7a's
+                // hero, and lit before it is focused — focus deepens the ring
+                // rather than introducing it.
+                .ring(palette.accent_ring(0.24 + 0.4 * focus))
+                .glow((0.5 + 0.5 * focus).min(1.0))
+                // No `fades()`: it is a text field, not a card, and a text field
+                // nobody can find is not one. The history search field is solid
+                // for exactly this reason.
+                .opaque(backing),
+        );
+    }
+    let glyph = 16.0;
+    let lead = 20.0;
     icons::draw_icon(
         area.painter(),
         Rect::from_center_size(pos2(pill.min.x + lead, pill.center().y), vec2(glyph, glyph)),
@@ -2209,27 +2307,11 @@ fn draw_search(
     );
 
     let hint = crate::l10n::message(
-        if hero {
-            "newtab-search-hero"
-        } else {
-            "newtab-search-compact"
-        },
+        "newtab-search-compact",
         [("engine", chrome.settings.search_engine.label().into())],
     );
-    // The shortcut, on the end of the hero. ⌘L already focuses the address
-    // pill from anywhere; saying so on the one field the page is built around
-    // costs a line of type and answers the question it raises.
-    let tail = if hero { 46.0 } else { 14.0 };
-    if hero {
-        area.painter().text(
-            pos2(pill.max.x - 20.0, pill.center().y),
-            Align2::RIGHT_CENTER,
-            "\u{2318}L",
-            FontId::monospace(11.0),
-            palette.text_muted.gamma_multiply(0.75),
-        );
-    }
-    let font = if hero { 15.0_f32 } else { 14.5 };
+    let tail = 14.0;
+    let font = 14.5;
     let field = Rect::from_min_max(
         pos2(pill.min.x + lead + glyph * 0.5 + 12.0, pill.min.y),
         pos2(pill.max.x - tail, pill.max.y),
@@ -2254,6 +2336,9 @@ fn draw_search(
             FontId::proportional(font),
             palette.text_muted,
         );
+        if let Some(surface) = surface {
+            surface.finish(area, pill, crate::overlay_glass::Role::Field);
+        }
         return;
     }
 
@@ -2279,7 +2364,11 @@ fn draw_search(
     // not have known to give it: the ink `Palette::over` picks for whatever is
     // behind this particular pill.
     if chrome.browser.newtab_query.is_empty() {
-        let over = ink.over(&palette, pill, true);
+        let muted = if native_material {
+            palette.text_muted
+        } else {
+            ink.over(&palette, pill, true).muted
+        };
         area.painter().text(
             pos2(field.min.x, field.center().y),
             Align2::LEFT_CENTER,
@@ -2290,14 +2379,14 @@ fn draw_search(
                 field.width(),
             ),
             FontId::proportional(font),
-            theme::mix(over.muted, over.text, if hero { 0.25 } else { 0.0 }),
+            muted,
         );
     }
     let editor = TextEdit::singleline(&mut chrome.browser.newtab_query)
         .frame(Frame::NONE)
         .font(FontId::proportional(font))
         .text_color(palette.text)
-        .vertical_align(egui::Align::Center)
+        .align(egui::Align2::LEFT_CENTER)
         .desired_width(field.width());
     let response = inner.add(editor);
     let has_focus = response.has_focus();
@@ -2311,6 +2400,12 @@ fn draw_search(
             crate::ui::normalize_url(&chrome.browser.newtab_query, chrome.settings.search_engine);
         chrome.browser.newtab_query.clear();
         actions.push(UiAction::Navigate(target));
+    }
+    if has_focus && native_material {
+        icons::paint_focus(area, &palette, pill, Tier::Control);
+    }
+    if let Some(surface) = surface {
+        surface.finish(area, pill, crate::overlay_glass::Role::Field);
     }
 }
 
@@ -3043,7 +3138,7 @@ fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool,
             .frame(Frame::NONE)
             .font(FontId::proportional(12.5))
             .text_color(palette.text)
-            .vertical_align(egui::Align::Center)
+            .align(egui::Align2::LEFT_CENTER)
             .hint_text(RichText::new(tr("newtab-add-something")).color(palette.text_muted))
             .desired_width(entry.width());
         let response = inner.add(editor);
@@ -3143,16 +3238,13 @@ fn draw_workspaces(
     }
 }
 
-fn draw_mark(area: &mut Ui, palette: &Palette, rect: Rect, ink: &Ink) {
-    let height = (rect.height() * 0.44).clamp(20.0, 76.0);
-    let color = if ink.photo {
-        Color32::from_white_alpha(210)
-    } else if palette.dark {
-        Color32::from_white_alpha(200)
-    } else {
-        theme::mix(palette.text, palette.accent, 0.35)
-    };
-    crate::ui::draw_zervo_mark(area.painter(), rect.center(), height, color);
+fn draw_mark(area: &Ui, palette: &Palette, rect: Rect) {
+    let size = (rect.height() * 0.44).clamp(20.0, 76.0);
+    crate::ui::paint_application_icon(
+        area,
+        Rect::from_center_size(rect.center(), vec2(size, size)),
+        palette.dark,
+    );
 }
 
 // ── Small pieces every card uses ───────────────────────────────────────────

@@ -12,17 +12,14 @@ use egui::{
 
 use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
-use crate::settings::{AppIcon, NewTabBackground, NewTabPage, SearchEngine};
+use crate::settings::{MAX_ACCENT_STRENGTH, NewTabBackground, NewTabPage, SearchEngine};
 use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier};
 use crate::widgets;
 
 use super::*;
 
-/// How tall the pinned specimen is on the Appearance page.
-///
-/// Enough for a card, an input and a strip of chrome side by side at a
-/// readable size, and no more: it is a reference, not the page.
 const SPECIMEN_HEIGHT: f32 = 190.0;
+const SETTINGS_COLUMN: f32 = 610.0;
 
 pub(crate) fn draw_settings_page(
     root: &mut Ui,
@@ -31,210 +28,288 @@ pub(crate) fn draw_settings_page(
     actions: &mut Vec<UiAction>,
 ) {
     let palette = chrome.palette;
-    let painter = root.ctx().layer_painter(egui::LayerId::background());
-    let card_radius = theme::content_corners(&palette);
-    painter.rect_filled(content_rect, card_radius, palette.surface);
-
-    // The page's own contents start below the window's controls. The colour
-    // above still runs to the window's edge — it is the *heading* that has to
-    // move, not the page.
-    let laid_out = Rect::from_min_max(
-        pos2(
-            content_rect.min.x,
-            content_rect.min.y + crate::ui::window_controls_room(chrome.settings),
-        ),
-        content_rect.max,
+    let ctx = root.ctx().clone();
+    ctx.layer_painter(egui::LayerId::background()).rect_filled(
+        content_rect,
+        theme::content_corners(&palette),
+        palette.bg,
     );
 
-    // ── Left navigation column, Chrome-style: categories on the left, the
-    // selected category's panel on the right.
-    let nav_width = 188.0_f32.min(content_rect.width() * 0.34);
-    let nav_rect = Rect::from_min_size(laid_out.min, vec2(nav_width, laid_out.height()));
-    painter.rect_filled(
-        // The column's colour runs the full height of the page even where its
-        // contents start lower, or full-page mode would show a bite out of the
-        // top of it.
-        Rect::from_min_max(content_rect.min, pos2(nav_rect.max.x, content_rect.max.y)),
-        CornerRadius {
-            nw: card_radius.nw,
-            sw: card_radius.sw,
-            ne: 0,
-            se: 0,
-        },
-        theme::mix(palette.surface, palette.bg, 0.75),
+    let top = content_rect.top() + chrome.window_controls_room() + 22.0;
+    let inset = (content_rect.width() * 0.035).clamp(12.0, 36.0);
+    let page = Rect::from_min_max(
+        pos2(content_rect.left() + inset, top),
+        pos2(content_rect.right() - inset, content_rect.bottom() - 10.0),
     );
-    // The page as a menu opened over it will see it: the base and the
-    // navigation column, and none of the controls that are about to be drawn
-    // on them.
-    if let Some(capture) = &chrome.capture {
-        crate::backdrop::capture_into(&painter, content_rect, capture);
-    }
+    let wide = page.width() >= 680.0;
+    let mut area = root.new_child(egui::UiBuilder::new().max_rect(page));
+    area.set_clip_rect(page.intersect(root.clip_rect()));
 
-    let mut nav_ui = root.new_child(
-        egui::UiBuilder::new()
-            .max_rect(nav_rect.shrink2(vec2(10.0, 14.0)))
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    {
-        let ui = &mut nav_ui;
-        ui.label(
+    use crate::state::SettingsSection;
+    let selection = &mut chrome.browser.settings_section;
+    let query = &mut chrome.browser.settings_query;
+    let mut pane = page;
+    if wide {
+        let nav = Rect::from_min_size(page.min, vec2(166.0, page.height()));
+        let mut nav_area = area.new_child(egui::UiBuilder::new().max_rect(nav));
+        nav_area.label(
             RichText::new(tr("common-settings"))
-                .size(17.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.add_space(10.0);
-        for section in crate::state::SettingsSection::ALL {
-            let selected = chrome.browser.settings_section == section;
-            let (rect, response) =
-                ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-            let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.id().with(("settings_nav", section)),
-                response.hovered() && !selected,
-                0.12,
-            ));
-            let select_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.id().with(("settings_nav_sel", section)),
-                selected,
-                0.18,
-            ));
-            if hover_t > 0.0 {
-                ui.painter().rect_filled(
-                    rect,
-                    palette.corner(Tier::Row),
-                    palette.surface_hover.gamma_multiply(hover_t),
-                );
-            }
-            if select_t > 0.0 {
-                ui.painter().rect_filled(
-                    rect,
-                    palette.corner(Tier::Row),
-                    palette.active.gamma_multiply(select_t),
-                );
-            }
-            let ink = if selected {
-                palette.text
-            } else {
-                palette.text_muted
-            };
-            let mut label = egui::text::LayoutJob::simple_singleline(
-                section.label().to_owned(),
-                FontId::proportional(13.5),
-                ink,
-            );
-            label.wrap =
-                egui::text::TextWrapping::truncate_at_width((rect.width() - 20.0).max(0.0));
-            let label = ui.painter().layout_job(label);
-            let response = if label.elided {
-                response.on_hover_text(section.label())
-            } else {
-                response
-            };
-            ui.painter().galley(
-                pos2(rect.min.x + 12.0, rect.center().y - label.size().y / 2.0),
-                label,
-                ink,
-            );
-            if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                chrome.browser.settings_section = section;
-            }
-        }
-    }
-
-    // ── Content pane: a pinned header, and sections that scroll under it.
-    let pane_rect = Rect::from_min_max(pos2(nav_rect.max.x, laid_out.min.y), laid_out.max)
-        .shrink2(vec2(6.0, 10.0));
-    let column = (pane_rect.width() - 40.0).clamp(240.0, 520.0);
-    let margin = ((pane_rect.width() - column) * 0.5).max(0.0);
-
-    // The title sits outside the scroll area, and on Appearance the specimen
-    // sits under it. Blur, fill, sheen and the edge are invisible on a page
-    // made of settings rows — you need a card, a menu and something to type
-    // into, side by side, to judge any of them — and a control adjusted with
-    // nothing to look at is a control adjusted blind.
-    let specimen = matches!(
-        chrome.browser.settings_section,
-        crate::state::SettingsSection::Appearance
-    );
-    let head_height = 14.0
-        + 26.0
-        + if specimen {
-            12.0 + SPECIMEN_HEIGHT
-        } else {
-            0.0
-        };
-    {
-        let mut head = root.new_child(
-            egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(
-                    pos2(pane_rect.min.x + margin, pane_rect.min.y + 14.0),
-                    pos2(
-                        pane_rect.min.x + margin + column,
-                        pane_rect.min.y + head_height,
-                    ),
-                ))
-                .layout(egui::Layout::top_down(egui::Align::Min)),
-        );
-        head.set_width(column);
-        head.label(
-            RichText::new(chrome.browser.settings_section.label())
                 .size(21.0)
                 .strong()
                 .color(palette.text),
         );
-        if specimen {
-            head.add_space(12.0);
-            let (rect, _) = head.allocate_exact_size(vec2(column, SPECIMEN_HEIGHT), Sense::hover());
-            appearance_specimen(&head, &palette, rect);
+        nav_area.add_space(12.0);
+        for section in SettingsSection::ALL {
+            if settings_nav(
+                &mut nav_area,
+                section,
+                *selection == section && query.is_empty(),
+                true,
+                &palette,
+            ) {
+                *selection = section;
+                query.clear();
+            }
         }
+        pane.min.x = nav.right() + 24.0;
+    } else {
+        area.label(
+            RichText::new(tr("common-settings"))
+                .size(20.0)
+                .strong()
+                .color(palette.text),
+        );
+        area.add_space(5.0);
+        area.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(3.0, 4.0);
+            for section in SettingsSection::ALL {
+                if settings_nav(
+                    ui,
+                    section,
+                    *selection == section && query.is_empty(),
+                    false,
+                    &palette,
+                ) {
+                    *selection = section;
+                    query.clear();
+                }
+            }
+        });
+        pane.min.y = area.min_rect().bottom() + 10.0;
     }
 
-    // A gap between the pinned header and what scrolls under it.
-    //
-    // They used to touch exactly, which is not the same as not overlapping:
-    // every section is a glass card and glass casts a shadow *outside* itself,
-    // so the first card's — and then every card's, as they scrolled past —
-    // fell across the specimen's bottom edge and smeared it. The gap is
-    // outside the scroll viewport, so it survives scrolling; a space inside it
-    // would scroll away with the first card.
-    const HEADER_GAP: f32 = 16.0;
-    let mut pane_ui = root.new_child(
+    let width = pane.width().min(SETTINGS_COLUMN);
+    let left = pane.center().x - width * 0.5;
+    let column = Rect::from_min_max(pos2(left, pane.top()), pos2(left + width, pane.bottom()));
+    let mut body = area.new_child(
         egui::UiBuilder::new()
-            .max_rect(Rect::from_min_max(
-                pos2(pane_rect.min.x, pane_rect.min.y + head_height + HEADER_GAP),
-                pane_rect.max,
-            ))
+            .max_rect(column)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
-    let ui = &mut pane_ui;
+    body.set_clip_rect(body.clip_rect().intersect(column));
+    let (field, _) = body.allocate_exact_size(vec2(width, 34.0), Sense::hover());
+    let mut entry = body.new_child(
+        egui::UiBuilder::new()
+            .max_rect(field)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let surface = crate::overlay_glass::Surface::begin(&entry);
+    if !surface.is_native() {
+        entry
+            .painter()
+            .rect_filled(field, 9, settings_card_fill(&palette));
+        entry.painter().rect_stroke(
+            field,
+            9,
+            Stroke::new(1.0_f32, palette.border),
+            egui::StrokeKind::Inside,
+        );
+    }
+    entry.add_space(10.0);
+    let (glyph, _) = entry.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+    icons::draw_icon(entry.painter(), glyph, Icon::Search, palette.text_muted);
+    let search = entry.add(
+        TextEdit::singleline(query)
+            .id_salt("settings_search")
+            .text_color(palette.text)
+            .hint_text(RichText::new(tr("settings-find")).color(palette.text_muted))
+            .desired_width((entry.available_width() - 34.0).max(1.0))
+            .frame(Frame::NONE),
+    );
+    if search.has_focus() && entry.input(|input| input.key_pressed(Key::Escape)) {
+        query.clear();
+    }
+    if !query.is_empty()
+        && icons::icon_button(&mut entry, Icon::Close, 12.0, &palette, true)
+            .on_hover_text(tr("settings-clear-search"))
+            .clicked()
+    {
+        query.clear();
+        search.request_focus();
+    }
+    surface.finish(&entry, field, crate::overlay_glass::Role::Field);
+
+    let section = *selection;
+    let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
+    let searching = !words.is_empty();
+    body.add_space(15.0);
+    body.label(
+        RichText::new(if searching {
+            tr("settings-search-results")
+        } else {
+            section.label()
+        })
+        .size(24.0)
+        .strong()
+        .color(palette.text),
+    );
+    body.add_space(12.0);
 
     egui::ScrollArea::vertical()
+        .id_salt((
+            "settings_cards",
+            if searching { None } else { Some(section) },
+        ))
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(margin);
-                ui.vertical(|ui| {
-                    ui.set_width(column);
-                    ui.add_space(14.0);
-                    match chrome.browser.settings_section {
-                        crate::state::SettingsSection::Appearance => {
-                            settings_appearance(ui, chrome, &palette, actions);
-                        },
-                        crate::state::SettingsSection::General => {
-                            settings_general(ui, chrome, &palette, actions);
-                        },
-                        crate::state::SettingsSection::Layout => {
-                            settings_layout(ui, chrome, &palette, actions);
-                        },
-                        crate::state::SettingsSection::Passwords => {
-                            settings_passwords(ui, chrome, actions);
-                        },
-                        crate::state::SettingsSection::About => settings_about(ui, &palette),
+        .show(&mut body, |ui| {
+            if searching {
+                let id = settings_search_id();
+                let mut matches = 0_usize;
+                let words: std::sync::Arc<[String]> = words.into();
+                for section in SettingsSection::ALL {
+                    let filter = CardSearch {
+                        words: words.clone(),
+                        category: section.label().to_lowercase().into(),
+                        matches,
+                    };
+                    ctx.data_mut(|data| data.insert_temp(id, filter));
+                    draw_settings_cards(ui, section, chrome, &palette, actions);
+                    if let Some(filter) = ctx.data_mut(|data| data.remove_temp::<CardSearch>(id)) {
+                        matches = filter.matches;
                     }
-                    ui.add_space(18.0);
-                });
-            });
+                }
+                if matches == 0 {
+                    ui.label(RichText::new(tr("settings-no-results")).color(palette.text_muted));
+                }
+            } else {
+                if !cfg!(target_os = "macos") && section == SettingsSection::Appearance {
+                    let (rect, _) = ui.allocate_exact_size(
+                        vec2(ui.available_width(), SPECIMEN_HEIGHT),
+                        Sense::hover(),
+                    );
+                    appearance_specimen(ui, &palette, rect);
+                    ui.add_space(14.0);
+                }
+                draw_settings_cards(ui, section, chrome, &palette, actions);
+            }
         });
+}
+
+#[derive(Clone, Default)]
+struct CardSearch {
+    words: std::sync::Arc<[String]>,
+    category: std::sync::Arc<str>,
+    matches: usize,
+}
+
+fn settings_search_id() -> Id {
+    Id::unique("settings_card_search")
+}
+
+fn draw_settings_cards(
+    ui: &mut Ui,
+    section: crate::state::SettingsSection,
+    chrome: &mut ChromeContext,
+    palette: &Palette,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::state::SettingsSection;
+    ui.push_id(section, |ui| match section {
+        SettingsSection::Appearance => settings_appearance(ui, chrome, palette, actions),
+        SettingsSection::General => settings_general(ui, chrome, palette, actions),
+        SettingsSection::Layout => settings_layout(ui, chrome, palette, actions),
+        SettingsSection::Passwords => settings_passwords(ui, chrome, actions),
+        SettingsSection::About => settings_about(ui, palette),
+    });
+}
+
+fn settings_nav(
+    ui: &mut Ui,
+    section: crate::state::SettingsSection,
+    selected: bool,
+    wide: bool,
+    palette: &Palette,
+) -> bool {
+    use crate::state::SettingsSection;
+    let icon = match section {
+        SettingsSection::Appearance => Icon::Palette,
+        SettingsSection::General => Icon::Gear,
+        SettingsSection::Layout => Icon::Sidebar,
+        SettingsSection::Passwords => Icon::Lock,
+        SettingsSection::About => Icon::Info,
+    };
+    let font = FontId::proportional(13.5);
+    let ink = if selected {
+        palette.text
+    } else {
+        palette.text_muted
+    };
+    let label = ui
+        .painter()
+        .layout_no_wrap(section.label().to_owned(), font.clone(), ink);
+    let width = if wide {
+        ui.available_width()
+    } else {
+        label.size().x + 45.0
+    };
+    let (row, response) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
+    if selected || response.hovered() {
+        let fill = if selected {
+            palette.active
+        } else {
+            palette.surface_hover
+        };
+        ui.painter()
+            .rect_filled(row, palette.corner(Tier::Row), fill);
+    }
+    if selected {
+        ui.painter().rect_filled(
+            Rect::from_center_size(pos2(row.left() + 3.0, row.center().y), vec2(2.5, 14.0)),
+            1,
+            palette.accent,
+        );
+    }
+    icons::draw_icon(
+        ui.painter(),
+        Rect::from_center_size(pos2(row.left() + 16.0, row.center().y), vec2(15.0, 15.0)),
+        icon,
+        ink,
+    );
+    crate::overlay_glass::row_label(
+        ui,
+        Rect::from_min_max(
+            pos2(row.left() + 31.0, row.top()),
+            pos2(row.right() - 8.0, row.bottom()),
+        ),
+        section.label(),
+        font,
+        ink,
+    );
+    if response.has_focus() {
+        icons::paint_focus(ui, palette, row, Tier::Row);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Tab, true, selected, section.label())
+    });
+    response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+}
+
+fn settings_card_fill(palette: &Palette) -> Color32 {
+    if palette.dark {
+        theme::mix(palette.bg, Color32::WHITE, 0.055)
+    } else {
+        theme::mix(palette.bg, Color32::WHITE, 0.75)
+    }
 }
 
 /// "Save as a preset…", and the field it opens.
@@ -243,14 +318,15 @@ pub(crate) fn draw_settings_page(
 /// study argues for. This is the other half of the answer to "a theme is a
 /// Rust constant": not only is every value settable, an arrangement somebody
 /// tuned can be put somewhere and come back.
+#[cfg(not(target_os = "macos"))]
 fn save_as_preset(
     ui: &mut Ui,
     chrome: &mut ChromeContext,
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
-    let open_id = Id::new("zervo_preset_naming");
-    let draft_id = Id::new("zervo_preset_name");
+    let open_id = Id::unique("zervo_preset_naming");
+    let draft_id = Id::unique("zervo_preset_name");
     if ghost_button(ui, palette, Icon::Plus, tr("settings-save-as-a-preset")).clicked() {
         let open = ui.ctx().data(|data| data.get_temp::<bool>(open_id)) == Some(true);
         ui.ctx().data_mut(|data| data.insert_temp(open_id, !open));
@@ -264,12 +340,14 @@ fn save_as_preset(
     // text box holding the page hostage over a name it does not need.
     let opening = existing.is_none();
     let mut name = existing.unwrap_or_default();
-    let field = ui.add(
+    let field = crate::overlay_glass::text_field(
+        ui,
         TextEdit::singleline(&mut name)
             .font(FontId::proportional(12.5))
             .hint_text(RichText::new(tr("settings-name-it")).color(palette.text_muted))
             .desired_width(150.0),
-    );
+    )
+    .response;
     if opening {
         field.request_focus();
     }
@@ -301,6 +379,7 @@ fn save_as_preset(
 /// Not `widgets::segmented`: five names of unequal length in equal slots reads
 /// as a table of contents rather than as five things to press, and the row has
 /// to wrap on a narrow window.
+#[cfg(not(target_os = "macos"))]
 fn preset_button(ui: &mut Ui, palette: &Palette, label: &str, selected: bool) -> egui::Response {
     let text =
         ui.painter()
@@ -427,6 +506,7 @@ fn tuning(
 }
 
 /// A ghost button in the "This arrangement" row.
+#[cfg(not(target_os = "macos"))]
 fn ghost_button(ui: &mut Ui, palette: &Palette, icon: Icon, label: &str) -> egui::Response {
     let text =
         ui.painter()
@@ -685,9 +765,10 @@ pub(crate) fn settings_appearance(
     // any of them moves, the row of presets at the top is naming something
     // that is no longer true. Rather than have twenty call sites remember to
     // say so, the page is compared against what it started the frame as.
-    let opened_as = chrome.settings.appearance;
-    let mut chose_preset = false;
+    #[cfg(not(target_os = "macos"))]
+    let (opened_as, mut chose_preset) = (chrome.settings.appearance, false);
 
+    #[cfg(not(target_os = "macos"))]
     settings_section(ui, palette, tr("settings-preset"), |ui| {
         ui.horizontal_wrapped(|ui| {
             for preset in theme::Preset::ALL {
@@ -756,6 +837,18 @@ pub(crate) fn settings_appearance(
         );
     });
 
+    #[cfg(target_os = "macos")]
+    settings_section(ui, palette, tr("common-liquid-glass"), |ui| {
+        note(ui, palette, tr("settings-liquid-glass-native"));
+        ui.add_space(6.0);
+        if ui
+            .button(RichText::new(tr("settings-open-macos-appearance")).color(palette.text))
+            .clicked()
+        {
+            actions.push(UiAction::OpenSystemAppearance);
+        }
+    });
+
     settings_section(ui, palette, tr("settings-accent-colour"), |ui| {
         accent_swatches(ui, chrome, palette, actions);
 
@@ -781,44 +874,43 @@ pub(crate) fn settings_appearance(
             palette,
             tr("settings-accent-strength-in-the-chrome"),
             candy,
-            0.0..=0.4,
+            0.0..=MAX_ACCENT_STRENGTH,
             |value| format!("{value:.3}"),
         )
         .settled
         {
             actions.push(UiAction::SettingsChanged);
         }
-        let candy = chrome.settings.appearance.candy;
-        note(
-            ui,
-            palette,
-            if candy <= 0.06 {
-                tr("settings-what-shipped-is-0-045-quiet-enough")
-            } else if candy >= 0.24 {
-                tr("settings-the-chrome-is-unmistakably-coloured-and-the")
-            } else {
-                tr("settings-the-accent-reads-as-a-room-rather")
-            },
-        );
+        note(ui, palette, tr("settings-accent-strength-help"));
     });
 
-    settings_section(
-        ui,
-        palette,
-        tr("settings-seam-between-chrome-and-page"),
-        |ui| {
+    if chrome.settings.layout.is_sidebar() {
+        use theme::Seam;
+
+        let frame_options: &[Seam] = if cfg!(target_os = "macos") {
+            &[Seam::Card, Seam::EdgeToEdge]
+        } else {
+            &Seam::ALL
+        };
+        settings_section(ui, palette, tr("settings-page-frame"), |ui| {
             if choose(
                 ui,
                 palette,
                 &mut chrome.settings.appearance.seam,
-                &theme::Seam::ALL,
-                zervo_core::theme::Seam::label,
+                frame_options,
+                Seam::label,
             ) {
                 actions.push(UiAction::SettingsChanged);
             }
-            note(ui, palette, chrome.settings.appearance.seam.note());
+            let seam = chrome.settings.appearance.seam;
+            let detail = match seam {
+                Seam::Card => tr("settings-page-frame-card"),
+                Seam::EdgeToEdge => tr("settings-page-frame-edge-to-edge"),
+                _ => seam.note(),
+            };
+            note(ui, palette, detail);
 
-            if !chrome.settings.appearance.seam.closes_gap() {
+            if !seam.closes_gap() {
                 ui.add_space(10.0);
                 if tuning(
                     ui,
@@ -832,15 +924,11 @@ pub(crate) fn settings_appearance(
                 {
                     actions.push(UiAction::SettingsChanged);
                 }
-                note(
-                    ui,
-                    palette,
-                    tr("settings-content-margin-zero-puts-the-page-against"),
-                );
             }
-        },
-    );
+        });
+    }
 
+    #[cfg(not(target_os = "macos"))]
     settings_section(ui, palette, tr("settings-material"), |ui| {
         if choose(
             ui,
@@ -851,20 +939,11 @@ pub(crate) fn settings_appearance(
         ) {
             actions.push(UiAction::SettingsChanged);
         }
-        let translucency = chrome.settings.appearance.translucency;
-        let material_note = match translucency {
-            theme::Translucency::LiquidGlass if chrome.native_glass.available => {
-                tr("settings-the-docked-sidebar-and-toolbar-use-macos")
-            },
-            _ if translucency.is_translucent()
-                && palette.translucency == theme::Translucency::Solid =>
-            {
-                tr("settings-macos-reduce-transparency")
-            },
+        let material_note = match chrome.settings.appearance.translucency {
             theme::Translucency::LiquidGlass => {
                 tr("settings-zervo-s-frosted-material-is-used-here")
             },
-            _ => translucency.note(),
+            translucency => translucency.note(),
         };
         note(ui, palette, material_note);
         if chrome.settings.appearance.frost_is_capped() {
@@ -1010,31 +1089,12 @@ pub(crate) fn settings_appearance(
         if widgets::toggle(
             ui,
             &mut chrome.settings.appearance.sweep,
-            tr("settings-specular-sweep-when-a-surface-resizes"),
+            tr("settings-sidebar-specular-sweep"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
-        note(
-            ui,
-            palette,
-            tr("settings-one-pass-of-light-across-any-surface"),
-        );
-
-        ui.add_space(8.0);
-        if widgets::toggle(
-            ui,
-            &mut chrome.settings.appearance.liquid,
-            tr("settings-move-the-selection-instead-of-cross-fading"),
-            palette,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(
-            ui,
-            palette,
-            tr("settings-one-highlight-that-travels-and-stretches-rather"),
-        );
+        note(ui, palette, tr("settings-sidebar-specular-sweep-help"));
 
         ui.add_space(8.0);
         if widgets::toggle(
@@ -1049,26 +1109,6 @@ pub(crate) fn settings_appearance(
     });
 
     settings_section(ui, palette, tr("settings-chrome"), |ui| {
-        subhead(ui, palette, tr("settings-where-the-chrome-lives"));
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.layout,
-            &crate::settings::Layout::ALL,
-            crate::settings::Layout::label,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(
-            ui,
-            palette,
-            format!(
-                "{} All three are always available — ⌘S walks them at any time.",
-                chrome.settings.layout.note()
-            ),
-        );
-
-        ui.add_space(14.0);
         subhead(
             ui,
             palette,
@@ -1085,23 +1125,6 @@ pub(crate) fn settings_appearance(
         }
         note(ui, palette, chrome.settings.appearance.spine.note());
 
-        ui.add_space(12.0);
-        subhead(ui, palette, tr("settings-where-the-widget-shelf-lives"));
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.appearance.shelf,
-            &theme::ShelfHome::ALL,
-            zervo_core::theme::ShelfHome::label,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(
-            ui,
-            palette,
-            tr("settings-the-bar-alone-is-what-shipped-and"),
-        );
-
         if cfg!(target_os = "macos") {
             ui.add_space(12.0);
             if widgets::toggle(
@@ -1112,12 +1135,13 @@ pub(crate) fn settings_appearance(
             ) {
                 actions.push(UiAction::SettingsChanged);
             }
-            note(ui, palette, tr("settings-the-lights-are-12pt-at-14pt-in"));
+            note(ui, palette, tr("settings-native-window-control-alignment"));
         }
     });
 
     settings_window_section(ui, chrome, palette, actions);
 
+    #[cfg(not(target_os = "macos"))]
     settings_section(ui, palette, tr("settings-this-arrangement"), |ui| {
         ui.horizontal_wrapped(|ui| {
             if ghost_button(ui, palette, Icon::Reset, tr("settings-reset-to-zervo")).clicked() {
@@ -1144,6 +1168,7 @@ pub(crate) fn settings_appearance(
         note(ui, palette, tr("settings-a-theme-used-to-be-a-rust"));
     });
 
+    #[cfg(not(target_os = "macos"))]
     if !chose_preset && chrome.settings.appearance != opened_as {
         chrome.settings.appearance.customised();
     }
@@ -1190,54 +1215,35 @@ fn accent_swatches(
         response
     };
 
-    ui.horizontal(|ui| {
-        // ── The reader's own, first.
+    ui.horizontal_wrapped(|ui| {
         let custom_selected = matches!(chrome.settings.accent, AccentColor::Custom(..));
-        let mut rgb = chrome.settings.accent.rgb(palette.dark);
+        let rgb = chrome.settings.accent.rgb(palette.dark);
         let response = swatch(
             ui,
             egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
             custom_selected,
             true,
-        );
-        let picker = Id::new("zervo_accent_picker");
-        if response
-            .clone()
-            .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text(tr("settings-mix-your-own"))
-            .clicked()
-        {
-            // Opening it also selects it, seeded from whatever is in force
-            // — so the picker opens on the colour being replaced rather
-            // than on an arbitrary one.
-            chrome.settings.accent = AccentColor::Custom(rgb[0], rgb[1], rgb[2]);
-            actions.push(UiAction::SettingsChanged);
-            let open = ui.ctx().data(|data| data.get_temp::<bool>(picker)) == Some(true);
-            ui.ctx().data_mut(|data| data.insert_temp(picker, !open));
-        }
-        if ui.ctx().data(|data| data.get_temp::<bool>(picker)) == Some(true) {
+        )
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text(tr("settings-mix-your-own"));
+        let popup = egui::Popup::from_toggle_button_response(&response)
+            .gap(6.0)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        crate::overlay_glass::popup(popup, ui.ctx(), |ui| {
+            ui.spacing_mut().slider_width = 232.0;
             let mut colour = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-            egui::Area::new(picker.with("area"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(response.rect.left_bottom() + vec2(0.0, 6.0))
-                .constrain(true)
-                .show(ui.ctx(), |ui| {
-                    Frame::popup(ui.style()).show(ui, |ui| {
-                        if egui::color_picker::color_picker_color32(
-                            ui,
-                            &mut colour,
-                            egui::color_picker::Alpha::Opaque,
-                        ) {
-                            rgb = [colour.r(), colour.g(), colour.b()];
-                            chrome.settings.accent = AccentColor::Custom(rgb[0], rgb[1], rgb[2]);
-                            actions.push(UiAction::SettingsChanged);
-                        }
-                        if ui.button(tr("common-done")).clicked() {
-                            ui.ctx().data_mut(|data| data.insert_temp(picker, false));
-                        }
-                    });
-                });
-        }
+            if egui::color_picker::color_picker_color32(
+                ui,
+                &mut colour,
+                egui::color_picker::Alpha::Opaque,
+            ) {
+                chrome.settings.accent = AccentColor::Custom(colour.r(), colour.g(), colour.b());
+                actions.push(UiAction::SettingsChanged);
+            }
+            if ui.button(tr("common-done")).clicked() {
+                ui.close();
+            }
+        });
 
         // ── The presets.
         for accent in AccentColor::PRESETS {
@@ -1266,51 +1272,7 @@ fn settings_window_section(
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
-    settings_section(ui, palette, tr("settings-app-icon"), |ui| {
-        let icons = AppIcon::ALL;
-        let labels: Vec<&str> = icons.iter().map(crate::settings::AppIcon::label).collect();
-        let current = icons
-            .iter()
-            .position(|icon| *icon == chrome.settings.app_icon)
-            .unwrap_or(0);
-        if let Some(index) = widgets::segmented(ui, current, &labels, palette) {
-            chrome.settings.app_icon = icons[index];
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(tr("settings-transparent-lets-the-desktop-show-through-the"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
-    });
-
     settings_section(ui, palette, tr("common-window"), |ui| {
-        ui.label(
-            RichText::new(tr("settings-top-glow-strip"))
-                .size(13.0)
-                .color(palette.text),
-        );
-        // `.settled` rather than `.changed`: the chrome reads the value live, so
-        // the picture follows the drag either way, and this decides only when
-        // the settings file is rewritten. See `widgets::SliderOut`.
-        if widgets::slider(ui, &mut chrome.settings.top_glow, 0.0..=1.0, palette).settled {
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.label(
-            RichText::new(if chrome.settings.top_glow <= 0.0 {
-                tr("settings-off-flat-chrome-no-light-across-the").to_owned()
-            } else {
-                format!(
-                    "{:.0}% — accent-tinted light across the top of the window.",
-                    chrome.settings.top_glow * 100.0
-                )
-            })
-            .size(11.5)
-            .color(palette.text_muted),
-        );
-        ui.add_space(10.0);
-
         if widgets::toggle(
             ui,
             &mut chrome.settings.content_border,
@@ -1357,52 +1319,6 @@ fn settings_window_section(
                     .color(palette.text_muted),
             );
         }
-        ui.add_space(10.0);
-
-        if widgets::toggle(
-            ui,
-            &mut chrome.settings.content_halo,
-            tr("settings-halo-around-content"),
-            palette,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.label(
-            RichText::new(tr("settings-a-glow-spreading-out-from-the-card"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
-        if chrome.settings.content_halo {
-            ui.add_space(8.0);
-            let labels: Vec<&str> = crate::settings::HaloTint::ALL
-                .iter()
-                .map(|t| t.label())
-                .collect();
-            let current = crate::settings::HaloTint::ALL
-                .iter()
-                .position(|t| *t == chrome.settings.content_halo_tint)
-                .unwrap_or(0);
-            if let Some(picked) = widgets::segmented(ui, current, &labels, palette) {
-                chrome.settings.content_halo_tint = crate::settings::HaloTint::ALL[picked];
-                actions.push(UiAction::SettingsChanged);
-            }
-            ui.add_space(6.0);
-            if widgets::slider(
-                ui,
-                &mut chrome.settings.content_halo_amount,
-                0.2..=2.0,
-                palette,
-            )
-            .settled
-            {
-                actions.push(UiAction::SettingsChanged);
-            }
-            ui.label(
-                RichText::new(spread_note(chrome.settings.content_halo_amount))
-                    .size(11.5)
-                    .color(palette.text_muted),
-            );
-        }
     });
 }
 
@@ -1423,11 +1339,13 @@ pub(crate) fn settings_general(
                 .size(12.0)
                 .color(palette.text_muted),
         );
-        let response = ui.add(
+        let response = crate::overlay_glass::text_field(
+            ui,
             TextEdit::singleline(&mut chrome.settings.homepage)
                 .font(FontId::proportional(13.0))
                 .desired_width(f32::INFINITY),
-        );
+        )
+        .response;
         if response.lost_focus() {
             actions.push(UiAction::SettingsChanged);
         }
@@ -1442,7 +1360,7 @@ pub(crate) fn settings_general(
         egui::ComboBox::from_id_salt("search_engine")
             .selected_text(chrome.settings.search_engine.label())
             .width(200.0)
-            .show_ui(ui, |ui| {
+            .show_glass(ui, |ui| {
                 for engine in SearchEngine::ALL {
                     if ui
                         .selectable_value(
@@ -1538,7 +1456,7 @@ pub(crate) fn gesture_row(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             egui::ComboBox::from_id_salt(("gesture", label))
                 .selected_text(slot.label())
-                .show_ui(ui, |ui| {
+                .show_glass(ui, |ui| {
                     for option in crate::gestures::GestureAction::ALL {
                         if ui
                             .selectable_label(*slot == option, option.label())
@@ -1564,6 +1482,7 @@ pub(crate) fn settings_layout(
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
+    super::layout_editor::draw(ui, chrome.settings, palette, actions);
     settings_section(ui, palette, tr("settings-toolbar"), |ui| {
         for (value, label) in [
             (
@@ -1584,10 +1503,6 @@ pub(crate) fn settings_layout(
     settings_section(ui, palette, tr("common-sidebar"), |ui| {
         for (value, label) in [
             (
-                &mut chrome.settings.show_essentials,
-                tr("settings-show-pinned-essentials-grid"),
-            ),
-            (
                 &mut chrome.settings.show_tab_counts,
                 tr("settings-show-workspace-tab-counts"),
             ),
@@ -1598,10 +1513,6 @@ pub(crate) fn settings_layout(
             (
                 &mut chrome.settings.compact_sidebar,
                 tr("settings-compact-rows"),
-            ),
-            (
-                &mut chrome.settings.sidebar_autohide,
-                tr("settings-reveal-a-hidden-sidebar-on-hover"),
             ),
         ] {
             if widgets::toggle(ui, value, label, palette) {
@@ -1633,12 +1544,14 @@ pub(crate) fn settings_layout(
                 .size(12.0)
                 .color(palette.text_muted),
         );
-        let response = ui.add(
+        let response = crate::overlay_glass::text_field(
+            ui,
             TextEdit::singleline(&mut chrome.settings.newtab_message)
                 .font(FontId::proportional(13.0))
                 .hint_text(tr("settings-leave-empty-for-the-time-of-day"))
                 .desired_width(f32::INFINITY),
-        );
+        )
+        .response;
         if response.lost_focus() {
             actions.push(UiAction::PersistSettings);
         }
@@ -1679,7 +1592,7 @@ pub(crate) fn settings_layout(
         egui::ComboBox::from_id_salt("zervo_world_clock_add")
             .selected_text(tr("settings-add-a-city"))
             .width(220.0)
-            .show_ui(ui, |ui| {
+            .show_glass(ui, |ui| {
                 for (label, name) in crate::newtab::Zone::CATALOGUE {
                     let already = chrome
                         .settings
@@ -1759,7 +1672,7 @@ pub(crate) fn settings_layout(
         egui::ComboBox::from_id_salt("zervo_wallpaper_source")
             .selected_text(selected)
             .width(260.0)
-            .show_ui(ui, |ui| {
+            .show_glass(ui, |ui| {
                 for (label, source) in sources {
                     if ui
                         .selectable_label(chrome.settings.wallpaper_source == source, label)
@@ -1844,12 +1757,17 @@ pub(crate) fn settings_layout(
                 .color(palette.text_muted),
         );
         if chrome.settings.gestures.enabled {
+            ui.label(
+                RichText::new(tr("settings-sidebar-space-swipes"))
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
             ui.add_space(10.0);
             let mut changed = false;
             changed |= gesture_row(
                 ui,
                 tr("settings-swipe-right"),
-                tr("settings-anywhere-in-the-window"),
+                tr("settings-outside-sidebar"),
                 &mut chrome.settings.gestures.right,
                 palette,
             );
@@ -1863,7 +1781,7 @@ pub(crate) fn settings_layout(
             changed |= gesture_row(
                 ui,
                 tr("settings-swipe-down"),
-                tr("settings-over-the-bar-above-the-page-everywhere"),
+                "",
                 &mut chrome.settings.gestures.down,
                 palette,
             );
@@ -1882,16 +1800,12 @@ pub(crate) fn settings_layout(
 
     settings_section(ui, palette, tr("settings-arrangement"), |ui| {
         ui.label(
-            RichText::new(tr("settings-the-navigation-bar-its-widgets-and-the"))
+            RichText::new(tr("settings-reset-sidebar-widgets-and-new-tab"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
         ui.add_space(8.0);
-        if ui
-            .button(tr("settings-reset-to-defaults"))
-            .on_hover_text(tr("settings-puts-every-bar-button-widget-and-width"))
-            .clicked()
-        {
+        if ui.button(tr("settings-reset-to-defaults")).clicked() {
             actions.push(UiAction::ResetLayout);
         }
     });
@@ -1974,7 +1888,7 @@ pub(crate) fn settings_passwords(
             if ui
                 .interact(
                     remove,
-                    Id::new("zervo_pw_remove").with((&site, &username)),
+                    Id::unique("zervo_pw_remove").with((&site, &username)),
                     Sense::click(),
                 )
                 .on_hover_text(tr("settings-forget-this-login"))
@@ -1993,7 +1907,8 @@ pub(crate) fn settings_passwords(
                 ui.allocate_ui(vec2(90.0, 26.0), |ui| {
                     ui.label(RichText::new(label).size(12.5).color(palette.text_muted));
                 });
-                ui.add(
+                crate::overlay_glass::text_field(
+                    ui,
                     TextEdit::singleline(value)
                         .password(secret)
                         .font(FontId::proportional(13.0))
@@ -2034,61 +1949,73 @@ pub(crate) fn settings_passwords(
 }
 
 pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
-    settings_section(ui, palette, "Zervo", |ui| {
-        ui.label(
-            RichText::new(crate::l10n::message(
-                "settings-version",
-                [("version", env!("CARGO_PKG_VERSION").into())],
-            ))
-            .size(13.0)
-            .color(palette.text),
+    settings_section(ui, palette, tr("settings-build-and-engine"), |ui| {
+        let icon = application_icon(ui, palette.dark);
+        ui.horizontal(|ui| {
+            if let Some(icon) = icon.as_ref() {
+                ui.image((icon.id(), vec2(50.0, 50.0)));
+            }
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Zervo").size(20.0).strong());
+                ui.label(
+                    RichText::new(crate::l10n::message(
+                        "settings-version",
+                        [("version", env!("CARGO_PKG_VERSION").into())],
+                    ))
+                    .color(palette.text_muted),
+                );
+            });
+        });
+        ui.add_space(8.0);
+        ui.separator();
+        about_detail(
+            ui,
+            palette,
+            tr("settings-rendering-engine"),
+            concat!("Servo ", env!("ZERVO_SERVO_VERSION"), " · WebRender"),
         );
-        ui.label(
-            RichText::new(tr(
-                "settings-rendering-engine-servo-compositing-through-webrender",
-            ))
-            .size(12.0)
-            .color(palette.text_muted),
+        ui.separator();
+        let toolkit = concat!(
+            "egui ",
+            env!("ZERVO_EGUI_VERSION"),
+            " · winit ",
+            env!("ZERVO_WINIT_VERSION")
         );
-        // Not a guess about the platform: the driver's own GL_RENDERER and
-        // GL_VERSION, read at startup from the context the page is drawn in.
+        let toolkit = if cfg!(target_os = "macos") {
+            format!("{toolkit} · AppKit")
+        } else {
+            toolkit.to_owned()
+        };
+        about_detail(ui, palette, tr("settings-ui-toolkit"), &toolkit);
+    });
+
+    settings_section(ui, palette, tr("settings-graphics"), |ui| {
         let adapter = crate::gpu::adapter();
         if !adapter.renderer.is_empty() {
-            ui.label(
-                RichText::new(format!("Graphics: {}", adapter.renderer))
-                    .size(12.0)
-                    .color(palette.text_muted),
+            about_detail(
+                ui,
+                palette,
+                tr("settings-graphics-adapter"),
+                &adapter.renderer,
             );
+            ui.separator();
             let driver = if adapter.vendor.is_empty() {
                 adapter.version.clone()
             } else {
-                format!("{} — {}", adapter.version, adapter.vendor)
+                format!("{} · {}", adapter.version, adapter.vendor)
             };
-            ui.label(
-                RichText::new(format!("Driver: {driver}"))
-                    .size(12.0)
-                    .color(palette.text_muted),
-            );
+            about_detail(ui, palette, tr("settings-graphics-driver"), &driver);
+            ui.separator();
         }
-        ui.label(
-            RichText::new(format!("WebGPU: {}", crate::gpu::webgpu_backend_name()))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        ui.label(
-            RichText::new(tr("settings-chrome-egui-on-winit-painted-against-servo"))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        ui.label(
-            RichText::new(format!(
-                "Material: {} — corner radii, fills, edges and shadows all come from it.",
-                palette.material.name
-            ))
-            .size(12.0)
-            .color(palette.text_muted),
-        );
+        about_detail(ui, palette, "WebGPU", crate::gpu::webgpu_backend_name());
     });
+}
+
+fn about_detail(ui: &mut Ui, palette: &Palette, label: &str, value: &str) {
+    ui.add_space(3.0);
+    ui.label(RichText::new(label).strong().size(12.5).color(palette.text));
+    ui.label(RichText::new(value).size(12.5).color(palette.text_muted));
+    ui.add_space(3.0);
 }
 
 pub(crate) fn settings_section(
@@ -2097,36 +2024,35 @@ pub(crate) fn settings_section(
     title: &str,
     add_contents: impl FnOnce(&mut Ui),
 ) {
-    ui.label(
-        RichText::new(title.to_uppercase())
-            .size(10.5)
-            .strong()
-            .color(palette.text_muted),
-    );
-    ui.add_space(4.0);
-    Frame::NONE.inner_margin(Margin::same(14)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        // Reserve a slot, lay out the contents, then backfill the glass
-        // card sized to what was actually laid out (max_rect here spans
-        // the whole remaining scroll viewport, not the section).
-        let placeholder = ui.painter().add(Shape::Noop);
-        // Each section its own id scope. A `Frame` does not open one, so every
-        // section on the page derived its widget ids from the same parent —
-        // and the segmented control keys its segments on (index, label), so
-        // two sections offering a choice that happens to share a word at the
-        // same position were one widget with two positions. egui paints "First
-        // use of widget ID …" across the page when that happens, which is a
-        // debug banner the reader should never be shown.
-        ui.push_id(title, add_contents);
-        let card_rect = ui.min_rect().expand(14.0);
-        ui.painter().set(
-            placeholder,
-            Shape::Vec(glass::shapes(
-                card_rect,
-                palette,
-                Glass::tier(Tier::Card).strength(0.8),
-            )),
-        );
+    let visible = ui.ctx().data_mut(|data| {
+        let Some(mut filter) = data.get_temp::<CardSearch>(settings_search_id()) else {
+            return true;
+        };
+        let title = title.to_lowercase();
+        let visible = filter
+            .words
+            .iter()
+            .all(|word| title.contains(word) || filter.category.contains(word));
+        if visible {
+            filter.matches += 1;
+            data.insert_temp(settings_search_id(), filter);
+        }
+        visible
     });
-    ui.add_space(14.0);
+    if !visible {
+        return;
+    }
+
+    Frame::NONE
+        .fill(settings_card_fill(palette))
+        .stroke(Stroke::new(1.0_f32, palette.border.gamma_multiply(0.72)))
+        .corner_radius(13)
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(title).size(15.0).strong().color(palette.text));
+            ui.add_space(7.0);
+            ui.push_id(title, add_contents);
+        });
+    ui.add_space(13.0);
 }

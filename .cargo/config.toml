@@ -1,6 +1,14 @@
-# Servo v0.8.0 plus Zervo's download and notification patches. See docs/SERVO.md.
+# Servo v0.8.0 with Zervo's patches and the upstream HTTP/2 fix. See docs/SERVO.md.
 [patch.crates-io]
-servo = { git = "https://github.com/Goddv/servo", rev = "4e757602cd764a37bb24edf000d24c1729974b7d" }
+servo = { git = "https://github.com/Goddv/servo", rev = "3ccbee8c341f3e92d5139a1526b59f19868b05cd" }
+# egui 0.37 glyph rasterization panics when Servo enables Vello's threading
+# feature. Use the upstream fix from egui#8641 until the next stable release.
+ecolor = { git = "https://github.com/emilk/egui", rev = "56c4cbe5f755e87f5e0643b1e7a2c0fda5640f27" }
+egui = { git = "https://github.com/emilk/egui", rev = "56c4cbe5f755e87f5e0643b1e7a2c0fda5640f27" }
+egui-winit = { git = "https://github.com/emilk/egui", rev = "56c4cbe5f755e87f5e0643b1e7a2c0fda5640f27" }
+egui_glow = { git = "https://github.com/emilk/egui", rev = "56c4cbe5f755e87f5e0643b1e7a2c0fda5640f27" }
+emath = { git = "https://github.com/emilk/egui", rev = "56c4cbe5f755e87f5e0643b1e7a2c0fda5640f27" }
+epaint = { git = "https://github.com/emilk/egui", rev = "56c4cbe5f755e87f5e0643b1e7a2c0fda5640f27" }
 
 [env]
 # Match Servo 0.8's 8 MiB Stylo worker stack for deeply nested DOMs.

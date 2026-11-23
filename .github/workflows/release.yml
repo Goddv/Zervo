@@ -1,20 +1,10 @@
 name: Release
-run-name: ${{ github.event_name == 'workflow_dispatch' && !inputs.tag && format('Preview build of {0} at {1}', github.ref_name, github.sha) || format('Release {0}', inputs.tag || github.ref_name) }}
+run-name: ${{ !inputs.tag && (github.event_name == 'workflow_dispatch' || github.ref_type == 'branch') && format('macOS preview · {0} · {1}', github.ref_name, github.sha) || format('Release {0}', inputs.tag || github.ref_name) }}
 
-# The one workflow that owns a release.
-#
-# It used to be three: linux.yml, macos.yml and windows.yml each attached their
-# own artefacts to the tag as they finished. That is a create-or-update race
-# between jobs, it cannot produce a SHA256SUMS covering artefacts from more
-# than one platform, and it breaks outright the day immutable releases are
-# switched on for the repository, because a published immutable release will
-# not accept new assets.
-#
-# So: draft first, attach everything to the draft, publish last. If any
-# platform fails, the draft stays a draft and nothing half-finished is ever
-# visible.
+# Main builds preview artifacts. Tags retain the draft and publish flow.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -32,19 +22,13 @@ on:
 # token that cannot write anything and a checkout that does not keep it.
 permissions: {}
 
-# The AUR job runs in a container, and GitHub falls back to `sh -e {0}` when it
-# cannot find bash there — which is how both AppImage jobs died on the first
-# run of this pipeline. Named here so no container can decide it.
 defaults:
   run:
     shell: bash
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref }}
-  # A superseded run of a release is not a thing: two pushes of the same tag is
-  # already a mistake, and cancelling a three-hour build halfway is worse than
-  # letting it finish.
-  cancel-in-progress: false
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' && !inputs.tag }}
 
 jobs:
   draft:
@@ -66,7 +50,7 @@ jobs:
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -z "$INPUT_TAG" ]; then
+          if [ -z "$INPUT_TAG" ] && { [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ "$GITHUB_REF_TYPE" = branch ]; }; then
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -77,11 +61,6 @@ jobs:
             || { echo "select $TAG as the workflow ref to build that release"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          # The tag and the version have to agree. The AUR PKGBUILDs build
-          # their download URLs out of the version — `releases/download/v$pkgver/`
-          # — so a release tagged v0.4.2 from a tree that still says 0.4.1
-          # produces packages pointing at files that do not exist, and nothing
-          # anywhere would have said so.
           cargo_version() {
             sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' | head -1
           }
@@ -105,10 +84,6 @@ jobs:
             --title "Zervo ${TAG#v}" \
             --generate-notes
 
-  # The tarball the AUR source package builds from. A GitHub-generated tag
-  # tarball would do, except that its bytes have changed under people before
-  # now and a PKGBUILD pins a checksum. This one is produced once, here, and
-  # attached to the release.
   source:
     name: Source tarball
     runs-on: ubuntu-24.04
@@ -133,12 +108,6 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
-  linux:
-    needs: draft
-    uses: ./.github/workflows/linux.yml
-    with:
-      release-assets: ${{ needs.draft.outputs.tag != '' }}
-
   macos:
     needs: draft
     uses: ./.github/workflows/macos.yml
@@ -153,75 +122,9 @@ jobs:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
 
-  windows:
-    needs: draft
-    uses: ./.github/workflows/windows.yml
-
-  # The AUR packages, with the checksums of the artefacts that were actually
-  # built rather than placeholders. Run inside Arch because .SRCINFO is what
-  # the AUR serves, and `makepkg --printsrcinfo` is the only thing that
-  # generates it correctly.
-  aur:
-    name: AUR packages
-    needs: [draft, source, linux]
-    if: needs.draft.outputs.tag != ''
-    runs-on: ubuntu-24.04
-    container: quay.io/archlinux/archlinux:base-devel
-    steps:
-      - name: Prepare the container
-        run: |
-          pacman-key --init
-          pacman -Sy --noconfirm --needed archlinux-keyring
-          pacman -Syu --noconfirm --needed git namcap
-
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      # Two explicit downloads rather than one wildcard: this job runs as
-      # soon as `source` and `linux` are done, so a pattern broad enough to
-      # match macOS or Windows would pick up whatever happened to have
-      # finished, which is not a thing to build a checksum on.
-      - uses: actions/download-artifact@v8
-        with:
-          name: zervo-deb-x86_64
-          path: incoming
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: zervo-source
-          path: incoming
-
-      - name: Render with real checksums
-        run: |
-          mkdir -p target/linux
-          find incoming -name '*.tar.gz' -exec cp {} target/linux/ \;
-          ls -la target/linux/
-          useradd --create-home --shell /bin/bash builder
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          sudo -u builder ./scripts/make-aur.sh --output target/linux/aur
-          for pkg in zervo zervo-bin; do
-            echo "=== $pkg ==="
-            cat "target/linux/aur/$pkg/PKGBUILD"
-            if grep -q SKIP "target/linux/aur/$pkg/PKGBUILD"; then
-              echo "::warning::$pkg still has a SKIP checksum"
-            fi
-          done
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: zervo-aur
-          path: target/linux/aur/**
-          # .SRCINFO is a dotfile; without this, upload-artifact drops it and
-          # the AUR packages arrive missing the only file the AUR reads.
-          include-hidden-files: true
-          if-no-files-found: error
-
   publish:
     name: Checksums, provenance and publish
-    needs: [draft, source, linux, macos, windows, aur]
+    needs: [draft, source, macos]
     if: needs.draft.outputs.tag != ''
     runs-on: ubuntu-24.04
     permissions:
@@ -240,24 +143,9 @@ jobs:
       - name: Gather
         run: |
           mkdir -p release
-          # Flattened: the artefacts arrive one directory per upload, and a
-          # release is a flat list of files. The AUR directory is kept whole
-          # and tarred, because it is two packages of two files each.
-          find incoming -type f \
-               \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
-                  -o -name '*.zsync' -o -name '*.flatpak' -o -name '*.dmg' -o -name '*.zip' \
-                  -o -name '*setup.exe' -o -name '*.tar.gz' \) \
-               -exec cp -n {} release/ \;
-          if [ -d incoming/zervo-aur ]; then
-            tar -czf release/zervo-aur-packages.tar.gz -C incoming/zervo-aur .
-          fi
-          ls -la release/
-
-      - name: Require both portable Linux formats
-        run: |
-          compgen -G 'release/*.AppImage'
-          compgen -G 'release/*.AppImage.zsync'
-          compgen -G 'release/*.flatpak'
+          cp incoming/zervo-macos-arm64/Zervo-*-arm64.dmg release/
+          cp incoming/zervo-macos-x86_64/Zervo-*-x86_64.dmg release/
+          cp incoming/zervo-source/*-src.tar.gz release/
 
       - name: Checksums
         # One file covering every platform, which is the thing three

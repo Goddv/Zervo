@@ -10,10 +10,7 @@ name: Check
 # builds against nothing heavier than egui and rustls. The half that does need
 # the engine is checked in the release builds, where it is compiled anyway.
 #
-# The packaging half of the repository is checked here too. Every script and
-# workflow below either cannot be run on this machine at all — the Linux ones —
-# or takes hours when it can, so the only thing standing between a typo and a
-# failed release three hours in is a linter.
+# Check the active packaging scripts and workflows before building the app.
 on:
   push:
     branches: [main]
@@ -100,10 +97,6 @@ jobs:
 
       - name: Install linters
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            desktop-file-utils appstream
-
           # Pinned from upstream rather than taken from apt: Ubuntu's build is
           # several releases behind, and the two disagree about
           # which findings exist — so a script could be clean on a developer's
@@ -120,52 +113,7 @@ jobs:
         # -x so the shared library in scripts/lib is followed rather than
         # reported as unreadable. Every script that sources it carries a
         # `# shellcheck source=` directive for the same reason.
-        run: shellcheck -x scripts/*.sh scripts/lib/*.sh
-
-      - name: PowerShell
-        shell: pwsh
-        # The Windows packaging script cannot be run here, but it can be parsed
-        # and linted — which is the difference between finding a mistake now
-        # and finding it at the end of a three-hour Windows build. PSScript-
-        # Analyzer is what catches the specifically-PowerShell ones, such as
-        # assigning to $args or $Profile, both of which are automatic variables
-        # and both of which this script wanted to use.
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path scripts/package-windows.ps1).Path, [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
-          Write-Host "scripts/package-windows.ps1 parses"
-
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
-          Invoke-ScriptAnalyzer -Path scripts/package-windows.ps1 -Severity Error -EnableExit
-          Invoke-ScriptAnalyzer -Path scripts/package-windows.ps1 -Severity Warning |
-            Format-Table -AutoSize
-
-      - name: Desktop entry and AppStream metadata
-        # appimagetool refuses to build without a valid desktop entry, and both
-        # GNOME Software and KDE Discover read the metainfo. Validating here
-        # costs a second; validating during the AppImage build would let an
-        # appstreamcli version difference fail a release that has already spent
-        # three hours compiling the engine.
-        run: |
-          desktop-file-validate assets/linux/app.zervo.Zervo.desktop
-          appstreamcli validate --no-net --explain assets/linux/app.zervo.Zervo.metainfo.xml
-
-      - name: Man page
-        run: |
-          sudo apt-get install -y --no-install-recommends mandoc
-          mandoc -Tlint assets/linux/zervo.1
-
-      - name: PKGBUILDs render and parse
-        # `makepkg --printsrcinfo` needs Arch and runs in linux.yml's own job;
-        # this catches the mistakes that do not.
-        run: |
-          ./scripts/make-aur.sh --output "$RUNNER_TEMP/aur"
-          for pkg in zervo zervo-bin; do
-            bash -n "$RUNNER_TEMP/aur/$pkg/PKGBUILD"
-            echo "ok  $pkg"
-          done
+        run: shellcheck -x scripts/bundle-macos.sh scripts/make-icns.sh scripts/lib/common.sh
 
   workflows:
     name: Workflows

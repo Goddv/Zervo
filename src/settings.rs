@@ -50,70 +50,22 @@ impl SearchEngine {
     }
 }
 
-/// Which app icon Zervo wears in the Dock.
-///
-/// Both variants are composed from the same layered artwork authored in
-/// Apple's Icon Composer (`assets/icon/Zervo.icon`); the transparent variant
-/// is that document's translucency setting made visible.
-/// What the halo around the content card is coloured with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum HaloTint {
-    /// The accent, so the card reads as lit by it.
-    Accent,
-    /// The chrome's own colour, so the halo is depth rather than colour.
-    Chrome,
-}
-
-impl HaloTint {
-    pub const ALL: [HaloTint; 2] = [HaloTint::Accent, HaloTint::Chrome];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            HaloTint::Accent => tr("options-accent"),
-            HaloTint::Chrome => tr("options-chrome"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AppIcon {
-    Default,
-    Transparent,
-}
-
-impl AppIcon {
-    pub const ALL: [AppIcon; 2] = [AppIcon::Default, AppIcon::Transparent];
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            AppIcon::Default => tr("options-default"),
-            AppIcon::Transparent => tr("options-transparent"),
-        }
-    }
-}
-
-/// Where the chrome lives.
-///
-/// Three, not two. All three are always reachable — ⌘S walks them — so what
-/// first run asks for, and what this setting holds, is only where somebody
-/// starts rather than what they are stuck with.
+/// Where the sidebar lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
-    /// Everything in one column down the side.
+    /// The sidebar is docked alongside the page.
+    #[serde(alias = "Bar")]
     Sidebar,
-    /// The address pill centred across the top; tabs hidden.
-    Bar,
-    /// Nothing but the page. The chrome is what the edge reveals.
+    /// The sidebar is revealed from the edge.
     FullPage,
 }
 
 impl Layout {
-    pub const ALL: [Layout; 3] = [Layout::Sidebar, Layout::Bar, Layout::FullPage];
+    pub const ALL: [Layout; 2] = [Layout::Sidebar, Layout::FullPage];
 
     pub fn label(self) -> &'static str {
         match self {
             Layout::Sidebar => tr("common-sidebar"),
-            Layout::Bar => tr("options-top-bar"),
             Layout::FullPage => tr("options-full-page"),
         }
     }
@@ -121,32 +73,54 @@ impl Layout {
     pub fn note(self) -> &'static str {
         match self {
             Layout::Sidebar => tr("options-everything-in-one-column"),
-            Layout::Bar => tr("options-address-pill-centred-tabs-hidden"),
             Layout::FullPage => tr("options-nothing-but-the-page-hover-the-edge"),
         }
     }
 
-    /// Whether the sidebar is the docked chrome. False for both of the others,
-    /// which is what makes the left edge hot.
     pub fn is_sidebar(self) -> bool {
         self == Layout::Sidebar
     }
 
-    /// The next one along, for the shortcut that walks all three.
-    pub fn next(self) -> Layout {
+    pub fn toggled(self) -> Layout {
         match self {
-            Layout::Sidebar => Layout::Bar,
-            Layout::Bar => Layout::FullPage,
+            Layout::Sidebar => Layout::FullPage,
             Layout::FullPage => Layout::Sidebar,
         }
     }
+}
 
-    /// The other docked one, for the sidebar glyph — which has always been a
-    /// two-way switch and should stay one.
-    pub fn toggled(self) -> Layout {
+/// Sections in the scrollable part of the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SidebarSection {
+    Favourites,
+    Pinned,
+    Tabs,
+}
+
+impl SidebarSection {
+    pub const ALL: [Self; 3] = [Self::Favourites, Self::Pinned, Self::Tabs];
+
+    pub fn label(self) -> &'static str {
         match self {
-            Layout::Sidebar => Layout::Bar,
-            Layout::Bar | Layout::FullPage => Layout::Sidebar,
+            Self::Favourites => tr("common-favourites"),
+            Self::Pinned => tr("sidebar-pinned-tabs"),
+            Self::Tabs => tr("sidebar-open-tabs"),
+        }
+    }
+
+    pub fn visible(self, settings: &Settings) -> bool {
+        match self {
+            Self::Favourites => settings.show_essentials,
+            Self::Pinned => settings.show_pinned_section,
+            Self::Tabs => settings.show_open_tabs,
+        }
+    }
+
+    pub fn set_visible(self, settings: &mut Settings, visible: bool) {
+        match self {
+            Self::Favourites => settings.show_essentials = visible,
+            Self::Pinned => settings.show_pinned_section = visible,
+            Self::Tabs => settings.show_open_tabs = visible,
         }
     }
 }
@@ -189,7 +163,7 @@ impl NewTabHome {
 
     pub fn note(self) -> &'static str {
         match self {
-            NewTabHome::Composed => tr("options-the-clock-the-field-and-where-you"),
+            NewTabHome::Composed => tr("sidebar-new-tab-options"),
             NewTabHome::Board => tr("options-every-card-on-the-grid-to-arrange"),
         }
     }
@@ -277,8 +251,13 @@ pub struct Settings {
     pub always_show_tab_close: bool,
     pub show_forward_button: bool,
     pub show_reload_button: bool,
-    /// Show the pinned-tab essentials grid.
+    /// Show global favourites in the sidebar.
     pub show_essentials: bool,
+    pub sidebar_sections: [SidebarSection; 3],
+    pub show_pinned_section: bool,
+    pub show_open_tabs: bool,
+    pub show_sidebar_tools: bool,
+    pub show_sidebar_widgets: bool,
     /// Show tab counts next to workspace names.
     pub show_tab_counts: bool,
     /// Denser sidebar rows.
@@ -307,32 +286,15 @@ pub struct Settings {
     pub space_colour: usize,
     /// Arrangements the reader saved, in the order they saved them.
     pub saved: Vec<Saved>,
-    /// Reveal a collapsed sidebar when the pointer nears the window edge.
-    ///
-    /// Full-page mode ignores this and always reveals: there is no other
-    /// chrome, so an edge that did nothing would be a browser with no way back.
-    pub sidebar_autohide: bool,
     /// Sidebar width in points, remembered across restarts when resized.
     pub sidebar_width: f32,
     /// Show favourites as tiles rather than a list — shorter, and it copes
     /// with a lot of them.
     pub favourites_grid: bool,
-    /// Width of the centred address pill in the navigation bar, in points.
-    pub address_pill_width: f32,
-    /// What sits left and right of the address pill, in order.
-    pub navbar_left: Vec<crate::ui::NavItem>,
-    pub navbar_right: Vec<crate::ui::NavItem>,
-    /// Widgets placed in the navigation bar's shelf, in order.
-    pub navbar_widgets: Vec<crate::dashboard::Placed>,
-    /// Height of the navigation bar, in points. Anything above the row the
-    /// controls need is free space, kept for widgets that will live there.
-    pub navbar_height: f32,
-    /// Height of the sidebar's own widget shelf, in points. Zero is shut.
-    ///
-    /// Its own number rather than the bar's: the two shelves hold the same
-    /// widgets at the same cell, but one is twelve columns across the top of
-    /// the window and the other is one column down the side, so how far open
-    /// each is left is not the same question.
+    /// Widgets in the sidebar shelf. Older versions shared this list with the top bar.
+    #[serde(alias = "navbar_widgets")]
+    pub sidebar_widgets: Vec<crate::dashboard::Placed>,
+    /// Height of the sidebar widget shelf, in points. Zero is shut.
     pub sidebar_shelf_height: f32,
     /// Present as plain Firefox rather than as Servo. Servo's own user agent
     /// already claims Firefox 140, but keeps a `Servo/x.y` token and omits the
@@ -340,9 +302,6 @@ pub struct Settings {
     pub user_agent_compat: bool,
     /// Save files without asking where.
     pub downloads_auto: bool,
-    /// Strength of the glow strip across the top of the window, 0.0..=1.0.
-    /// Zero turns it off entirely.
-    pub top_glow: f32,
     /// Accent-tinted outline around the web content card.
     pub content_border: bool,
     /// A soft shadow around the content card.
@@ -352,14 +311,8 @@ pub struct Settings {
     /// tracing the edge rather than as depth — but that depends on how big the
     /// window is and what is behind it, so it is a choice rather than a rule.
     pub content_shadow: bool,
-    /// A soft glow around the content card, and what colours it.
-    pub content_halo: bool,
-    pub content_halo_tint: HaloTint,
-    /// How far each spreads, as a multiple of the shape they were drawn at
-    /// before either was adjustable. One is what the shadow has always looked
-    /// like, and the halo is tuned to match it rather than to its own scale.
+    /// Shadow spread as a multiple of its standard size.
     pub content_shadow_amount: f32,
-    pub content_halo_amount: f32,
     /// Everything about how Zervo is built: which preset, where the seam
     /// falls, what a surface is made of, how it moves, how far the accent
     /// reaches. See [`crate::theme::Appearance`].
@@ -400,9 +353,56 @@ pub struct Settings {
     /// zero: a card on a bright photograph with no veil under it cannot be
     /// read, whatever the photograph.
     pub wallpaper_dim: f32,
+}
 
-    /// Dock icon variant.
-    pub app_icon: AppIcon,
+pub const MAX_ACCENT_STRENGTH: f32 = 0.4;
+const DEFAULT_ACCENT_STRENGTH: f32 = 0.2;
+
+fn sidebar_default_appearance() -> crate::theme::Appearance {
+    use crate::theme::{Appearance, Preset, Seam, Spine};
+
+    let native = cfg!(target_os = "macos");
+    let preset = if native {
+        Preset::LiquidGlass
+    } else {
+        Preset::Flat
+    };
+    Appearance {
+        preset: native.then_some(preset),
+        seam: Seam::Card,
+        gap: 9.0,
+        corners: if native {
+            preset.appearance().corners
+        } else {
+            0.8
+        },
+        candy: DEFAULT_ACCENT_STRENGTH,
+        workspace_accent: false,
+        spine: Spine::Nothing,
+        ..preset.appearance()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn use_native_material(appearance: &mut crate::theme::Appearance) {
+    use crate::theme::{Appearance, Preset, Seam};
+
+    *appearance = Appearance {
+        seam: if appearance.seam.closes_gap() {
+            Seam::EdgeToEdge
+        } else {
+            Seam::Card
+        },
+        gap: appearance.gap,
+        motion: appearance.motion,
+        sweep: appearance.sweep,
+        pill_progress: appearance.pill_progress,
+        candy: appearance.candy,
+        workspace_accent: appearance.workspace_accent,
+        spine: appearance.spine,
+        align_nav: appearance.align_nav,
+        ..Preset::LiquidGlass.appearance()
+    };
 }
 
 impl Default for Settings {
@@ -410,16 +410,21 @@ impl Default for Settings {
         Self {
             language: String::new(),
             theme: ThemeMode::Auto,
-            accent: AccentColor::Lavender,
+            accent: AccentColor::Blue,
             homepage: "https://servo.org".to_owned(),
             search_engine: SearchEngine::DuckDuckGo,
             new_tab_page: NewTabPage::ZervoPage,
-            new_tab_background: NewTabBackground::Aurora,
+            new_tab_background: NewTabBackground::Grid,
             newtab_home: NewTabHome::Composed,
             always_show_tab_close: false,
             show_forward_button: true,
             show_reload_button: true,
             show_essentials: true,
+            sidebar_sections: SidebarSection::ALL,
+            show_pinned_section: true,
+            show_open_tabs: true,
+            show_sidebar_tools: true,
+            show_sidebar_widgets: true,
             show_tab_counts: true,
             compact_sidebar: false,
             layout: Layout::Sidebar,
@@ -427,25 +432,16 @@ impl Default for Settings {
             first_space: String::new(),
             space_colour: 0,
             saved: Vec::new(),
-            sidebar_autohide: true,
             sidebar_width: crate::ui::SIDEBAR_DEFAULT_WIDTH,
             favourites_grid: false,
-            address_pill_width: crate::ui::ADDRESS_PILL_DEFAULT_WIDTH,
-            navbar_height: crate::ui::NAVBAR_DEFAULT_HEIGHT,
             sidebar_shelf_height: 0.0,
-            navbar_left: crate::ui::NavItem::default_left(),
-            navbar_right: crate::ui::NavItem::default_right(),
-            navbar_widgets: crate::dashboard::Placed::defaults(),
+            sidebar_widgets: crate::dashboard::Placed::defaults(),
             user_agent_compat: true,
             downloads_auto: true,
-            top_glow: 1.0,
             content_border: true,
             content_shadow: false,
-            content_halo: false,
-            content_halo_tint: HaloTint::Accent,
             content_shadow_amount: 1.0,
-            content_halo_amount: 1.0,
-            appearance: crate::theme::Appearance::default(),
+            appearance: sidebar_default_appearance(),
             legacy_translucency: None,
             gestures: crate::gestures::Gestures::default(),
             newtab_tiles: crate::newtab::Tile::defaults(),
@@ -454,8 +450,18 @@ impl Default for Settings {
             wallpaper_source: crate::wallpaper::Source::Commons,
             wallpaper_cadence: crate::wallpaper::Cadence::Daily,
             wallpaper_dim: 0.55,
-            app_icon: AppIcon::Default,
         }
+    }
+}
+
+impl Settings {
+    pub fn reset_sidebar_sections(&mut self) {
+        self.sidebar_sections = SidebarSection::ALL;
+        for section in SidebarSection::ALL {
+            section.set_visible(self, true);
+        }
+        self.show_sidebar_tools = true;
+        self.show_sidebar_widgets = true;
     }
 }
 
@@ -482,6 +488,8 @@ pub fn load() -> Settings {
     let fresh = settings_path().is_none_or(|path| !path.exists());
     let mut settings: Settings = crate::store::load_or_default(settings_path());
     migrate(&mut settings);
+    #[cfg(target_os = "macos")]
+    use_native_material(&mut settings.appearance);
     if fresh {
         // No settings file, so nobody has been here before. The only honest
         // signal for it: there is no account, and nothing to ask.
@@ -494,6 +502,13 @@ pub fn load() -> Settings {
 fn migrate(settings: &mut Settings) {
     use crate::theme::{Preset, Translucency};
 
+    if !SidebarSection::ALL
+        .iter()
+        .all(|section| settings.sidebar_sections.contains(section))
+    {
+        settings.sidebar_sections = SidebarSection::ALL;
+    }
+
     if settings.appearance.preset == Some(Preset::LiquidGlass)
         && settings.appearance.translucency == Translucency::Frosted
         && settings.appearance.blur == 0.0
@@ -501,15 +516,16 @@ fn migrate(settings: &mut Settings) {
         settings.appearance = Preset::LiquidGlass.appearance();
     }
 
-    // The engine has no extension commands. Accept older toolbar layouts
-    // without keeping a permanently disabled control among their actions.
-    for items in [&mut settings.navbar_left, &mut settings.navbar_right] {
-        items.retain(|item| *item != crate::ui::NavItem::Extensions);
-    }
+    crate::dashboard::normalize_layout(&mut settings.sidebar_widgets);
 
     let Some(translucency) = settings.legacy_translucency.take() else {
         return;
     };
+    // Profiles with the legacy top-level field predate this branch's
+    // material. Interpret it against the preset those profiles started with.
+    if settings.appearance == sidebar_default_appearance() {
+        settings.appearance = Preset::Zervo.appearance();
+    }
     if translucency != settings.appearance.translucency {
         settings.appearance.translucency = translucency;
         settings.appearance.customised();
@@ -594,22 +610,112 @@ mod tests {
         assert!(top["appearance"]["translucency"].is_string());
     }
 
-    /// A fresh profile opens on Zervo's own material, and the arrangement the
-    /// study argues for is one press away.
-    ///
-    /// The default was `Candy` for a while and that was wrong twice over: the
-    /// artboards the rest of this design is drawn against use the shipped
-    /// configuration, so nothing could be compared against them; and a browser
-    /// should not open on an argument.
     #[test]
-    fn the_default_is_zervos_own_material() {
-        assert_eq!(Settings::default().appearance.preset, Some(Preset::Zervo));
+    fn the_sidebar_uses_the_platform_material_by_default() {
+        let appearance = Settings::default().appearance;
+        assert_eq!(appearance.seam, crate::theme::Seam::Card);
         assert_eq!(
-            crate::theme::Appearance::classic(),
-            Settings::default().appearance,
-            "the fallback and the default have to be the same arrangement"
+            appearance.translucency,
+            if cfg!(target_os = "macos") {
+                Translucency::LiquidGlass
+            } else {
+                Translucency::Solid
+            }
         );
-        assert!(Preset::ALL.contains(&Preset::Candy));
+        assert!(Preset::ALL.contains(&Preset::Zervo));
+    }
+
+    #[test]
+    fn default_accent_is_blue_at_medium_strength() {
+        let settings = Settings::default();
+        assert_eq!(settings.accent, AccentColor::Blue);
+        assert_eq!(settings.appearance.candy, 0.2);
+        assert!(!settings.appearance.workspace_accent);
+    }
+
+    #[test]
+    fn legacy_icon_and_glow_settings_are_ignored() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "accent": "Teal",
+            "appearance": {"candy": 0.2, "workspace_accent": true},
+            "app_icon": "Transparent",
+            "top_glow": 0.8,
+            "content_halo": true,
+            "content_halo_tint": "Chrome",
+            "content_halo_amount": 1.2,
+            "content_border": false,
+            "content_shadow": true,
+            "content_shadow_amount": 1.5,
+        }))
+        .unwrap();
+        assert_eq!(settings.accent, AccentColor::Teal);
+        assert_eq!(settings.appearance.candy, 0.2);
+        assert!(settings.appearance.workspace_accent);
+        assert!(!settings.content_border);
+        assert!(settings.content_shadow);
+        assert_eq!(settings.content_shadow_amount, 1.5);
+
+        let written = serde_json::to_value(settings).unwrap();
+        for key in [
+            "app_icon",
+            "top_glow",
+            "content_halo",
+            "content_halo_tint",
+            "content_halo_amount",
+        ] {
+            assert!(written.get(key).is_none());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_material_applies_to_existing_appearances() {
+        let mut appearance = Preset::Flat.appearance();
+        appearance.seam = crate::theme::Seam::OneSurface;
+        appearance.gap = 11.0;
+        appearance.workspace_accent = true;
+        use_native_material(&mut appearance);
+        assert_eq!(appearance.translucency, Translucency::LiquidGlass);
+        assert_eq!(appearance.corners, Preset::LiquidGlass.appearance().corners);
+        assert_eq!(appearance.seam, crate::theme::Seam::EdgeToEdge);
+        assert_eq!(appearance.gap, 11.0);
+        assert!(appearance.workspace_accent);
+    }
+
+    #[test]
+    fn legacy_bar_profiles_use_sidebar_and_keep_widget_settings() {
+        let mut settings: Settings = serde_json::from_str(r#"{
+            "layout": "Bar",
+            "sidebar_width": 280.0,
+            "appearance": { "shelf": "Bar", "liquid": true },
+            "navbar_widgets": [
+                { "kind": "Clock", "size": { "w": { "Cells": 2 }, "h": { "Cells": 1 } }, "col": 1 },
+                { "kind": "Transport", "size": { "w": { "Cells": 1 }, "h": { "Cells": 1 } }, "col": 0 }
+            ]
+        }"#).unwrap();
+        migrate(&mut settings);
+        assert_eq!(settings.layout, Layout::Sidebar);
+        assert_eq!(settings.sidebar_width, 280.0);
+        assert_eq!(settings.sidebar_widgets.len(), 2);
+        assert_eq!(settings.sidebar_widgets[0].row, 1);
+        assert_eq!(settings.sidebar_widgets[1].row, 0);
+        let written = serde_json::to_value(settings).unwrap();
+        assert!(written.get("navbar_widgets").is_none());
+        assert!(written["appearance"].get("shelf").is_none());
+        assert!(written["appearance"].get("liquid").is_none());
+    }
+
+    #[test]
+    fn sidebar_layout_repairs_duplicate_sections_and_keeps_legacy_visibility() {
+        let mut settings: Settings = serde_json::from_str(
+            r#"{"show_essentials":false,"sidebar_sections":["Pinned","Pinned","Tabs"]}"#,
+        )
+        .unwrap();
+        migrate(&mut settings);
+        assert_eq!(settings.sidebar_sections, SidebarSection::ALL);
+        assert!(!SidebarSection::Favourites.visible(&settings));
+        settings.reset_sidebar_sections();
+        assert!(SidebarSection::Favourites.visible(&settings));
     }
 }
 

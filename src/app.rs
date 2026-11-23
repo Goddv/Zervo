@@ -61,6 +61,8 @@ pub struct AppState {
     pub window_rendering_context: Rc<WindowRenderingContext>,
     /// Webviews render here, sized to the content rect; blitted under the chrome.
     pub rendering_context: Rc<OffscreenRenderingContext>,
+    /// A fresh frame is available for the visible webview.
+    pub page_frame_ready: Cell<bool>,
     pub browser: RefCell<BrowserState>,
     /// Popups created by script (window.open) waiting to be adopted as tabs.
     pub pending_popups: RefCell<Vec<WebView>>,
@@ -240,6 +242,7 @@ impl AppState {
         self.library.borrow_mut().save();
         {
             let mut browser = self.browser.borrow_mut();
+            browser.save_spaces();
             for workspace in &mut browser.workspaces {
                 for tab in &mut workspace.tabs {
                     tab.webview = None;
@@ -267,7 +270,9 @@ impl AppState {
     /// Show the selected tab and hide the others. Servo throttles hidden views.
     pub fn activate_tab(&self, tab_id: TabId) {
         let mut browser = self.browser.borrow_mut();
-        browser.active_tab = Some(tab_id);
+        if !browser.select_tab(tab_id) {
+            return;
+        }
         for workspace in &browser.workspaces {
             for tab in &workspace.tabs {
                 let Some(webview) = &tab.webview else {
@@ -286,13 +291,60 @@ impl AppState {
         self.window.request_redraw();
     }
 
-    pub fn close_tab(&self, tab_id: TabId) {
+    pub fn close_tab(self: &Rc<Self>, tab_id: TabId) {
         log::debug!("ZERVO close_tab tab={tab_id}");
-        // Dropping the returned handle (the last one) closes the webview.
-        let _closing = self.browser.borrow_mut().remove_tab(tab_id);
-        let next = self.browser.borrow().active_tab;
+        let (closing, next) = {
+            let mut browser = self.browser.borrow_mut();
+            let was_active = browser.active_tab == Some(tab_id);
+            let Some(tab) = browser.tab_mut(tab_id) else {
+                return;
+            };
+            let was_foldered = tab.folder.is_some();
+            let closing = if let Some(pin) = &tab.pin_anchor {
+                tab.url.clone_from(&pin.url);
+                tab.title.clone_from(&pin.title);
+                tab.loading = false;
+                tab.can_go_back = false;
+                tab.can_go_forward = false;
+                let webview = tab.webview.take();
+                if was_active {
+                    browser.active_tab = browser.workspaces[browser.active_workspace]
+                        .tabs
+                        .iter()
+                        .rev()
+                        .find(|tab| tab.id != tab_id && !tab.pinned)
+                        .map(|tab| tab.id);
+                }
+                webview
+            } else {
+                let webview = browser.remove_tab(tab_id);
+                if was_foldered {
+                    browser.save_spaces();
+                }
+                webview
+            };
+            let next = was_active.then(|| {
+                browser.active_tab.unwrap_or_else(|| {
+                    let workspace = browser.active_workspace;
+                    browser.add_zervo_page(workspace)
+                })
+            });
+            (closing, next)
+        };
+        // Release the engine view after leaving the model borrow.
+        drop(closing);
         if let Some(next) = next {
-            self.activate_tab(next);
+            let restored = self
+                .browser
+                .borrow()
+                .tab(next)
+                .filter(|tab| tab.kind == crate::state::TabKind::Web && tab.webview.is_none())
+                .and_then(|tab| Url::parse(&tab.url).ok());
+            if let Some(url) = restored {
+                self.open_tab(next, url);
+            } else {
+                self.activate_tab(next);
+            }
         }
         self.window.request_redraw();
     }
@@ -336,7 +388,6 @@ impl AppState {
         }
 
         let mut browser = self.browser.borrow_mut();
-        let editing_address = browser.editing_address;
         for workspace in &mut browser.workspaces {
             for tab in &mut workspace.tabs {
                 let Some(webview) = tab.webview.clone() else {
@@ -354,14 +405,11 @@ impl AppState {
                 tab.can_go_forward = webview.can_go_forward();
             }
         }
-        // Leave the new-tab field empty so it shows the search hint.
-        if !editing_address {
-            browser.address_bar = browser
-                .active_tab()
-                .filter(|tab| tab.kind != TabKind::NewTab)
-                .map(|tab| tab.url.clone())
-                .unwrap_or_default();
-        }
+        browser.address_bar = browser
+            .active_tab()
+            .filter(|tab| tab.kind != TabKind::NewTab)
+            .map(|tab| tab.url.clone())
+            .unwrap_or_default();
 
         // Keep the OS window title in sync with the active page.
         let title = browser
@@ -557,6 +605,7 @@ impl servo::WebViewDelegate for AppState {
         if !showing {
             return;
         }
+        self.page_frame_ready.set(true);
         self.window.request_redraw();
     }
 

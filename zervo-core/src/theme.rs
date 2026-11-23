@@ -26,6 +26,7 @@ pub enum AccentColor {
     /// somebody's own colour by lightening it in one theme would be worse than
     /// showing them what they picked.
     Custom(u8, u8, u8),
+    Blue,
     Lavender,
     Sky,
     Mint,
@@ -42,7 +43,8 @@ impl AccentColor {
     /// The fixed ones, in the order they are offered. `Custom` is not here:
     /// it has no colour until somebody picks one, so the settings page draws
     /// it from whatever they last chose.
-    pub const PRESETS: [AccentColor; 10] = [
+    pub const PRESETS: [AccentColor; 11] = [
+        AccentColor::Blue,
         AccentColor::Lavender,
         AccentColor::Sky,
         AccentColor::Mint,
@@ -58,6 +60,7 @@ impl AccentColor {
     pub fn label(&self) -> &'static str {
         match self {
             AccentColor::Custom(..) => tr("common-custom"),
+            AccentColor::Blue => tr("theme-blue"),
             AccentColor::Lavender => tr("theme-lavender"),
             AccentColor::Sky => tr("theme-sky"),
             AccentColor::Mint => tr("theme-mint"),
@@ -81,6 +84,8 @@ impl AccentColor {
     /// The accent color, tuned per theme so it has contrast on both.
     pub fn color(&self, dark: bool) -> Color32 {
         match (self, dark) {
+            (AccentColor::Blue, true) => Color32::from_rgb(10, 132, 255),
+            (AccentColor::Blue, false) => Color32::from_rgb(0, 122, 255),
             (AccentColor::Lavender, true) => Color32::from_rgb(167, 139, 250),
             (AccentColor::Lavender, false) => Color32::from_rgb(114, 84, 220),
             (AccentColor::Sky, true) => Color32::from_rgb(125, 196, 240),
@@ -213,7 +218,7 @@ pub const LUMA_CELLS: usize = 8;
 /// Reduce a picture to that map.
 pub fn luma_map(image: &egui::ColorImage) -> [u8; LUMA_CELLS * LUMA_CELLS] {
     let mut map = [0_u8; LUMA_CELLS * LUMA_CELLS];
-    let [width, height] = image.size;
+    let [width, height] = image.resolution();
     if width == 0 || height == 0 {
         return map;
     }
@@ -230,7 +235,7 @@ pub fn luma_map(image: &egui::ColorImage) -> [u8; LUMA_CELLS * LUMA_CELLS] {
             // nobody sees.
             for y in (y0..y1).step_by(2) {
                 for x in (x0..x1).step_by(2) {
-                    let pixel = image.pixels[y * width + x];
+                    let pixel = image.pixels()[y * width + x];
                     total += u32::from(luminance_of(pixel));
                     count += 1;
                 }
@@ -674,38 +679,6 @@ impl Spine {
     }
 }
 
-/// Where the widget shelf is reachable from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum ShelfHome {
-    Bar,
-    Sidebar,
-    /// Wherever the chrome happens to be — the bar, the sidebar, or the panel
-    /// full-page mode reveals.
-    Wherever,
-}
-
-impl ShelfHome {
-    pub const ALL: [ShelfHome; 3] = [ShelfHome::Bar, ShelfHome::Sidebar, ShelfHome::Wherever];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ShelfHome::Bar => tr("theme-bar-only"),
-            ShelfHome::Sidebar => tr("theme-sidebar-only"),
-            ShelfHome::Wherever => tr("theme-wherever-the-chrome-is"),
-        }
-    }
-
-    /// Whether the shelf should be offered in the expanded sidebar.
-    pub fn in_sidebar(self) -> bool {
-        matches!(self, ShelfHome::Sidebar | ShelfHome::Wherever)
-    }
-
-    /// Whether the shelf should be offered in the navigation bar.
-    pub fn in_bar(self) -> bool {
-        matches!(self, ShelfHome::Bar | ShelfHome::Wherever)
-    }
-}
-
 /// What Zervo's surfaces are made of.
 ///
 /// A theme is a palette and a material: the palette says what colour things
@@ -940,10 +913,8 @@ impl Preset {
                 candy: 0.045,
                 workspace_accent: true,
                 sweep: true,
-                liquid: true,
                 pill_progress: true,
                 spine: Spine::Favicons,
-                shelf: ShelfHome::Wherever,
                 align_nav: false,
             },
             Preset::Candy => Appearance {
@@ -965,10 +936,8 @@ impl Preset {
                 // one lavender room rather than five.
                 workspace_accent: true,
                 sweep: true,
-                liquid: true,
                 pill_progress: true,
                 spine: Spine::TabTicks,
-                shelf: ShelfHome::Wherever,
                 align_nav: true,
             },
             Preset::Flat => Appearance {
@@ -986,10 +955,8 @@ impl Preset {
                 candy: 0.02,
                 workspace_accent: false,
                 sweep: false,
-                liquid: false,
                 pill_progress: false,
                 spine: Spine::Nothing,
-                shelf: ShelfHome::Bar,
                 align_nav: false,
             },
             Preset::LiquidGlass => Appearance {
@@ -1007,10 +974,8 @@ impl Preset {
                 candy: 0.045,
                 workspace_accent: false,
                 sweep: false,
-                liquid: true,
                 pill_progress: true,
                 spine: Spine::TabTicks,
-                shelf: ShelfHome::Wherever,
                 align_nav: false,
             },
             Preset::Material => Appearance {
@@ -1028,10 +993,8 @@ impl Preset {
                 candy: 0.1,
                 workspace_accent: false,
                 sweep: false,
-                liquid: true,
                 pill_progress: false,
                 spine: Spine::Favicons,
-                shelf: ShelfHome::Sidebar,
                 align_nav: false,
             },
         }
@@ -1080,18 +1043,14 @@ pub struct Appearance {
     // ── How it moves
     /// How long a hover, a selection, a morph or a fade takes to settle.
     pub motion: f32,
-    /// One pass of light across any surface that changes size.
+    /// A brief reflection while the sidebar docks or undocks.
     pub sweep: bool,
-    /// One highlight that travels and stretches, rather than two rows half-lit
-    /// for the settle time.
-    pub liquid: bool,
     /// Progress inside the address pill, which gives it back the points it
     /// reserves for a spinner.
     pub pill_progress: bool,
 
     // ── What colour it is
-    /// How far the accent is mixed into the chrome. The shipped 0.045 is quiet
-    /// enough that ten accents produce ten near-identical greys.
+    /// How far the accent is mixed into the chrome.
     pub candy: f32,
     /// Take the accent from the active workspace instead of one global choice,
     /// so the window changes colour when you change space.
@@ -1099,7 +1058,6 @@ pub struct Appearance {
 
     // ── What shape it is
     pub spine: Spine,
-    pub shelf: ShelfHome,
     /// Centre the sidebar's nav row on the window controls. macOS only; there
     /// is nothing to centre on anywhere else.
     pub align_nav: bool,
@@ -1335,7 +1293,6 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
         surface_hover: blend(a.surface_hover, b.surface_hover),
         active: blend(a.active, b.active),
         accent: blend(a.accent, b.accent),
-        warm: blend(a.warm, b.warm),
         warning: blend(a.warning, b.warning),
         success: blend(a.success, b.success),
         danger: blend(a.danger, b.danger),
@@ -1826,12 +1783,6 @@ pub struct Palette {
     /// error and not the accent either — the accent is a preference, and a
     /// fact about the network is not one.
     pub info: Color32,
-    /// The accent's partner round the wheel — the aurora's second lamp.
-    ///
-    /// Derived rather than set: see [`warm_of`]. It lives on the palette so
-    /// that every place that lights something with the accent can reach the
-    /// colour beside it without deriving its own and drifting.
-    pub warm: Color32,
     pub text: Color32,
     pub text_muted: Color32,
     pub border: Color32,
@@ -1885,10 +1836,7 @@ pub struct Palette {
 /// The accent ratio the chrome shipped with, and what a candy setting is
 /// measured against.
 ///
-/// It is a small number, and that was the complaint: mixed in this quietly,
-/// ten accent presets produce ten near-identical greys. The whole ladder below
-/// scales off it, so a reader who leaves it alone gets exactly the chrome that
-/// always shipped and one who moves it moves every rung together.
+/// Existing presets use this reference point for subdued tinting.
 const SHIPPED_CANDY: f32 = 0.045;
 
 /// The ratio turn 5 argues for, and the far end of the ladder.
@@ -1906,13 +1854,6 @@ const STUDY_GLOW: f32 = 0.55;
 /// the setting slides between them, carrying on past the study's end at the
 /// same rate for anyone who wants more than it asked for.
 ///
-/// Scaling every rung by `candy / SHIPPED_CANDY` was the first shape of this
-/// and it overshoots badly: at the study's own 0.3 it puts 0.30 of the accent
-/// in the base and 0.40 in the surfaces, roughly twice what is being asked
-/// for. That is not a brighter turn 5, it is a muddier one. The artboards keep
-/// their *surfaces* close to neutral and do the colouring with the light
-/// behind them — `frame::paint_chrome_aurora` is where the colour comes from,
-/// and a base already 40% of the way to the accent leaves it nothing to add.
 fn rung(candy: f32, shipped: f32, study: f32) -> f32 {
     let t = (candy.max(0.0) - SHIPPED_CANDY) / (STUDY_CANDY - SHIPPED_CANDY);
     (shipped + (study - shipped) * t).clamp(0.0, 1.0)
@@ -2039,46 +1980,6 @@ pub const WORKSPACE_COLORS: [Color32; 5] = [
     Color32::from_rgb(219, 120, 140),
 ];
 
-/// The second light in each space, from the study's own table.
-///
-/// Turn 5's aurora is not one colour: every workspace carries a `warm` beside
-/// its `rgb`, and the second of the three radials is that one. One hue at
-/// three sizes reads as a gradient; two hues read as a room with two lamps in
-/// it, and that is the whole of the difference between the artboard and a
-/// tinted rectangle.
-pub const WORKSPACE_WARMS: [Color32; 5] = [
-    Color32::from_rgb(200, 120, 240),
-    Color32::from_rgb(70, 200, 200),
-    Color32::from_rgb(170, 200, 90),
-    Color32::from_rgb(230, 110, 90),
-    Color32::from_rgb(150, 90, 220),
-];
-
-/// The partner of any accent at all, not just the five.
-///
-/// The spaces get the study's own pairings. Anything else — the ten accent
-/// presets, or a colour somebody mixed on the Appearance page — is rotated a
-/// fifth of the way toward the warm end of the wheel, round whichever side is
-/// shorter, which is an approximation of what those five pairs are doing by
-/// eye. It is stated as an approximation because it is one: Nightshift's pair
-/// goes the other way, and no single rule reproduces all five.
-pub fn warm_of(accent: Color32) -> Color32 {
-    if let Some(index) = WORKSPACE_COLORS.iter().position(|colour| *colour == accent) {
-        return WORKSPACE_WARMS[index];
-    }
-    let mut hsva = egui::ecolor::Hsva::from(accent);
-    // Orange, as the warm end.
-    let mut delta = 0.06 - hsva.h;
-    if delta > 0.5 {
-        delta -= 1.0;
-    } else if delta < -0.5 {
-        delta += 1.0;
-    }
-    hsva.h = (hsva.h + delta * 0.22).rem_euclid(1.0);
-    hsva.s = (hsva.s * 1.05).min(1.0);
-    Color32::from(hsva)
-}
-
 pub fn workspace_color(index: usize) -> Color32 {
     WORKSPACE_COLORS[index % WORKSPACE_COLORS.len()]
 }
@@ -2182,7 +2083,6 @@ pub fn resolve(
             ),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
-            warm: warm_of(accent_color),
             warning: Color32::from_rgb(240, 187, 120),
             success: Color32::from_rgb(122, 214, 160),
             danger: Color32::from_rgb(240, 148, 170),
@@ -2221,7 +2121,6 @@ pub fn resolve(
             ),
             active: Color32::PLACEHOLDER,
             accent: accent_color,
-            warm: warm_of(accent_color),
             // Darker in the light theme, or an amber chip on white is a pale
             // smudge — the same reason every other rung has two values.
             warning: Color32::from_rgb(176, 108, 20),
@@ -2435,7 +2334,7 @@ mod tests {
         let mut image = egui::ColorImage::filled([32, 32], Color32::BLACK);
         for y in 0..32 {
             for x in 0..16 {
-                image.pixels[y * 32 + x] = Color32::WHITE;
+                image.pixels_mut()[y * 32 + x] = Color32::WHITE;
             }
         }
         let map = luma_map(&image);

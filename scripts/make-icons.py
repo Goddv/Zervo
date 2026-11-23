@@ -52,8 +52,7 @@ def main() -> int:
 
     for size in HICOLOR:
         out = MASTER.with_name(f"zervo-{size}.png")
-        # Lanczos: the artwork is a thin ring around a glyph, and anything
-        # cheaper aliases both into a smear at 128.
+        # Preserve the layered mark’s edges at smaller launcher sizes.
         master.resize((size, size), Image.LANCZOS).save(out, optimize=True)
         print(f"wrote {out.relative_to(ROOT)}")
 

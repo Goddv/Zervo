@@ -1,9 +1,7 @@
-//! The widget shelf that a taller navigation bar uncovers.
+//! The widget shelf at the foot of the sidebar.
 //!
-//! Widgets sit on a grid. A widget is some number of cells wide and some
-//! number tall, or spans the shelf entirely in either direction, and is packed
-//! into the first place it fits. Sizes and order are remembered in the
-//! settings.
+//! Widgets fill the shelf width and can occupy more than one row.
+//! Their positions and heights are saved in the settings.
 //!
 //! The media widgets are not mock-ups: Servo reports media session metadata,
 //! playback state and position, and takes play/pause/track actions back, so
@@ -56,74 +54,35 @@ impl WidgetKind {
             WidgetKind::Transport => tr("widgets-player-controls"),
         }
     }
-
-    /// What it is placed at before anyone resizes it.
-    pub fn default_size(self) -> Size {
-        match self {
-            WidgetKind::Clock => Size::cells(1, 1),
-            WidgetKind::NowPlaying => Size::cells(3, 1),
-            WidgetKind::Transport => Size::cells(2, 1),
-        }
-    }
 }
 
-/// One dimension of a widget: a number of cells, or the whole shelf.
+/// Shelf height as stored by current and older releases.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum Span {
+enum Span {
     Cells(u8),
     Full,
 }
 
-impl Span {
-    fn label(self) -> String {
-        match self {
-            Span::Cells(n) => n.to_string(),
-            Span::Full => "full".to_owned(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Size {
-    pub w: Span,
-    pub h: Span,
+    h: Span,
 }
 
 impl Size {
-    pub const fn cells(w: u8, h: u8) -> Self {
-        Size {
-            w: Span::Cells(w),
-            h: Span::Cells(h),
+    const fn rows(rows: u8) -> Self {
+        Self {
+            h: Span::Cells(rows),
         }
     }
 
-    pub fn label(self) -> String {
-        format!("{}×{}", self.w.label(), self.h.label())
+    fn height(self) -> u8 {
+        match self.h {
+            Span::Cells(rows) => rows.clamp(1, MAX_ROWS),
+            Span::Full => 1,
+        }
     }
 
-    /// The sizes offered in the menu. Not every combination — a list nobody
-    /// can scan is worse than a short one, and the grid takes any pair.
-    pub const CHOICES: [Size; 10] = [
-        Size::cells(1, 1),
-        Size::cells(2, 1),
-        Size::cells(3, 1),
-        Size::cells(4, 1),
-        Size::cells(6, 1),
-        Size::cells(2, 2),
-        Size::cells(4, 2),
-        Size {
-            w: Span::Full,
-            h: Span::Cells(1),
-        },
-        Size {
-            w: Span::Full,
-            h: Span::Cells(2),
-        },
-        Size {
-            w: Span::Cells(2),
-            h: Span::Full,
-        },
-    ];
+    const CHOICES: [Self; 4] = [Self::rows(1), Self::rows(2), Self::rows(3), Self::rows(4)];
 }
 
 /// A widget placed on the shelf.
@@ -134,8 +93,8 @@ pub struct Placed {
     /// Where it sits on the grid. Explicit rather than packed, so a widget can
     /// be put at the bottom of the shelf without having to fill the rows above
     /// it first.
-    #[serde(default)]
-    pub col: u8,
+    #[serde(default, rename = "col", skip_serializing)]
+    legacy_column: u8,
     #[serde(default)]
     pub row: u8,
 }
@@ -144,8 +103,8 @@ impl Placed {
     pub fn new(kind: WidgetKind) -> Self {
         Placed {
             kind,
-            size: kind.default_size(),
-            col: 0,
+            size: Size::rows(1),
+            legacy_column: 0,
             row: 0,
         }
     }
@@ -154,8 +113,10 @@ impl Placed {
         let mut placed: Vec<Placed> = Vec::new();
         for kind in WidgetKind::ALL {
             let mut widget = Placed::new(kind);
-            (widget.col, widget.row) = free_cell(&placed, widget.size, COLUMNS);
-            placed.push(widget);
+            if let Some(row) = free_row(&placed) {
+                widget.row = row;
+                placed.push(widget);
+            }
         }
         placed
     }
@@ -164,306 +125,157 @@ impl Placed {
 /// What the shelf wants done, handed back rather than applied here so the
 /// settings stay the one place that owns the arrangement.
 pub enum Change {
+    Add(WidgetKind),
     Remove(usize),
     Resize(usize, Size),
     Swap { a: usize, b: usize },
-    Place { index: usize, col: u8, row: u8 },
+    Place { index: usize, row: u8 },
     Media(servo::MediaSessionActionType),
 }
 
-/// A cell is a fixed height and a share of the width. The column count does
-/// not change with the window, so a widget at column six is at column six in
-/// any window: the cells narrow rather than the grid losing columns, which
-/// would push everything on the right into the same place.
-///
-/// It *does* change with the host. A 226pt sidebar cannot hold a twelve-column
-/// grid and does not need to — the same widgets at the same 52pt cell, one
-/// column instead of twelve. That is why every function below takes the count
-/// rather than reading the constant.
 const CELL_HEIGHT: f32 = 52.0;
-pub const COLUMNS: u8 = 12;
-/// What a column of a shelf comes to when the shelf is a column.
-pub const SIDEBAR_COLUMNS: u8 = 1;
 const GAP: f32 = 10.0;
 const PAD: f32 = 6.0;
-/// The most rows the shelf will ever offer.
-pub const MAX_ROWS: u8 = 4;
+const MAX_ROWS: u8 = 4;
+pub const MAX_HEIGHT: f32 = height_for_rows(MAX_ROWS);
 
-/// How wide one cell is in `area`.
-fn cell_width(area: Rect, columns: u8) -> f32 {
-    let inner = area.shrink(PAD).width();
-    let columns = f32::from(columns.max(1));
-    ((inner - (columns - 1.0) * GAP) / columns).max(12.0)
+const fn height_for_rows(rows: u8) -> f32 {
+    extent(rows) + PAD * 2.0
 }
 
-/// The width `cells` columns come to.
-fn extent_w(cells: u8, cell: f32) -> f32 {
-    cells as f32 * cell + cells.saturating_sub(1) as f32 * GAP
+const fn extent(rows: u8) -> f32 {
+    rows as f32 * CELL_HEIGHT + rows.saturating_sub(1) as f32 * GAP
 }
 
-/// The shelf height that shows `rows` whole rows. The bar's limits are derived
-/// from this rather than guessed, so the tallest bar always fits a whole number
-/// of rows instead of ending part-way through one.
-pub const fn height_for_rows(rows: u8) -> f32 {
-    rows as f32 * CELL_HEIGHT + (rows as f32 - 1.0) * GAP + PAD * 2.0
-}
-
-/// The height `cells` rows come to.
-fn extent(cells: u8) -> f32 {
-    cells as f32 * CELL_HEIGHT + cells.saturating_sub(1) as f32 * GAP
-}
-
-/// How many rows the arrangement needs. A `Full` height resolves to this, so a
-/// full-height widget is as tall as the tallest thing beside it.
 fn rows_needed(placed: &[Placed]) -> u8 {
     placed
         .iter()
-        .map(|widget| {
-            widget.row
-                + match widget.size.h {
-                    Span::Cells(n) => n.max(1),
-                    Span::Full => 1,
-                }
-        })
+        .map(|widget| widget.row.saturating_add(widget.size.height()))
         .max()
         .unwrap_or(1)
         .clamp(1, MAX_ROWS)
 }
 
-/// The same widgets, re-placed to fit a host too narrow for the arrangement.
-///
-/// The bar's twelve columns and the sidebar's one hold the same list, and
-/// [`footprint`] clamps a column that does not exist down to zero. That is the
-/// right thing for a widget overhanging its grid by one column, and it cannot
-/// stand in for a reflow: the three widgets that ship side by side at row 0
-/// all clamped to (0, 0) in a one-column sidebar and were drawn one on top of
-/// another. The sidebar's shelf has looked like a single widget since it was
-/// written.
-///
-/// Reading order — down the rows, left to right within a row — because that is
-/// the order they are in on the bar, and where the reader put them left to
-/// right is the only ordering they have expressed.
-///
-/// A drag inside a reflowed shelf therefore writes a position in the narrow
-/// grid, which is a real position: in one column the only thing a move can
-/// mean is "put it here in the order", and that is what it does. It does move
-/// the widget on the bar as well — one shelf, in two places, as designed.
-fn reflow(placed: &[Placed], columns: u8) -> Vec<Placed> {
-    let columns = columns.max(1);
-    let span = |value: Span, whole: u8| match value {
-        Span::Cells(cells) => cells.clamp(1, whole),
-        Span::Full => whole,
-    };
-    let mut order: Vec<usize> = (0..placed.len()).collect();
-    order.sort_by_key(|index| (placed[*index].row, placed[*index].col));
-    let mut out = placed.to_vec();
-    let (mut col, mut row, mut tallest) = (0_u8, 0_u8, 1_u8);
-    for index in order {
-        let width = span(placed[index].size.w, columns);
-        let height = span(placed[index].size.h, MAX_ROWS);
-        if col + width > columns {
-            row = row.saturating_add(tallest);
-            col = 0;
-            tallest = 1;
+fn overlaps(row: u8, height: u8, other: &Placed) -> bool {
+    row < other.row.saturating_add(other.size.height()) && other.row < row.saturating_add(height)
+}
+
+/// Stack legacy horizontal widgets in reading order.
+pub fn normalize_layout(placed: &mut [Placed]) {
+    let needs_reflow = placed.iter().any(|widget| widget.legacy_column != 0)
+        || placed.iter().enumerate().any(|(index, widget)| {
+            placed[..index]
+                .iter()
+                .any(|other| overlaps(widget.row, widget.size.height(), other))
+        });
+    if needs_reflow {
+        let mut order: Vec<usize> = (0..placed.len()).collect();
+        order.sort_by_key(|index| (placed[*index].row, placed[*index].legacy_column));
+        let mut next_row = 0_u8;
+        for index in order {
+            let widget = &mut placed[index];
+            widget.row = next_row;
+            next_row = next_row.saturating_add(widget.size.height());
         }
-        out[index].col = col;
-        out[index].row = row;
-        col += width;
-        tallest = tallest.max(height);
     }
-    out
+    for widget in placed {
+        widget.legacy_column = 0;
+        widget.size = Size::rows(widget.size.height());
+    }
 }
 
-/// Whether the arrangement fits the host as it stands, in which case it is
-/// left exactly as the reader left it and nothing is reflowed.
-fn fits(placed: &[Placed], columns: u8) -> bool {
-    placed.iter().all(|widget| {
-        let width = match widget.size.w {
-            Span::Cells(cells) => cells.max(1),
-            Span::Full => 1,
-        };
-        u16::from(widget.col) + u16::from(width) <= u16::from(columns.max(1))
-    })
+/// Insert one-row widgets into the first available row.
+pub fn free_row(placed: &[Placed]) -> Option<u8> {
+    (0..MAX_ROWS).find(|row| placed.iter().all(|widget| !overlaps(*row, 1, widget)))
 }
 
-/// Cells a widget of `size` occupies at a position, for collision checks.
-fn footprint(widget: &Placed, columns: u8, rows: u8) -> (u8, u8, u8, u8) {
-    let width = match widget.size.w {
-        Span::Cells(n) => n.clamp(1, columns),
-        Span::Full => columns,
+fn max_widget_height(placed: &[Placed], index: usize) -> u8 {
+    let row = placed[index].row;
+    placed
+        .iter()
+        .filter(|widget| widget.row > row)
+        .map(|widget| widget.row)
+        .min()
+        .unwrap_or(MAX_ROWS)
+        .min(MAX_ROWS)
+        .saturating_sub(row)
+}
+
+pub fn resize_widget(placed: &mut [Placed], index: usize, size: Size) -> bool {
+    if index >= placed.len() || size.height() > max_widget_height(placed, index) {
+        return false;
+    }
+    placed[index].size = size;
+    true
+}
+
+pub fn swap_widgets(placed: &mut [Placed], a: usize, b: usize) -> bool {
+    let (Some(first), Some(second)) = (placed.get(a), placed.get(b)) else {
+        return false;
     };
-    let height = match widget.size.h {
-        Span::Cells(n) => n.clamp(1, rows),
-        Span::Full => rows,
+    let first = Placed {
+        row: second.row,
+        ..*first
     };
-    (
-        widget.col.min(columns.saturating_sub(width)),
-        widget.row.min(rows.saturating_sub(height)),
-        width,
-        height,
+    let second = Placed {
+        row: placed[a].row,
+        ..*second
+    };
+    if first.row.saturating_add(first.size.height()) > MAX_ROWS
+        || second.row.saturating_add(second.size.height()) > MAX_ROWS
+        || overlaps(first.row, first.size.height(), &second)
+        || placed.iter().enumerate().any(|(index, other)| {
+            index != a
+                && index != b
+                && (overlaps(first.row, first.size.height(), other)
+                    || overlaps(second.row, second.size.height(), other))
+        })
+    {
+        return false;
+    }
+    placed[a] = first;
+    placed[b] = second;
+    true
+}
+
+pub fn open_height(placed: &[Placed]) -> f32 {
+    height_for_rows(rows_needed(placed))
+}
+
+fn widget_rect(inner: Rect, row: u8, height: u8) -> Rect {
+    Rect::from_min_size(
+        pos2(
+            inner.left(),
+            inner.top() + f32::from(row) * (CELL_HEIGHT + GAP),
+        ),
+        vec2(inner.width(), extent(height)),
     )
 }
 
-/// The first cell a new widget fits in, so adding one does not drop it on top
-/// of something else.
-/// Where the next widget would land, as a rectangle — or `None` when the
-/// shelf is full enough that there is nowhere obvious for one to go.
-fn free_slot(placed: &[Placed], area: Rect, columns: u8) -> Option<Rect> {
-    // Three cells wide where there are twelve, and the whole width where there
-    // is one — the invitation should be the shape of the thing it is inviting.
-    let wide = 3.min(columns.max(1));
-    let size = Size {
-        w: Span::Cells(wide),
-        h: Span::Cells(1),
-    };
-    let (col, row) = free_cell(placed, size, columns);
-    let rows = grid_rows(placed, area);
-    // `free_cell` falls back to the origin when it finds nothing, which on a
-    // full shelf would draw the invitation underneath a widget.
-    if placed.iter().any(|widget| {
-        let (wc, wr, ww, wh) = footprint(widget, columns, rows);
-        (wc..wc + ww).contains(&col) && (wr..wr + wh).contains(&row)
-    }) {
-        return None;
-    }
-    let inner = area.shrink(PAD);
-    let cell = cell_width(area, columns);
-    Some(Rect::from_min_size(
-        pos2(
-            inner.min.x + f32::from(col) * (cell + GAP),
-            inner.min.y + f32::from(row) * (CELL_HEIGHT + GAP),
-        ),
-        vec2(extent_w(wide, cell), extent(1)),
-    ))
-}
-
-pub fn free_cell(placed: &[Placed], size: Size, columns: u8) -> (u8, u8) {
-    let rows = MAX_ROWS;
-    let columns = columns.max(1);
-    let width = match size.w {
-        Span::Cells(n) => n.clamp(1, columns),
-        Span::Full => columns,
-    };
-    let height = match size.h {
-        Span::Cells(n) => n.clamp(1, rows),
-        // `rows`, the same as `footprint` just below resolves it to, and not 1.
-        // Resolving it to 1 here meant a full-height widget went looking for a
-        // one-row hole and then occupied every row of the column it found —
-        // landing on top of whatever was already under it.
-        //
-        // `rows_needed` does resolve `Full` to 1, and that one is right: it is
-        // computing the very number `Full` resolves *to*, so it has to break
-        // the circle somewhere, and a full-height widget contributing only its
-        // own row is what makes it "as tall as the tallest thing beside it".
-        Span::Full => rows,
-    };
-    for row in 0..=rows.saturating_sub(height) {
-        'next: for col in 0..=columns.saturating_sub(width) {
-            for other in placed {
-                let (ocol, orow, owidth, oheight) = footprint(other, columns, rows);
-                let overlaps = col < ocol + owidth
-                    && ocol < col + width
-                    && row < orow + oheight
-                    && orow < row + height;
-                if overlaps {
-                    continue 'next;
-                }
-            }
-            return (col, row);
-        }
-    }
-    (0, 0)
-}
-
-/// The bar height at which the shelf shows every row of this arrangement.
-pub fn open_height(placed: &[Placed]) -> f32 {
-    extent(rows_needed(placed)) + PAD * 2.0
-}
-
-/// Where each widget sits, from its own coordinates. Nothing is packed: a
-/// widget stays where it was put.
-fn visible_rows(area: Rect) -> u8 {
-    let inner = area.shrink(PAD);
-    (((inner.height() + GAP) / (CELL_HEIGHT + GAP)).floor() as u8).clamp(1, MAX_ROWS)
-}
-
-fn grid_rows(placed: &[Placed], area: Rect) -> u8 {
-    rows_needed(placed).max(visible_rows(area))
-}
-
-fn layout(placed: &[Placed], area: Rect, columns: u8) -> Vec<Rect> {
-    let rows = grid_rows(placed, area);
-    let inner = area.shrink(PAD);
-    let cell = cell_width(area, columns);
-
-    placed
-        .iter()
-        .map(|widget| {
-            let (col, row, width, height) = footprint(widget, columns, rows);
-            Rect::from_min_size(
-                pos2(
-                    inner.min.x + col as f32 * (cell + GAP),
-                    inner.min.y + row as f32 * (CELL_HEIGHT + GAP),
-                ),
-                vec2(extent_w(width, cell), extent(height)),
-            )
+/// Draw the menu shared by the empty slot and the shelf handle.
+pub fn widget_menu(ui: &mut Ui, placed: &[Placed]) -> Option<WidgetKind> {
+    let has_room = free_row(placed).is_some();
+    WidgetKind::ALL
+        .into_iter()
+        .find(|kind| {
+            ui.add_enabled(has_room, egui::Button::new(kind.label()))
+                .clicked()
         })
-        .collect()
-}
-
-/// The cell the pointer is over, clamped so the widget stays on the grid.
-fn cell_at(area: Rect, pos: egui::Pos2, size: Size, columns: u8, rows: u8) -> (u8, u8) {
-    let inner = area.shrink(PAD);
-    let cell = cell_width(area, columns);
-    let width = match size.w {
-        Span::Cells(n) => n.clamp(1, columns),
-        Span::Full => columns,
-    };
-    let height = match size.h {
-        Span::Cells(n) => n.clamp(1, rows),
-        Span::Full => rows,
-    };
-    let col = (((pos.x - inner.min.x) / (cell + GAP)).round() as i32)
-        .clamp(0, columns.saturating_sub(width) as i32) as u8;
-    let row = (((pos.y - inner.min.y) / (CELL_HEIGHT + GAP)).round() as i32)
-        .clamp(0, rows.saturating_sub(height) as i32) as u8;
-    (col, row)
+        .inspect(|_| ui.close())
 }
 
 /// Draw the shelf into `area`. Returns whatever the user asked for.
-/// `columns` is how many the host can hold: twelve across the navigation
-/// bar, one down a sidebar. Everything else about the shelf — the cell, the
-/// grip, the drag, the free-cell target, the `Change` events it reports — is
-/// the same either way, which is the point of it being a parameter rather than
-/// a second shelf.
 pub fn draw(
     root: &mut Ui,
     palette: &Palette,
     media: &Media,
     placed: &[Placed],
     area: Rect,
-    columns: u8,
 ) -> Vec<Change> {
     let mut changes = Vec::new();
     if area.height() < 20.0 {
         return changes;
     }
-    // Everything below works in whatever grid the host actually has, so the
-    // reflow happens once, here, rather than being a special case in the
-    // layout, the collisions, the hit test and the drag.
-    let narrowed;
-    let placed = if fits(placed, columns) {
-        placed
-    } else {
-        narrowed = reflow(placed, columns);
-        &narrowed
-    };
-
-    // The shelf sits just above the new tab page rather than on it, so on its
-    // own it had nothing to frost against and came out flat while everything
-    // below it was glass. Letting the page's picture reach up over the shelf
-    // is what makes the two read as one surface — the sampler clamps, so what
-    // arrives is the page's own top edge carried upward.
     let reaching = palette.reaching(area.height() + 24.0);
     let palette = &reaching;
 
@@ -484,86 +296,43 @@ pub fn draw(
     ));
     let root = &mut root;
 
-    let drag_id = Id::new("zervo_widget_drag");
-    let sizes_id = Id::new("zervo_widget_sizes");
-    let resize_id = Id::new("zervo_widget_resize");
+    let drag_id = Id::unique("zervo_widget_drag");
+    let sizes_id = Id::unique("zervo_widget_sizes");
+    let resize_id = Id::unique("zervo_widget_resize");
     let resizing = ctx.data(|data| data.get_temp::<usize>(resize_id));
     let dragging = ctx.data(|data| data.get_temp::<usize>(drag_id));
-    let slots = layout(placed, area, columns);
     let pointer = ctx.input(|input| input.pointer.latest_pos());
-
-    // The widget under the pointer is the one that would be swapped with.
-    // Nothing under the pointer means nothing happens, which is easier to
-    // predict than a drop that lands somewhere by proximity.
     let inner = area.shrink(PAD);
-    let cell = cell_width(area, columns);
-    let rows = grid_rows(placed, area);
+    let slots: Vec<_> = placed
+        .iter()
+        .map(|widget| widget_rect(inner, widget.row, widget.size.height()))
+        .collect();
+    let grab_offset = vec2(inner.width(), CELL_HEIGHT) / 2.0;
+    let visible_rows =
+        (((inner.height() + GAP) / (CELL_HEIGHT + GAP)).floor() as u8).clamp(1, MAX_ROWS);
+    let rows = rows_needed(placed).max(visible_rows);
 
-    // Where a held widget would land: the cell under the pointer, snapped.
-    // Free placement, so it can go anywhere on the shelf — including a row
-    // with nothing above it.
     let snap = match (dragging, pointer) {
         (Some(held), Some(pos)) => placed.get(held).map(|widget| {
-            let (col, row) = cell_at(
-                area,
-                pos - vec2(cell, CELL_HEIGHT) / 2.0,
-                widget.size,
-                columns,
-                rows,
-            );
-            let (_, _, width, height) = footprint(
-                &Placed {
-                    col,
-                    row,
-                    ..*widget
-                },
-                columns,
-                rows,
-            );
-            (
-                col,
-                row,
-                Rect::from_min_size(
-                    pos2(
-                        inner.min.x + col as f32 * (cell + GAP),
-                        inner.min.y + row as f32 * (CELL_HEIGHT + GAP),
-                    ),
-                    vec2(extent_w(width, cell), extent(height)),
-                ),
-            )
+            let height = widget.size.height();
+            let row = (((pos.y - grab_offset.y - inner.top()) / (CELL_HEIGHT + GAP)).round() as i32)
+                .clamp(0, i32::from(rows.saturating_sub(height))) as u8;
+            (row, widget_rect(inner, row, height))
         }),
         _ => None,
     };
-
-    // Anything already sitting where it would land gets traded with.
     let target = match (dragging, snap) {
-        (Some(held), Some((col, row, _))) => {
-            let (_, _, width, height) = footprint(
-                &Placed {
-                    col,
-                    row,
-                    ..placed[held]
-                },
-                columns,
-                rows,
-            );
-            placed.iter().enumerate().position(|(index, other)| {
-                if index == held {
-                    return false;
-                }
-                let (ocol, orow, owidth, oheight) = footprint(other, columns, rows);
-                col < ocol + owidth
-                    && ocol < col + width
-                    && row < orow + oheight
-                    && orow < row + height
-            })
+        (Some(held), Some((row, _))) => {
+            let height = placed[held].size.height();
+            placed
+                .iter()
+                .enumerate()
+                .position(|(index, other)| index != held && overlaps(row, height, other))
         },
         _ => None,
     };
 
-    // The surface the widget would take, outlined with a thin line. Shown
-    // wherever it would land, whether or not anything is there.
-    if let Some((_, _, destination)) = snap {
+    if let Some((_, destination)) = snap {
         root.painter().rect_filled(
             destination,
             palette.corner(Tier::Card),
@@ -594,7 +363,7 @@ pub fn draw(
             ctx.data_mut(|data| data.remove::<usize>(drag_id));
             match (target, snap) {
                 (Some(over), _) => changes.push(Change::Swap { a: index, b: over }),
-                (None, Some((col, row, _))) => changes.push(Change::Place { index, col, row }),
+                (None, Some((row, _))) => changes.push(Change::Place { index, row }),
                 _ => {},
             }
         }
@@ -607,9 +376,7 @@ pub fn draw(
         }
 
         let drawn = match (held, pointer) {
-            (true, Some(pos)) => {
-                Rect::from_min_size(pos - vec2(cell, CELL_HEIGHT) / 2.0, slot.size())
-            },
+            (true, Some(pos)) => Rect::from_min_size(pos - grab_offset, slot.size()),
             _ => *slot,
         };
         if held {
@@ -665,7 +432,7 @@ pub fn draw(
                 Sense::click_and_drag(),
             );
             if handle.hovered() || resizing == Some(index) {
-                ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+                ctx.set_cursor_icon(CursorIcon::ResizeVertical);
             }
             if handle.drag_started() {
                 ctx.data_mut(|data| data.insert_temp(resize_id, index));
@@ -676,17 +443,11 @@ pub fn draw(
             if resizing == Some(index)
                 && let Some(pos) = pointer
             {
-                let wanted = size_from_corner(*slot, pos, cell, columns, rows);
-                let (_, _, width, height) = footprint(
-                    &Placed {
-                        size: wanted,
-                        ..*widget
-                    },
-                    columns,
-                    rows,
-                );
-                let preview =
-                    Rect::from_min_size(slot.min, vec2(extent_w(width, cell), extent(height)));
+                let max = max_widget_height(placed, index).max(1);
+                let height = (((pos.y - slot.top() + GAP) / (CELL_HEIGHT + GAP)).round() as i32)
+                    .clamp(1, i32::from(max)) as u8;
+                let wanted = Size::rows(height);
+                let preview = widget_rect(inner, widget.row, height);
                 root.painter().rect_stroke(
                     preview,
                     palette.corner(Tier::Card),
@@ -718,56 +479,16 @@ pub fn draw(
         );
     }
 
-    // ── One dashed slot at the first free cell.
-    //
-    // Three widget kinds and twelve columns means the shelf is mostly hole,
-    // and how that hole is drawn decides what it says. A full dotted grid
-    // reads as an unfinished screen; one dashed slot reads as an invitation.
-    // Nothing at all — which is what it used to be — reads as a shelf that is
-    // finished, which is exactly the wrong thing to say about an empty one.
     if dragging.is_none()
-        && let Some(slot) = free_slot(placed, area, columns)
+        && let Some(row) = free_row(placed).filter(|row| *row < visible_rows)
     {
-        let radius = f32::from(palette.radius(crate::theme::Tier::Card));
-        let ink = palette.text_muted.gamma_multiply(0.45);
-        let mut points: Vec<egui::Pos2> = glass::outline(slot, radius, 12)
-            .into_iter()
-            .map(|(point, _)| point)
-            .collect();
-        if let Some(first) = points.first().copied() {
-            points.push(first);
-        }
-        root.painter().extend(egui::Shape::dashed_line(
-            &points,
-            Stroke::new(1.0_f32, ink),
-            5.0,
-            4.5,
-        ));
-        let label = tr("widgets-drop-a-widget");
-        let text = root
-            .painter()
-            .layout_no_wrap(label.to_owned(), FontId::proportional(11.5), ink);
-        // The glyph and the words as one group, centred: either alone reads as
-        // something that failed to load.
-        let width = text.size().x + 18.0;
-        if slot.width() > width + 12.0 {
-            crate::icons::draw_icon(
-                root.painter(),
-                Rect::from_center_size(
-                    pos2(slot.center().x - width / 2.0 + 6.0, slot.center().y),
-                    vec2(12.0, 12.0),
-                ),
-                crate::icons::Icon::Plus,
-                ink,
-            );
-            root.painter().galley(
-                pos2(
-                    slot.center().x - width / 2.0 + 18.0,
-                    slot.center().y - text.size().y / 2.0,
-                ),
-                text,
-                ink,
-            );
+        let slot = widget_rect(inner, row, 1);
+        let response = root.put(slot, egui::Button::new(tr("chrome-add-a-widget")));
+        if let Some(menu) = crate::overlay_glass::popup(egui::Popup::menu(&response), &ctx, |ui| {
+            widget_menu(ui, placed)
+        }) && let Some(kind) = menu.inner
+        {
+            changes.push(Change::Add(kind));
         }
     }
 
@@ -775,7 +496,13 @@ pub fn draw(
     if let Some(index) = ctx.data(|data| data.get_temp::<usize>(sizes_id))
         && let Some(slot) = slots.get(index)
     {
-        match draw_size_menu(root, palette, *slot, placed[index].size) {
+        match draw_size_menu(
+            root,
+            palette,
+            *slot,
+            placed[index].size,
+            max_widget_height(placed, index),
+        ) {
             Some(size) => {
                 ctx.data_mut(|data| data.remove::<usize>(sizes_id));
                 changes.push(Change::Resize(index, size));
@@ -790,15 +517,6 @@ pub fn draw(
     }
 
     changes
-}
-
-/// The size a corner drag is asking for, in whole cells.
-fn size_from_corner(slot: Rect, pos: egui::Pos2, cell: f32, columns: u8, rows: u8) -> Size {
-    let width =
-        (((pos.x - slot.min.x + GAP) / (cell + GAP)).round() as i32).clamp(1, columns as i32);
-    let height =
-        (((pos.y - slot.min.y + GAP) / (CELL_HEIGHT + GAP)).round() as i32).clamp(1, rows as i32);
-    Size::cells(width as u8, height as u8)
 }
 
 /// The mark in a card's corner that says it can be resized.
@@ -819,7 +537,7 @@ fn draw_resize_handle(root: &mut Ui, palette: &Palette, rect: Rect) {
 /// Whether the pointer is over whichever menu is up, so a press elsewhere can
 /// dismiss it.
 pub fn over_menu(ctx: &egui::Context) -> bool {
-    ctx.data(|data| data.get_temp::<Rect>(Id::new("zervo_menu_rect")))
+    ctx.data(|data| data.get_temp::<Rect>(Id::unique("zervo_menu_rect")))
         .zip(ctx.input(|input| input.pointer.interact_pos()))
         .is_some_and(|(rect, pos)| rect.contains(pos))
 }
@@ -854,109 +572,119 @@ pub fn menu<T: Copy>(
 ) -> Option<T> {
     let ctx = root.ctx().clone();
     let height: f32 = rows.iter().map(Row::height).sum();
-    let rect = crate::ui::clamp_into(
-        Rect::from_min_size(
-            pos2(anchor.min.x, anchor.max.y + 6.0),
-            vec2(width, height + 12.0),
-        ),
+    let rect = crate::ui::anchored_popup(
+        anchor,
+        vec2(width, height + 12.0),
         ctx.content_rect(),
+        false,
     );
-    ctx.data_mut(|data| data.insert_temp(Id::new("zervo_menu_rect"), rect));
-    let palette = &palette.reaching(crate::ui::PANEL_REACH).over(rect);
+    ctx.data_mut(|data| data.insert_temp(Id::unique("zervo_menu_rect"), rect));
     let mut chosen = None;
-    egui::Area::new(Id::new(id))
+    egui::Area::new(Id::unique(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)
         .show(&ctx, |ui| {
-            let painter = ui.painter();
-            for shape in glass::shapes(
-                rect,
-                palette,
-                Glass::of(crate::theme::Surface::Menu)
-                    .opaque(palette.bg)
-                    .border(palette.border),
-            ) {
-                painter.add(shape);
-            }
-            let mut y = rect.min.y + 6.0;
-            for (index, entry) in rows.iter().enumerate() {
-                let row = Rect::from_min_size(
-                    pos2(rect.min.x + 6.0, y),
-                    vec2(rect.width() - 12.0, entry.height()),
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            let fallback = palette.reaching(crate::ui::PANEL_REACH).over(rect);
+            let palette = if surface.is_native() {
+                palette
+            } else {
+                &fallback
+            };
+            if !surface.is_native() {
+                glass::paint(
+                    ui.painter(),
+                    rect,
+                    palette,
+                    Glass::of(crate::theme::Surface::Menu)
+                        .opaque(palette.bg)
+                        .border(palette.border),
                 );
-                y += entry.height();
-                match entry {
-                    Row::Heading(label) => {
-                        ui.painter().text(
-                            pos2(row.min.x + 8.0, row.center().y + 2.0),
-                            Align2::LEFT_CENTER,
-                            label.to_uppercase(),
-                            FontId::proportional(10.0),
-                            palette.text_muted,
-                        );
-                    },
-                    Row::Item(label, value, current) => {
-                        let response = ui.interact(row, Id::new(id).with(index), Sense::click());
-                        if response.hovered() {
-                            ui.painter().rect_filled(
-                                row,
-                                CornerRadius::same(palette.radius(crate::theme::Tier::Control)),
-                                palette.surface_hover,
-                            );
-                        }
-                        ui.painter().text(
-                            pos2(row.min.x + 8.0, row.center().y),
-                            Align2::LEFT_CENTER,
-                            label,
-                            FontId::proportional(13.0),
-                            if *current {
-                                palette.accent
-                            } else {
-                                palette.text
-                            },
-                        );
-                        if *current {
-                            icons::draw_icon(
-                                ui.painter(),
-                                Rect::from_center_size(
-                                    pos2(row.max.x - 12.0, row.center().y),
-                                    vec2(11.0, 11.0),
-                                ),
-                                Icon::Check,
-                                palette.accent,
-                            );
-                        }
-                        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                            chosen = Some(*value);
-                        }
-                    },
-                }
             }
+            crate::overlay_glass::scroll_body(ui, rect.shrink(6.0), |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for entry in rows {
+                    let (row, response) = ui.allocate_exact_size(
+                        vec2(ui.available_width(), entry.height()),
+                        if matches!(entry, Row::Heading(_)) {
+                            Sense::hover()
+                        } else {
+                            Sense::click()
+                        },
+                    );
+                    match entry {
+                        Row::Heading(label) => {
+                            ui.painter().text(
+                                pos2(row.min.x + 8.0, row.center().y + 2.0),
+                                Align2::LEFT_CENTER,
+                                label.to_uppercase(),
+                                FontId::proportional(10.0),
+                                palette.text_muted,
+                            );
+                        },
+                        Row::Item(label, value, current) => {
+                            if response.hovered() {
+                                ui.painter().rect_filled(
+                                    row,
+                                    CornerRadius::same(palette.radius(crate::theme::Tier::Control)),
+                                    palette.surface_hover,
+                                );
+                            }
+                            crate::overlay_glass::row_label(
+                                ui,
+                                row.with_min_x(row.left() + 8.0)
+                                    .with_max_x(row.right() - 22.0),
+                                label,
+                                FontId::proportional(13.0),
+                                if *current {
+                                    palette.accent
+                                } else {
+                                    palette.text
+                                },
+                            );
+                            if *current {
+                                icons::draw_icon(
+                                    ui.painter(),
+                                    Rect::from_center_size(
+                                        pos2(row.max.x - 12.0, row.center().y),
+                                        vec2(11.0, 11.0),
+                                    ),
+                                    Icon::Check,
+                                    palette.accent,
+                                );
+                            }
+                            if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                                chosen = Some(*value);
+                            }
+                        },
+                    }
+                }
+            });
+            surface.finish(ui, rect, crate::overlay_glass::Role::Menu);
             ui.advance_cursor_after_rect(rect);
         });
     chosen
 }
 
-pub fn add_menu(root: &mut Ui, palette: &Palette, anchor: Rect) -> Option<WidgetKind> {
-    let rows: Vec<Row<WidgetKind>> = WidgetKind::ALL
-        .iter()
-        .map(|kind| Row::Item(kind.label().to_owned(), *kind, false))
-        .collect();
-    menu(
-        root,
-        palette,
-        "zervo_widget_menu_area",
-        anchor,
-        170.0,
-        &rows,
-    )
-}
-
-fn draw_size_menu(root: &mut Ui, palette: &Palette, anchor: Rect, current: Size) -> Option<Size> {
+fn draw_size_menu(
+    root: &mut Ui,
+    palette: &Palette,
+    anchor: Rect,
+    current: Size,
+    max: u8,
+) -> Option<Size> {
     let rows: Vec<Row<Size>> = Size::CHOICES
         .iter()
-        .map(|size| Row::Item(size.label(), *size, *size == current))
+        .take(usize::from(max))
+        .enumerate()
+        .map(|(index, size)| {
+            Row::Item(
+                crate::l10n::message("widgets-row-height", [("count", (index + 1).into())]),
+                *size,
+                *size == current,
+            )
+        })
         .collect();
     menu(
         root,
@@ -989,7 +717,7 @@ impl Look {
 
 /// One widget as the shelf is about to draw it.
 ///
-/// `index` is the position in `Settings::navbar_widgets`, and it is the
+/// `index` is the position in `Settings::sidebar_widgets`, and it is the
 /// widget's identity: anything interactive *inside* a widget hangs its egui id
 /// on it. The transport's three buttons used to key theirs on
 /// `rect.min.x as i32` instead, which is wrong twice over — two widgets of the
@@ -1138,7 +866,7 @@ fn draw_widget(
                 let hit = Rect::from_center_size(centre, vec2(30.0, 30.0));
                 let response = root.interact(
                     hit,
-                    Id::new("zervo_transport").with((slot_index, index)),
+                    Id::unique("zervo_transport").with((slot_index, index)),
                     Sense::click(),
                 );
                 if response.hovered() {
@@ -1158,7 +886,7 @@ fn draw_widget(
                     Some(icon) => icons::draw_icon(root.painter(), glyph, icon, tint),
                     None => {
                         let cross = crate::glass::ease_out(root.ctx().animate_bool_with_time(
-                            Id::new("zervo_transport_morph").with(slot_index),
+                            Id::unique("zervo_transport_morph").with(slot_index),
                             media.playing,
                             palette.material.animation,
                         ));
@@ -1201,49 +929,37 @@ pub fn draw_grabber(painter: &egui::Painter, palette: &Palette, edge: Rect, emph
 mod tests {
     use super::*;
 
-    /// The shelf that ships puts three widgets side by side on row 0. In one
-    /// column that is three widgets on the same cell, drawn on top of each
-    /// other — which is what the sidebar's shelf did from the day it was
-    /// written.
     #[test]
-    fn a_narrow_shelf_stacks_rather_than_piling_up() {
-        let shipped = Placed::defaults();
-        assert!(
-            fits(&shipped, crate::newtab::COLUMNS),
-            "the shipped arrangement fits the bar it was made for"
-        );
-        assert!(!fits(&shipped, 1), "and cannot fit one column unchanged");
-
-        let narrow = reflow(&shipped, 1);
-        assert_eq!(narrow.len(), shipped.len());
-        assert!(
-            narrow.iter().all(|widget| widget.col == 0),
-            "one column means column zero"
-        );
-        let mut rows: Vec<u8> = narrow.iter().map(|widget| widget.row).collect();
-        rows.sort_unstable();
-        rows.dedup();
+    fn horizontal_widgets_move_to_sidebar_rows_in_reading_order() {
+        let mut widgets = Placed::defaults();
+        for (index, widget) in widgets.iter_mut().enumerate() {
+            widget.legacy_column = [3, 0, 1][index];
+            widget.row = 0;
+        }
+        normalize_layout(&mut widgets);
         assert_eq!(
-            rows.len(),
-            shipped.len(),
-            "every widget gets a row of its own"
+            widgets.iter().map(|widget| widget.row).collect::<Vec<_>>(),
+            [2, 0, 1]
         );
-        // And the order down the column is the order across the bar.
-        let mut by_row: Vec<(usize, u8)> = narrow
-            .iter()
-            .enumerate()
-            .map(|(index, widget)| (index, widget.row))
-            .collect();
-        by_row.sort_by_key(|(_, row)| *row);
-        let order: Vec<usize> = by_row.iter().map(|(index, _)| *index).collect();
-        assert_eq!(order, vec![0, 1, 2], "left to right becomes top to bottom");
+        assert!(widgets.iter().all(|widget| widget.legacy_column == 0));
     }
 
-    /// An arrangement that already fits its host is never rewritten: the
-    /// reader's own layout is the one thing this must not quietly change.
     #[test]
-    fn a_shelf_that_fits_is_left_alone() {
-        let shipped = Placed::defaults();
-        assert!(fits(&shipped, crate::newtab::COLUMNS));
+    fn sidebar_widgets_swap_rows_and_cannot_resize_into_each_other() {
+        let mut widgets = Placed::defaults();
+        assert!(swap_widgets(&mut widgets, 0, 1));
+        assert_eq!((widgets[0].row, widgets[1].row), (1, 0));
+        assert!(!resize_widget(&mut widgets, 0, Size::rows(2)));
+        assert!(resize_widget(&mut widgets, 2, Size::rows(2)));
+        assert_eq!(free_row(&widgets), None);
+    }
+
+    #[test]
+    fn valid_sidebar_positions_survive_migration() {
+        let widgets = Placed::defaults();
+        let mut migrated = widgets.clone();
+        normalize_layout(&mut migrated);
+        assert_eq!(migrated, widgets);
+        assert_eq!(free_row(&migrated), Some(3));
     }
 }

@@ -1,26 +1,7 @@
 //! First run.
 //!
-//! Four questions and about a minute. No account, no import wizard, no
-//! telemetry consent — every answer writes one field that already exists in
-//! `Settings`, so this is the same code path as the Appearance page rather
-//! than a parallel one, and anything answered here can be answered again
-//! later in the same words.
+//! First-run choices use the same settings as the browser chrome.
 //!
-//! ## Why the limitations screen is the point
-//!
-//! Most onboarding sells. This one sets expectations, because the alternative
-//! is worse for exactly the reader it is trying to keep: somebody who meets a
-//! black video player and no explanation concludes the browser is broken, and
-//! somebody who was told concludes the engine is young. Same fact, opposite
-//! outcome — and only one of the two comes back.
-//!
-//! ## Why the material comes first
-//!
-//! It is the one question whose answer you can see while you are answering
-//! it. Each card is drawn with a palette resolved from that preset, so the
-//! choice is made by looking rather than by reading five descriptions of
-//! glass.
-
 use crate::l10n::text as tr;
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Rect, RichText, Sense, Stroke,
@@ -34,9 +15,9 @@ use crate::theme::{self, Palette, Preset, Surface, Tier};
 
 use super::{ChromeContext, UiAction};
 
-/// The steps, in order. The first and last are not questions, which is why the
-/// counter says four rather than six.
-const STEPS: u8 = 6;
+const NATIVE_MATERIAL: bool = cfg!(target_os = "macos");
+/// The welcome screen, the questions, and the final screen.
+const STEPS: u8 = if NATIVE_MATERIAL { 5 } else { 6 };
 /// A full-window change is allowed to take longer than a hover. The chrome's
 /// own settle time would be a cut at this size.
 const SLIDE: f32 = 0.42;
@@ -44,19 +25,20 @@ const SLIDE: f32 = 0.42;
 const SHIFT: f32 = 60.0;
 
 /// Where the setup has got to, and which way it is going.
-fn step(ctx: &egui::Context) -> f32 {
-    ctx.animate_value_with_time(Id::new("zervo_setup_at"), target(ctx) as f32, SLIDE)
+fn step(ctx: &egui::Context, animation: f32) -> f32 {
+    let duration = if animation > 0.0 { SLIDE } else { 0.0 };
+    ctx.animate_value_with_time(Id::unique("zervo_setup_at"), target(ctx) as f32, duration)
 }
 
 fn target(ctx: &egui::Context) -> u8 {
-    ctx.data(|data| data.get_temp::<u8>(Id::new("zervo_setup_step")))
+    ctx.data(|data| data.get_temp::<u8>(Id::unique("zervo_setup_step")))
         .or_else(crate::shot::setup_step)
         .unwrap_or(0)
         .min(STEPS - 1)
 }
 
 fn go(ctx: &egui::Context, to: u8) {
-    ctx.data_mut(|data| data.insert_temp(Id::new("zervo_setup_step"), to.min(STEPS - 1)));
+    ctx.data_mut(|data| data.insert_temp(Id::unique("zervo_setup_step"), to.min(STEPS - 1)));
 }
 
 /// The whole setup, or nothing at all.
@@ -70,32 +52,11 @@ pub(crate) fn draw(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<
     let ctx = root.ctx().clone();
     let window = ctx.content_rect();
     let palette = chrome.palette;
-    let accent = theme::workspace_color_from(0, chrome.settings.space_colour);
+    let accent = palette.accent;
+    root.painter()
+        .rect_filled(window, CornerRadius::ZERO, palette.bg);
 
-    // ── The ground. Retints toward the chosen space as soon as it is chosen,
-    // so step two's answer is visible behind step three.
-    let painter = root.painter();
-    painter.rect_filled(window, CornerRadius::ZERO, palette.bg);
-    for step in 0..24 {
-        let t = step as f32 / 23.0;
-        painter.rect_filled(
-            Rect::from_min_max(
-                pos2(window.min.x, window.min.y + window.height() * t),
-                pos2(
-                    window.max.x,
-                    window.min.y + window.height() * (t + 1.0 / 23.0),
-                ),
-            ),
-            CornerRadius::ZERO,
-            theme::mix(
-                theme::mix(palette.bg, accent, 0.30),
-                theme::mix(palette.bg, Color32::BLACK, 0.25),
-                t,
-            ),
-        );
-    }
-
-    let at = step(&ctx);
+    let at = step(&ctx, palette.material.animation);
     let now = target(&ctx);
     // Only the neighbours are drawn. A panel two steps away is off screen and
     // has nothing to contribute but widget ids.
@@ -139,8 +100,9 @@ fn panel(
     body: Rect,
     accent: Color32,
 ) {
+    let index = index + u8::from(NATIVE_MATERIAL && index > 0);
     match index {
-        0 => welcome(ui, chrome, actions, body, accent),
+        0 => welcome(ui, chrome, actions, body),
         1 => material(ui, chrome, actions, body),
         2 => space(ui, chrome, actions, body, accent),
         3 => layout(ui, chrome, actions, body),
@@ -151,13 +113,15 @@ fn panel(
 
 /// The kicker, title and subtitle every question shares.
 fn heading(ui: &mut Ui, palette: &Palette, accent: Color32, kicker: &str, title: &str, sub: &str) {
-    ui.label(
-        RichText::new(kicker.to_uppercase())
-            .size(10.5)
-            .strong()
-            .color(accent),
-    );
-    ui.add_space(14.0);
+    if !NATIVE_MATERIAL {
+        ui.label(
+            RichText::new(kicker.to_uppercase())
+                .size(10.5)
+                .strong()
+                .color(accent),
+        );
+        ui.add_space(14.0);
+    }
     ui.label(RichText::new(title).size(34.0).color(palette.text));
     ui.add_space(12.0);
     ui.allocate_ui_with_layout(
@@ -170,22 +134,12 @@ fn heading(ui: &mut Ui, palette: &Palette, accent: Color32, kicker: &str, title:
     ui.add_space(26.0);
 }
 
-fn welcome(
-    ui: &mut Ui,
-    chrome: &mut ChromeContext,
-    actions: &mut Vec<UiAction>,
-    body: Rect,
-    accent: Color32,
-) {
+fn welcome(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, body: Rect) {
     let palette = chrome.palette;
-    ui.add_space((body.height() - 330.0).max(0.0) * 0.5);
-    let (icon, _) = ui.allocate_exact_size(vec2(112.0, 112.0), Sense::hover());
-    ui.painter().rect_filled(
-        icon,
-        CornerRadius::same(palette.radius(Tier::Window) * 2),
-        theme::mix(palette.bg, accent, 0.35),
-    );
-    super::draw_zervo_mark(ui.painter(), icon.center(), 52.0, palette.text);
+    ui.add_space((body.height() - 345.0).max(0.0) * 0.5);
+    if let Some(icon) = super::application_icon(ui, palette.dark) {
+        ui.image((icon.id(), vec2(112.0, 112.0)));
+    }
     ui.add_space(30.0);
     ui.label(RichText::new("Zervo").size(52.0).color(palette.text));
     ui.add_space(16.0);
@@ -194,13 +148,17 @@ fn welcome(
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             ui.label(
-                RichText::new(tr("setup-a-calm-workspace-oriented-browser-on-servo"))
+                RichText::new(tr("setup-welcome-description"))
                     .size(15.0)
                     .color(palette.text_muted),
             );
         },
     );
     ui.add_space(12.0);
+    if chrome.native_glass.window_backdrop {
+        ui.label(RichText::new(tr("setup-system-glass")).color(palette.text_muted));
+        ui.add_space(12.0);
+    }
     super::language_picker(ui, chrome.settings, actions);
 }
 
@@ -376,7 +334,7 @@ fn space(
         accent,
         tr("setup-step-2-of-4"),
         tr("setup-name-your-first-space"),
-        tr("setup-tabs-live-in-named-spaces-its-colour"),
+        tr("setup-spaces-description"),
     );
     ui.allocate_ui_with_layout(
         vec2(320.0, 0.0),
@@ -435,7 +393,7 @@ fn space(
             });
             ui.add_space(14.0);
             ui.label(
-                RichText::new(tr("setup-you-can-add-more-later-and-drag"))
+                RichText::new(tr("setup-spaces-color-note"))
                     .size(11.5)
                     .color(palette.text_muted),
             );
@@ -451,11 +409,11 @@ fn layout(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, 
         &palette,
         theme::workspace_color_from(0, chrome.settings.space_colour),
         tr("setup-step-3-of-4"),
-        tr("setup-where-should-the-chrome-live"),
-        tr("setup-all-three-are-always-available-s-switches"),
+        tr("setup-choose-a-layout"),
+        tr("setup-switch-between-layouts"),
     );
     ui.horizontal(|ui| {
-        let width = 170.0 * 3.0 + ui.spacing().item_spacing.x * 2.0;
+        let width = 170.0 * Layout::ALL.len() as f32 + ui.spacing().item_spacing.x;
         ui.add_space(((ui.available_width() - width) * 0.5).max(0.0));
         for option in Layout::ALL {
             let chosen = chrome.settings.layout == option;
@@ -501,8 +459,7 @@ fn layout(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, 
     });
 }
 
-/// Three rectangles that say where the chrome is. Anything more detailed at
-/// this size is a picture of a browser rather than a diagram of one.
+/// Sketch the layout at the size of an onboarding card.
 fn layout_sketch(ui: &Ui, palette: &Palette, rect: Rect, option: Layout) {
     let painter = ui.painter();
     let radius = CornerRadius::same(palette.radius(Tier::Control));
@@ -511,11 +468,6 @@ fn layout_sketch(ui: &Ui, palette: &Palette, rect: Rect, option: Layout) {
     match option {
         Layout::Sidebar => painter.rect_filled(
             Rect::from_min_max(rect.min, pos2(rect.min.x + 40.0, rect.max.y)),
-            radius,
-            ink,
-        ),
-        Layout::Bar => painter.rect_filled(
-            Rect::from_min_max(rect.min, pos2(rect.max.x, rect.min.y + 14.0)),
             radius,
             ink,
         ),
@@ -536,13 +488,13 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
         theme::workspace_color_from(0, chrome.settings.space_colour),
         tr("setup-step-4-of-4"),
         tr("setup-before-you-start"),
-        tr("setup-servo-is-young-these-are-real-they"),
+        tr("setup-platform-compatibility"),
     );
     let rows: [(Icon, &str, &str); 4] = [
         (
             Icon::Music,
-            tr("setup-streaming-video-will-not-play"),
-            tr("setup-no-media-source-extensions-local-and-progressive"),
+            tr("setup-streaming-compatibility"),
+            tr("setup-streaming-compatibility-note"),
         ),
         (
             Icon::Extensions,
@@ -551,8 +503,8 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
         ),
         (
             Icon::Lock,
-            tr("setup-passwords-cannot-fill-themselves-in"),
-            tr("setup-kept-in-your-keychain-but-the-engine"),
+            tr("setup-fill-saved-logins"),
+            tr("setup-fill-saved-logins-note"),
         ),
         (
             Icon::Warning,
@@ -599,7 +551,7 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
             }
             ui.add_space(6.0);
             ui.label(
-                RichText::new(tr("setup-keeping-another-browser-around-is-sensible-zervo"))
+                RichText::new(tr("setup-open-page-elsewhere"))
                     .size(11.5)
                     .color(palette.text_muted),
             );
@@ -648,14 +600,9 @@ fn ready(
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             ui.label(
-                RichText::new(format!(
-                    "{} material, the {}, and a colour. Everything here is in Settings → \
-                     Appearance if you change your mind.",
-                    chrome.settings.appearance.preset_label(),
-                    chrome.settings.layout.label().to_lowercase(),
-                ))
-                .size(13.5)
-                .color(palette.text_muted),
+                RichText::new(tr("setup-change-layout-and-accent"))
+                    .size(13.5)
+                    .color(palette.text_muted),
             );
         },
     );
@@ -741,7 +688,11 @@ fn footer(
         let width = if on { 18.0 } else { 6.0 };
         let x = bar.center().x - (STEPS as f32 * 12.0) / 2.0 + index as f32 * 12.0;
         let dot = Rect::from_center_size(pos2(x, bar.center().y), vec2(width, 6.0));
-        let response = ui.interact(dot, Id::new("zervo_setup_dot").with(index), Sense::click());
+        let response = ui.interact(
+            dot,
+            Id::unique("zervo_setup_dot").with(index),
+            Sense::click(),
+        );
         ui.painter().rect_filled(
             dot,
             // Half the dot's own height. A step marker is a capsule that
@@ -773,11 +724,13 @@ fn footer(
         if pill(&mut middle, &palette, tr("setup-set-it-up"), true).clicked() {
             go(&ui.ctx().clone(), 1);
         }
-        middle.label(
-            RichText::new(tr("setup-four-questions-about-a-minute"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
+        if !NATIVE_MATERIAL {
+            middle.label(
+                RichText::new(tr("setup-four-questions-about-a-minute"))
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
+        }
         return;
     }
 

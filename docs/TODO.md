@@ -113,17 +113,10 @@ Listed so nobody starts them expecting to finish. Details in
   quickly, and the sidebar refactor below is waiting on one.
 - **`ui.rs` is still past three thousand lines.** The four parts of it that
   never read `ChromeContext` have left — `ui/frame.rs`, `ui/settings_page.rs`,
-  `ui/backdrops.rs`, `ui/text.rs`. What is left is the sidebar, the navigation
-  bar, the hover cards and the download and history pages, and the sidebar is
-  the hard one: its drag-and-drop spans three functions through untyped
-  `ctx.data` ids, so the compiler will not catch a reordering mistake and
-  nothing else will either. Do the navigation bar and the download pages first;
-  leave the sidebar until there is a UI harness.
-- **`dashboard.rs` still has its own copy of the grid.** `grid.rs` now has
-  fifteen tests pinning its behaviour, which is what that port was waiting for.
-  The catch is `Span::Full`: resolve it to concrete cells once, up front, and
-  hand `grid.rs` plain placements, rather than letting three functions each
-  decide what "full" means — which is how they came to disagree.
+  `ui/backdrops.rs`, `ui/text.rs`. What is left is sidebar
+  drag-and-drop, the hover cards, and the download and history pages. Drag
+  and drop uses temporary egui state across several functions. A UI harness
+  could verify tab moves and cross-space drops before further changes.
 - **`TabId` and `DownloadId` are both `u64` aliases**, so `CloseTab(TabId)` and
   `CancelDownload(u64)` are the same type and nothing stops one reaching the
   other. Two newtypes would close that for good; the compiler finds every site.

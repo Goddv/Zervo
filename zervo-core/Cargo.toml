@@ -4,13 +4,13 @@ name = "zervo-core"
 # wallpaper host should be told the version of the browser that is asking.
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.100"
 license = "MPL-2.0"
 description = "Zervo's engine-independent parts: theme, glass, grid, gestures, storage, and a small HTTPS client"
 publish = false
 
 [dependencies]
-egui = "0.34.3"
+egui = "0.37.0"
 fluent-bundle = "0.16"
 fluent-syntax = "0.12"
 sys-locale = "0.3"

@@ -5,32 +5,9 @@
 //! the address bar into a URL or a search. All of it is arithmetic on strings
 //! and rects, so all of it is testable without a window.
 
-use egui::Rect;
+use egui::{Pos2, Rect, Vec2, pos2};
 
 use crate::settings::SearchEngine;
-
-/// A saved page's name, falling back to its host when it has no title.
-/// The family display-size type is set in.
-///
-/// The study's largest runs are set at weight 150–200: a 92pt clock, a 54pt
-/// wordmark. Nothing in the application could render them, because macOS ships
-/// SF Pro only as a *variable* font and epaint's rasteriser takes a variable
-/// font's default instance and no other — so every run of text in Zervo, from
-/// a 10pt caption to a 62pt clock, was Regular. At caption sizes that is a
-/// missing distinction; at 62 points it is the wrong typeface.
-///
-/// So display type gets a family of its own, filled per platform in
-/// `install_fonts` from whatever real light face is there — Helvetica Neue
-/// Thin on macOS, egui's own Ubuntu-Light elsewhere — and falling back to the
-/// proportional family if neither is. It is deliberately *only* for display
-/// sizes: a thin face is a different typeface, and mixing two of them through
-/// the body text would be worse than one weight everywhere.
-pub const DISPLAY_FAMILY: &str = "zervo_display";
-
-/// A display-size font at `size` points.
-pub fn display_font(size: f32) -> egui::FontId {
-    egui::FontId::new(size, egui::FontFamily::Name(DISPLAY_FAMILY.into()))
-}
 
 /// The host part of a URL, without `www.` — the short name a person would use
 /// for a site.
@@ -49,6 +26,7 @@ pub fn host_of(url: &str) -> String {
         .to_owned()
 }
 
+/// A saved page's name, falling back to its address when it has no title.
 pub fn display_name<'a>(title: &'a str, url: &'a str) -> &'a str {
     if !title.is_empty() {
         return title;
@@ -89,18 +67,51 @@ pub fn ellipsize(text: &str, limit: usize) -> String {
         + "…"
 }
 
-/// Keep a rect inside `bounds`.
+const POPUP_MARGIN: f32 = 8.0;
+
+fn popup_bounds(bounds: Rect) -> Rect {
+    bounds.shrink(POPUP_MARGIN.min(bounds.width().min(bounds.height()).max(0.0) * 0.5))
+}
+
+fn fit_popup(origin: Pos2, size: Vec2, bounds: Rect) -> Rect {
+    let size = size.max(Vec2::ZERO).min(bounds.size());
+    let max_origin = bounds.max - size;
+    Rect::from_min_size(origin.clamp(bounds.min, max_origin.max(bounds.min)), size)
+}
+
+/// Fit the popup to the available bounds, including oversized menus.
 pub fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
-    let mut min = rect.min;
-    min.x = min.x.clamp(
-        bounds.min.x + 8.0,
-        (bounds.max.x - rect.width() - 8.0).max(bounds.min.x + 8.0),
-    );
-    min.y = min.y.clamp(
-        bounds.min.y + 8.0,
-        (bounds.max.y - rect.height() - 8.0).max(bounds.min.y + 8.0),
-    );
-    Rect::from_min_size(min, rect.size())
+    fit_popup(rect.min, rect.size(), popup_bounds(bounds))
+}
+
+/// Prefer room below the trigger. Flip above it when that fits, or use the
+/// larger side as a viewport when the contents need to scroll.
+pub fn anchored_popup(anchor: Rect, size: Vec2, bounds: Rect, centered: bool) -> Rect {
+    const GAP: f32 = 6.0;
+    let bounds = popup_bounds(bounds);
+    let below = (anchor.bottom() + GAP).clamp(bounds.top(), bounds.bottom());
+    let above = (anchor.top() - GAP).clamp(bounds.top(), bounds.bottom());
+    let below_room = bounds.bottom() - below;
+    let above_room = above - bounds.top();
+    let flip = size.y > below_room && above_room > below_room;
+    let room = if flip { above_room } else { below_room };
+    let width = size.x.min(bounds.width());
+    let left = if centered {
+        anchor.center().x - width * 0.5
+    } else {
+        anchor.left()
+    };
+    // An unusually large trigger can leave too little room on either side
+    // for a usable viewport. The popup may overlap it in that case.
+    if room < size.y.min(80.0) {
+        return fit_popup(pos2(left, below), size, bounds);
+    }
+    let height = size.y.min(room);
+    fit_popup(
+        pos2(left, if flip { above - height } else { below }),
+        egui::vec2(width, height),
+        bounds,
+    )
 }
 
 /// Turn address-bar input into a loadable URL: pass URLs through, prefix bare
@@ -154,5 +165,27 @@ pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
     } else {
         let truncated: String = text.chars().take(max_chars.saturating_sub(1)).collect();
         format!("{truncated}…")
+    }
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::*;
+
+    #[test]
+    fn the_popup_flips_above_a_trigger_near_the_bottom() {
+        let window = Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 400.0));
+        let trigger = Rect::from_min_size(pos2(500.0, 351.0), egui::vec2(65.0, 28.0));
+        let popup = anchored_popup(trigger, egui::vec2(240.0, 140.0), window, false);
+        assert_eq!(popup.bottom(), trigger.top() - 6.0);
+        assert_eq!(popup.right(), window.right() - POPUP_MARGIN);
+    }
+
+    #[test]
+    fn oversized_menus_fit_a_short_window_even_with_a_large_trigger() {
+        let window = Rect::from_min_size(Pos2::ZERO, egui::vec2(300.0, 200.0));
+        let trigger = window.shrink(25.0);
+        let menu = anchored_popup(trigger, egui::vec2(800.0, 600.0), window, false);
+        assert_eq!(menu, window.shrink(POPUP_MARGIN));
     }
 }

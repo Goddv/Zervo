@@ -64,6 +64,6 @@ confidence-threshold = 0.9
 
 [sources]
 unknown-registry = "deny"
-# The pinned Servo fork carries Zervo's patches. See docs/SERVO.md.
+# These revisions carry fixes that haven't shipped in the upstream releases.
 unknown-git = "deny"
-allow-git = ["https://github.com/Goddv/servo"]
+allow-git = ["https://github.com/Goddv/servo", "https://github.com/emilk/egui"]

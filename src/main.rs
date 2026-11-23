@@ -36,6 +36,8 @@ mod app;
 mod backdrop;
 mod controls;
 mod dashboard;
+#[cfg(target_os = "macos")]
+mod display_link;
 mod downloads;
 // The engine-independent half of the browser, in its own crate so that clippy
 // and the tests can run on a pull request without compiling Servo first.
@@ -51,6 +53,7 @@ mod library;
 mod morphicons;
 mod newtab;
 mod notifications;
+mod overlay_glass;
 mod passwords;
 mod phosphor;
 mod transition;
@@ -75,12 +78,12 @@ use std::sync::{Arc, Mutex};
 
 use egui::LayerId;
 use egui_glow::{CallbackFn, EguiGlow};
-use euclid::{Point2D, Rect, Scale, Size2D};
+use euclid::{Point2D, Rect, Scale};
 use keyboard_types::ShortcutMatcher;
 use servo::{
-    ClipboardAction, DeviceIndependentPixel, DevicePixel, EventLoopWaker, InputEvent, Key,
-    MouseButton as ServoMouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
-    MouseMoveEvent, NamedKey, RenderingContext, ServoBuilder, WheelDelta, WheelEvent, WheelMode,
+    ClipboardAction, DevicePixel, EventLoopWaker, InputEvent, Key, MouseButton as ServoMouseButton,
+    MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent, NamedKey,
+    RenderingContext, ServoBuilder, WebView, WebViewId, WheelDelta, WheelEvent, WheelMode,
     WindowRenderingContext,
 };
 use url::Url;
@@ -195,11 +198,13 @@ struct RunningApp {
     settings_open: bool,
     modifiers: ModifiersState,
     /// Last cursor position in window physical pixels.
-    cursor: PhysicalPosition<f64>,
-    /// Last cursor position relative to the webview origin, physical pixels.
-    webview_relative_mouse: Cell<Point2D<f32, DevicePixel>>,
+    cursor: Option<PhysicalPosition<f64>>,
+    /// The webview that last received a pointer move and may still show a hover.
+    hovered_webview: Option<WebView>,
     /// The content rect left over after the chrome panels, in egui points.
     content_rect_points: egui::Rect,
+    sidebar_overlay: Option<egui::Rect>,
+    sidebar_bounds: Option<egui::Rect>,
     /// The surface the page was painted on last frame, which is what the
     /// blurred copy every glass surface frosts against is a copy of. Not the
     /// card's own rectangle once the chrome floats over the page — see
@@ -226,8 +231,10 @@ struct RunningApp {
     pending_repaint_at: Option<std::time::Instant>,
     /// Where egui leaves the delay it actually asked for. See `RepaintAt`.
     repaint_at: RepaintAt,
-    /// What `apply_theme` was last run for, and the icon last handed to the
-    /// Dock. Every settings write used to redo both, and redoing the theme
+    animation_waker: Waker,
+    animation_pending: bool,
+    painted_webview: Option<WebViewId>,
+    /// What `apply_theme` was last run for. Reapplying the theme
     /// means restyling egui, retuning the window's appearance and the frosted
     /// material, and telling every webview its prefers-color-scheme changed —
     /// which makes the page relayout. Doing all that because someone toggled
@@ -248,7 +255,6 @@ struct RunningApp {
     /// is a slider, which would send one per frame of a drag. Restyling egui's
     /// own widgets from it is cheap, so that happens whenever any of it moves.
     applied_appearance: theme::Appearance,
-    applied_icon: settings::AppIcon,
     /// A theme change in flight: the palette it started from, and when.
     ///
     /// The chrome crosses over rather than snapping, because half of what the
@@ -310,7 +316,7 @@ struct RunningApp {
     #[cfg(target_os = "macos")]
     _vibrancy: Option<vibrancy::Vibrancy>,
     #[cfg(target_os = "macos")]
-    liquid_glass: Option<vibrancy::LiquidGlass>,
+    glass_overlays: Option<overlay_glass::GlassOverlays>,
 }
 
 impl ApplicationHandler<WakerEvent> for App {
@@ -346,9 +352,15 @@ impl ApplicationHandler<WakerEvent> for App {
             .create_window(attributes)
             .expect("Failed to create winit Window");
 
+        #[cfg(target_os = "macos")]
+        vibrancy::configure_titlebar(&window);
+
         // Frosted-glass backdrop behind the (translucent) chrome.
         #[cfg(target_os = "macos")]
-        let vibrancy = vibrancy::install(&window, objc2_app_kit::NSVisualEffectMaterial::Sidebar);
+        let vibrancy = vibrancy::install(
+            &window,
+            objc2_app_kit::NSVisualEffectMaterial::UnderWindowBackground,
+        );
 
         // Only true where the window was created transparent *and* a backdrop
         // was actually installed behind it. If the effect view failed to go in,
@@ -356,7 +368,7 @@ impl ApplicationHandler<WakerEvent> for App {
         #[cfg(target_os = "macos")]
         let translucent_window = vibrancy.is_some();
         #[cfg(target_os = "macos")]
-        let liquid_glass = vibrancy::LiquidGlass::install(&window);
+        let glass_overlays = overlay_glass::GlassOverlays::install(&window);
         #[cfg(not(target_os = "macos"))]
         let translucent_window = false;
 
@@ -364,9 +376,22 @@ impl ApplicationHandler<WakerEvent> for App {
             .display_handle()
             .expect("Failed to get display handle");
         let window_handle = window.window_handle().expect("Failed to get window handle");
+        #[cfg(target_os = "macos")]
+        let refresh_driver = display_link::DisplayLink::for_window(&window);
+        #[cfg(not(target_os = "macos"))]
+        let refresh_driver: Option<Rc<dyn servo::RefreshDriver>> = None;
+        let size = window.inner_size();
         let window_rendering_context = Rc::new(
-            WindowRenderingContext::new(display_handle, window_handle, window.inner_size())
-                .expect("Could not create RenderingContext for window"),
+            match refresh_driver {
+                Some(driver) => WindowRenderingContext::new_with_refresh_driver(
+                    display_handle,
+                    window_handle,
+                    size,
+                    driver,
+                ),
+                None => WindowRenderingContext::new(display_handle, window_handle, size),
+            }
+            .expect("Could not create RenderingContext for window"),
         );
         window_rendering_context
             .make_current()
@@ -488,6 +513,8 @@ impl ApplicationHandler<WakerEvent> for App {
             // Constructed stylesheets — how web components ship their styling.
             // Without it Lit and friends render unstyled.
             dom_adoptedstylesheet_enabled: true,
+            // Servo's shell enables this API, which sites use to load web fonts.
+            dom_fontface_enabled: true,
             // `@container`, and multi-column layout. Both fall back to
             // something wrong-looking rather than something absent.
             layout_css_container_queries_enabled: true,
@@ -529,6 +556,7 @@ impl ApplicationHandler<WakerEvent> for App {
             .as_ref()
             .filter(|url| url.scheme() == "zervo")
             .cloned();
+        let explicit_url = asked_for.is_some();
         let start_url = asked_for
             .filter(|url| url.scheme() != "zervo")
             .or_else(|| Url::parse(&settings.homepage).ok())
@@ -539,20 +567,12 @@ impl ApplicationHandler<WakerEvent> for App {
             servo,
             window_rendering_context,
             rendering_context,
-            browser: RefCell::new({
-                let mut browser = BrowserState::new(start_url.as_str());
-                // Workspaces are session state — nothing writes them out — so
-                // the name somebody gave their first space at setup lives in
-                // `Settings` and is put back here. Asking for a name and then
-                // forgetting it on the next launch would be worse than not
-                // asking.
-                if !settings.first_space.trim().is_empty()
-                    && let Some(first) = browser.workspaces.first_mut()
-                {
-                    first.name = settings.first_space.trim().to_owned();
-                }
-                browser
-            }),
+            page_frame_ready: Cell::new(false),
+            browser: RefCell::new(BrowserState::restore(
+                start_url.as_str(),
+                &settings.first_space,
+                explicit_url,
+            )),
             pending_popups: RefCell::new(Vec::new()),
             pending_closes: RefCell::new(Vec::new()),
             pending_keyboard_events: RefCell::new(HashMap::new()),
@@ -576,15 +596,14 @@ impl ApplicationHandler<WakerEvent> for App {
         // The (transparent) titlebar material must follow the app theme, or a
         // light app under a dark system keeps a dark band across the top.
         sync_window_theme(&state.window, settings.theme);
-        #[cfg(target_os = "macos")]
-        set_dock_icon(settings.app_icon);
 
-        let initial_tab = state
-            .browser
-            .borrow()
-            .active_tab
-            .expect("initial tab exists");
-        state.open_tab(initial_tab, start_url);
+        let (initial_tab, initial_url) = {
+            let browser = state.browser.borrow();
+            let tab = browser.active_tab().expect("initial tab exists");
+            let url = Url::parse(&tab.url).unwrap_or(start_url);
+            (tab.id, url)
+        };
+        state.open_tab(initial_tab, initial_url);
 
         // Everything is in place: the GL context, the accessibility adapter, the
         // theme and the first tab. Now it can be looked at.
@@ -597,7 +616,6 @@ impl ApplicationHandler<WakerEvent> for App {
             settings.appearance.translucency,
         );
         let applied_appearance = settings.appearance;
-        let applied_icon = settings.app_icon;
         // Whatever was cached last time, decoded on a thread so a launch never
         // waits on a photograph.
         let mut wallpaper = wallpaper::Wallpaper::default();
@@ -610,9 +628,11 @@ impl ApplicationHandler<WakerEvent> for App {
             favicons: HashMap::new(),
             settings_open: false,
             modifiers: ModifiersState::default(),
-            cursor: PhysicalPosition::default(),
-            webview_relative_mouse: Cell::new(Point2D::zero()),
+            cursor: None,
+            hovered_webview: None,
             content_rect_points: egui::Rect::ZERO,
+            sidebar_overlay: None,
+            sidebar_bounds: None,
             page_rect_points: egui::Rect::ZERO,
             controls_open: false,
             swipe: gestures::Recognizer::default(),
@@ -620,11 +640,13 @@ impl ApplicationHandler<WakerEvent> for App {
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
             repaint_at,
+            animation_waker: waker.clone(),
+            animation_pending: false,
+            painted_webview: None,
             applied_theme,
             applied_appearance,
             shot: shot::Shot::from_env(),
             space: 0,
-            applied_icon,
             theme_fade: None,
             downloads: downloads::DownloadManager::default(),
             wallpaper,
@@ -643,7 +665,7 @@ impl ApplicationHandler<WakerEvent> for App {
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
             #[cfg(target_os = "macos")]
-            liquid_glass,
+            glass_overlays,
         });
 
         if let (Self::Running(app), Some(url)) = (&mut *self, internal) {
@@ -678,6 +700,10 @@ impl ApplicationHandler<WakerEvent> for App {
         };
         match event {
             WakerEvent::Engine => app.state.servo.spin_event_loop(),
+            WakerEvent::AnimationFrame => {
+                app.animation_pending = false;
+                app.state.window.request_redraw();
+            },
             WakerEvent::Accessibility(event) => {
                 use egui_winit::accesskit_winit::WindowEvent as AccessEvent;
                 match event.window_event {
@@ -768,22 +794,14 @@ impl RunningApp {
 
         // Route the remaining (input) events: egui first, unless the cursor is
         // over the web content, in which case pointer events bypass the chrome.
-        let scale = state.window.scale_factor() as f32;
-        let cursor_points = egui::pos2(self.cursor.x as f32 / scale, self.cursor.y as f32 / scale);
-        // While the settings page covers the content area, egui owns it — as
-        // it does the strip a revealed autohide sidebar floats over, or its
-        // clicks and scrolls would reach the page underneath as well.
-        // Anything egui has floating over the content owns the pointer: the
-        // favourites card, the downloads card, the revealed sidebar, widget
-        // menus, page dialogs. Asking egui which layer is under the pointer
-        // covers all of them, including ones added later — the previous
-        // version listed overlays by hand, and every overlay anyone forgot to
-        // add sent its clicks straight through to the page underneath.
-        let pointer_on_page = self.content_rect_points.contains(cursor_points)
-            && !self.settings_open
-            // A modal dialog blocks the whole page, not just its own rect.
-            && !self.controls_open
-            && !self.egui_glow.egui_ctx.is_pointer_over_egui();
+        match &event {
+            WindowEvent::CursorMoved { position, .. } => self.cursor = Some(*position),
+            WindowEvent::CursorLeft { .. } => self.cursor = None,
+            _ => {},
+        }
+        let scale = state.window.scale_factor() as f32 * self.egui_glow.egui_ctx.zoom_factor();
+        let cursor_points = self.cursor_points(scale);
+        let pointer_on_page = cursor_points.is_some_and(|point| self.pointer_hits_page(point));
 
         // Re-decided on every press rather than remembered indefinitely, so a
         // mouse-up we never see — AppKit swallows one whenever it runs its own
@@ -806,6 +824,7 @@ impl RunningApp {
         if let WindowEvent::Focused(focused) = &event {
             if !focused {
                 self.pointer_owner = PointerOwner::Free;
+                self.leave_webview();
             }
             if let Some(webview) = state.active_webview() {
                 webview.set_focused(*focused);
@@ -823,20 +842,32 @@ impl RunningApp {
             // Fed in points, so the thresholds mean the same thing on a
             // Retina display as anywhere else.
             let scale = self.egui_glow.egui_ctx.pixels_per_point().max(0.1);
-            if let Some(direction) =
+            let region = match cursor_points {
+                _ if self.pointer_owner != PointerOwner::Free
+                    || self.controls_open
+                    || egui::Popup::is_any_open(&self.egui_glow.egui_ctx) =>
+                {
+                    gestures::Region::Blocked
+                },
+                Some(point)
+                    if self
+                        .sidebar_bounds
+                        .is_some_and(|bounds| bounds.contains(point)) =>
+                {
+                    gestures::Region::Sidebar
+                },
+                Some(point) if point.y < self.content_rect_points.top() => {
+                    gestures::Region::TopStrip
+                },
+                Some(_) => gestures::Region::Content,
+                None => gestures::Region::Blocked,
+            };
+            if let Some((direction, origin)) =
                 self.swipe
-                    .feed(step / scale, *phase, std::time::Instant::now())
+                    .feed(step / scale, *phase, std::time::Instant::now(), region)
+                && region != gestures::Region::Blocked
             {
-                // Up and down are scrolling everywhere except the strip above
-                // the page, which has nothing to scroll.
-                let vertical_ok = cursor_points.y < self.content_rect_points.min.y;
-                let horizontal = matches!(
-                    direction,
-                    gestures::Direction::Left | gestures::Direction::Right
-                );
-                if horizontal || vertical_ok {
-                    self.apply_gesture(self.settings.gestures.action(direction));
-                }
+                self.apply_gesture(self.settings.gestures.action(direction, origin));
             }
         }
 
@@ -857,6 +888,8 @@ impl RunningApp {
             self.pointer_owner = PointerOwner::Free;
         }
 
+        let overlay_owns_keyboard =
+            self.controls_open || egui::Popup::is_any_open(&self.egui_glow.egui_ctx);
         let mut consumed = false;
         match &event {
             WindowEvent::MouseWheel { .. } | WindowEvent::MouseInput { .. } if over_content => {
@@ -869,7 +902,8 @@ impl RunningApp {
                 });
             },
             WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..)
-                if state.active_webview().is_some()
+                if !overlay_owns_keyboard
+                    && state.active_webview().is_some()
                     && !self
                         .egui_glow
                         .egui_ctx
@@ -877,14 +911,24 @@ impl RunningApp {
             event => {
                 let response = self.egui_glow.on_window_event(&state.window, event);
                 if response.repaint {
-                    state.window.request_redraw();
+                    if matches!(event, WindowEvent::CursorMoved { .. }) {
+                        // Preserve every motion event for hit testing and drags.
+                        // Present the resulting hover state once per refresh.
+                        self.request_animation_frame();
+                    } else {
+                        state.window.request_redraw();
+                    }
                 }
-                // CursorMoved always goes to egui (tooltips), but is still
-                // forwarded to the webview when over the content.
-                consumed = if matches!(event, WindowEvent::CursorMoved { .. }) && over_content {
+                // A move over chrome can still have to clear the page's hover.
+                consumed = if matches!(event, WindowEvent::CursorMoved { .. }) {
                     false
                 } else {
                     response.consumed
+                        || (overlay_owns_keyboard
+                            && matches!(
+                                event,
+                                WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(..)
+                            ))
                 };
             },
         }
@@ -893,22 +937,24 @@ impl RunningApp {
         }
 
         match event {
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = position;
+            WindowEvent::CursorMoved { position, .. } if over_content => {
                 let point = self.webview_point(position, scale);
-                let previous = self.webview_relative_mouse.replace(point);
-                if let Some(webview) = state.active_webview() {
-                    let rect: Rect<f32, DevicePixel> = webview.size().into();
-                    if rect.contains(point) {
-                        webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(
-                            point.into(),
-                        )));
-                    } else if rect.contains(previous) {
-                        webview.notify_input_event(InputEvent::MouseLeftViewport(
-                            MouseLeftViewportEvent::default(),
-                        ));
+                if let Some(webview) = state.active_webview()
+                    && Rect::<f32, DevicePixel>::from(webview.size()).contains(point)
+                {
+                    if self.hovered_webview.as_ref() != Some(&webview) {
+                        self.leave_webview();
                     }
+                    webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(
+                        point.into(),
+                    )));
+                    self.hovered_webview = Some(webview);
+                } else {
+                    self.leave_webview();
                 }
+            },
+            WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } => {
+                self.leave_webview();
             },
             WindowEvent::Ime(ime) => {
                 use servo::{CompositionEvent, CompositionState, ImeEvent};
@@ -943,19 +989,12 @@ impl RunningApp {
                     }
                 }
             },
-            WindowEvent::CursorLeft { .. } => {
-                if let Some(webview) = state.active_webview() {
-                    webview.notify_input_event(InputEvent::MouseLeftViewport(
-                        MouseLeftViewportEvent::default(),
-                    ));
-                }
-            },
             WindowEvent::MouseInput {
                 state: element_state,
                 button,
                 ..
-            } => {
-                let point = self.webview_relative_mouse.get();
+            } if over_content && let Some(position) = self.cursor => {
+                let point = self.webview_point(position, scale);
                 if let Some(webview) = state.active_webview() {
                     let rect: Rect<f32, DevicePixel> = webview.size().into();
                     if rect.contains(point) {
@@ -982,7 +1021,9 @@ impl RunningApp {
                     }
                 }
             },
-            WindowEvent::MouseWheel { delta, .. } if over_content => {
+            WindowEvent::MouseWheel { delta, .. }
+                if over_content && let Some(position) = self.cursor =>
+            {
                 if let Some(webview) = state.active_webview() {
                     let (delta_x, delta_y) = match delta {
                         MouseScrollDelta::LineDelta(dx, dy) => {
@@ -997,7 +1038,7 @@ impl RunningApp {
                             z: 0.0,
                             mode: WheelMode::DeltaPixel,
                         },
-                        self.webview_relative_mouse.get().into(),
+                        self.webview_point(position, scale).into(),
                     )));
                 }
             },
@@ -1007,6 +1048,39 @@ impl RunningApp {
                 self.handle_keyboard_input(key_event);
             },
             _ => {},
+        }
+    }
+
+    fn cursor_points(&self, scale: f32) -> Option<egui::Pos2> {
+        self.cursor
+            .map(|position| egui::pos2(position.x as f32 / scale, position.y as f32 / scale))
+    }
+
+    fn pointer_hits_page(&self, point: egui::Pos2) -> bool {
+        self.content_rect_points.contains(point)
+            && !self.settings_open
+            && !self.controls_open
+            && !self
+                .sidebar_overlay
+                .is_some_and(|rect| rect.contains(point))
+            && (self.settings.layout.is_sidebar()
+                || !ui::sidebar_trigger_contains(
+                    self.egui_glow.egui_ctx.content_rect(),
+                    &self.settings.appearance,
+                    point,
+                ))
+            && self
+                .egui_glow
+                .egui_ctx
+                .layer_id_at(point)
+                .is_none_or(|layer| layer.order == egui::Order::Background)
+    }
+
+    fn leave_webview(&mut self) {
+        if let Some(webview) = self.hovered_webview.take() {
+            webview.notify_input_event(InputEvent::MouseLeftViewport(
+                MouseLeftViewportEvent::default(),
+            ));
         }
     }
 
@@ -1046,10 +1120,7 @@ impl RunningApp {
         let mut handled = true;
         ShortcutMatcher::from_event(key_event.event.clone())
             .shortcut(CMD_OR_CONTROL, 'T', || {
-                // Hoisted: the Ref guard must drop before apply_action
-                // takes a mutable borrow of the same RefCell.
-                let workspace = state.browser.borrow().active_workspace;
-                self.apply_action(UiAction::NewTab { workspace });
+                self.apply_action(UiAction::OpenCommand(ui::CommandMode::NewTab));
             })
             .shortcut(CMD_OR_CONTROL, 'W', || {
                 let active_tab = state.browser.borrow().active_tab;
@@ -1065,6 +1136,16 @@ impl RunningApp {
                 state.quit_requested.set(true);
                 state.window.request_redraw();
             })
+            .shortcut(
+                CMD_OR_CONTROL.union(keyboard_types::Modifiers::ALT),
+                Key::Named(NamedKey::ArrowUp),
+                || self.apply_gesture(gestures::GestureAction::PreviousWorkspace),
+            )
+            .shortcut(
+                CMD_OR_CONTROL.union(keyboard_types::Modifiers::ALT),
+                Key::Named(NamedKey::ArrowDown),
+                || self.apply_gesture(gestures::GestureAction::NextWorkspace),
+            )
             .shortcut(CMD_OR_CONTROL, ',', || {
                 self.apply_action(UiAction::OpenSettings);
             })
@@ -1077,11 +1158,10 @@ impl RunningApp {
                 self.apply_action(UiAction::Reload);
             })
             .shortcut(CMD_OR_CONTROL, 'S', || {
-                self.apply_action(UiAction::CycleLayout);
+                self.apply_action(UiAction::ToggleSidebar);
             })
             .shortcut(CMD_OR_CONTROL, 'L', || {
-                state.browser.borrow_mut().focus_address = true;
-                state.window.request_redraw();
+                self.apply_action(UiAction::OpenCommand(ui::CommandMode::CurrentTab));
             })
             .shortcut(CMD_OR_CONTROL_SHIFT, 'L', || {
                 self.apply_action(UiAction::FillSavedLogin);
@@ -1156,24 +1236,6 @@ impl RunningApp {
             self.refresh_favicons();
         }
 
-        // The wallpaper: collect anything the fetch thread finished, and start
-        // a new one when the cadence says so. Both are cheap when there is
-        // nothing to do, which is almost always.
-        // The page's blurred copy, taken by last frame's paint callback. On an
-        // internal page there is nothing to copy, and a stale copy of the page
-        // you were on before is worse than none.
-        let ground = self.palette().bg;
-        if let Ok(mut backdrop) = self.page_backdrop.lock()
-            && let Some(image) = backdrop.take(ground)
-        {
-            self.page_backdrop_texture = Some(theme::Frost::upload(
-                &self.egui_glow.egui_ctx,
-                "zervo-page-backdrop",
-                image,
-                egui::TextureOptions::LINEAR,
-            ));
-        }
-
         // Collected whatever the page is showing: a result left sitting in the
         // channel would keep the loop waking up for it forever.
         if self.wallpaper.poll()
@@ -1212,7 +1274,7 @@ impl RunningApp {
 
         let palette = self.palette();
         #[cfg(target_os = "macos")]
-        let (palette, native_available) = {
+        let (palette, native_available, window_glass) = {
             let (reduce_transparency, reduce_motion) = vibrancy::accessibility_preferences();
             let mut palette = if reduce_transparency {
                 palette.with_translucency(theme::Translucency::Solid)
@@ -1222,10 +1284,21 @@ impl RunningApp {
             if reduce_motion {
                 palette.material.animation = 0.0;
             }
-            (palette, self.liquid_glass.is_some() && !reduce_transparency)
+            let native_available = self._vibrancy.is_some() && !reduce_transparency;
+            let window_glass = palette.translucency == theme::Translucency::LiquidGlass
+                && self
+                    ._vibrancy
+                    .as_ref()
+                    .is_some_and(vibrancy::Vibrancy::has_window_glass);
+            (palette, native_available, window_glass)
         };
         #[cfg(not(target_os = "macos"))]
-        let native_available = false;
+        let (native_available, window_glass) = (false, false);
+        #[cfg(target_os = "macos")]
+        let window_controls =
+            vibrancy::window_controls(&state.window, self.egui_glow.egui_ctx.zoom_factor());
+        #[cfg(not(target_os = "macos"))]
+        let window_controls = None;
         if self.theme_fade.is_some() {
             // egui's own style has to follow the crossfade frame by frame:
             // stock widgets take their colors from there rather than from the
@@ -1238,41 +1311,57 @@ impl RunningApp {
             if done {
                 self.theme_fade = None;
             } else {
-                state.window.request_redraw();
+                self.request_animation_frame();
             }
         }
         let active_webview = state.active_webview();
+        let device_pixels_per_css_pixel = active_webview.as_ref().map_or(1.0, |view| {
+            view.page_zoom() * view.hidpi_scale_factor().get() * view.pinch_zoom()
+        });
         let offscreen = state.rendering_context.clone();
         let mut ui_output = None;
 
-        // Move UI-facing state out of `self` for the closure; restored below.
-        let mut settings = self.settings.clone();
-        let favicons = std::mem::take(&mut self.favicons);
-        // Handed to the paint callback, which runs inside `run` and so cannot
-        // borrow `self`. Only asked for when it is due, so an idle window is
-        // not stalling its own pipeline on a readback every frame.
-        // Nothing shows through a solid surface, so nothing needs copying:
-        // under Solid this whole path — the readback, the blur, the upload —
-        // costs nothing at all rather than costing a little.
-        let frosting = palette.translucency.is_translucent();
-        // Handed to the paint callback, which runs inside `run` and so cannot
-        // borrow `self`.
-        // The frost is a copy of one page. When that is no longer the page on
-        // screen it is thrown away rather than kept until something happens to
-        // overwrite it: a frame of unfrosted glass while the next copy is
-        // taken is a great deal better than glass frosted against a page the
-        // reader has left.
         let showing = state
             .browser
             .borrow()
             .active_tab()
             .map(|tab| (tab.id, tab.kind));
-        if self.frosted_for != showing {
-            self.frosted_for = showing;
+        #[cfg(target_os = "macos")]
+        let native_overlays = self.glass_overlays.as_ref().is_some_and(|overlays| {
+            let size = state.window.inner_size();
+            let enabled = palette.translucency == theme::Translucency::LiquidGlass;
+            overlays.prepare(&self.egui_glow.egui_ctx, [size.width, size.height], enabled)
+        });
+        #[cfg(not(target_os = "macos"))]
+        let native_overlays = false;
+
+        // Native overlays sample the live webpage directly. The software
+        // copy still supplies portable overlays and the new-tab materials.
+        let frosting = !native_overlays
+            && palette.translucency.is_translucent()
+            && matches!(showing, Some((_, TabKind::NewTab | TabKind::Web)));
+        let page_changed = self.frosted_for != showing;
+        self.frosted_for = showing;
+        if page_changed || !frosting {
             self.page_backdrop_texture = None;
+        }
+        // Consume the last frame's copy, discarding it if the tab has changed.
+        if (frosting || page_changed)
+            && let Ok(mut backdrop) = self.page_backdrop.lock()
+            && let Some(image) = backdrop.take(palette.bg)
+            && frosting
+            && !page_changed
+        {
+            self.page_backdrop_texture = Some(theme::Frost::upload(
+                &self.egui_glow.egui_ctx,
+                "zervo-page-backdrop",
+                image,
+                egui::TextureOptions::LINEAR,
+            ));
         }
         let eraser = self.corner_eraser.clone();
         let translucent_window = self.translucent_window;
+        // Defer the copy until the paint callback has the page's pixels.
         let capture = (frosting
             && self
                 .page_backdrop
@@ -1283,8 +1372,8 @@ impl RunningApp {
         // the same way the new tab page's cards frost against its wallpaper —
         // the new tab page then replaces it with the wallpaper's own, since
         // that is what is behind *its* cards.
-        let palette = match (&self.page_backdrop_texture, !frosting) {
-            (Some(frost), false) => palette.with_backdrop(Some(theme::Backdrop {
+        let palette = match &self.page_backdrop_texture {
+            Some(frost) => palette.with_backdrop(Some(theme::Backdrop {
                 texture: frost.id(),
                 luma: frost.luma(),
                 rect: self.page_rect_points,
@@ -1303,7 +1392,18 @@ impl RunningApp {
             loading: self.wallpaper.is_loading(),
         };
 
+        // Keep standard controls and their popups on the same appearance as
+        // Zervo's custom-painted chrome, even when the user overrides the OS.
+        let widget_theme = if palette.dark {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        };
+        if self.egui_glow.egui_ctx.theme() != widget_theme {
+            self.egui_glow.egui_ctx.set_theme(widget_theme);
+        }
         self.egui_glow.run(&state.window, |root| {
+            let settings = &mut self.settings;
             let mut browser = state.browser.borrow_mut();
             let mut controls = state.controls.borrow_mut();
             let mut library = state.library.borrow_mut();
@@ -1332,13 +1432,16 @@ impl RunningApp {
                 library: &mut library,
                 vault: &mut vault,
                 media: &media,
-                settings: &mut settings,
+                settings,
                 palette,
+                window_controls,
+                device_pixels_per_css_pixel,
                 native_glass: ui::NativeGlass {
-                    available: native_available,
+                    vibrancy_available: native_available,
+                    window_backdrop: window_glass,
                     ..Default::default()
                 },
-                favicons: &favicons,
+                favicons: &self.favicons,
                 downloads: &self.downloads,
                 wallpaper,
                 capture: capture.clone(),
@@ -1351,7 +1454,6 @@ impl RunningApp {
                 },
             };
             let output = ui::draw(root, &mut chrome);
-            let native_chrome = chrome.uses_native_glass();
             drop(browser);
             drop(controls);
             drop(library);
@@ -1369,17 +1471,24 @@ impl RunningApp {
             if !output.settings_open
                 && let Some(webview) = &active_webview
             {
-                let size = Size2D::new(
-                    content_rect.width().max(1.0),
-                    content_rect.height().max(1.0),
-                ) * Scale::<f32, DeviceIndependentPixel, DevicePixel>::new(scale);
-                if size != webview.size() {
+                let size = PhysicalSize::new(
+                    (content_rect.width() * scale).round().max(1.0) as u32,
+                    (content_rect.height() * scale).round().max(1.0) as u32,
+                );
+                let current_size = webview.size();
+                let resized = size.width != current_size.width as u32
+                    || size.height != current_size.height as u32;
+                if resized {
                     // Also resizes the offscreen context, which must stay
                     // sized to exactly the content viewport.
-                    webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
+                    webview.resize(size);
                 }
-                // Render Servo into the offscreen FBO before egui paints.
-                webview.paint();
+                // Keep the last page texture during chrome-only animation.
+                let frame_ready = state.page_frame_ready.replace(false);
+                if frame_ready || resized || self.painted_webview != Some(webview.id()) {
+                    webview.paint();
+                    self.painted_webview = Some(webview.id());
+                }
 
                 // Blit the page under all chrome widgets. Only when a live
                 // webview exists — otherwise the FBO holds a stale frame.
@@ -1444,9 +1553,7 @@ impl RunningApp {
                 root,
                 content_rect,
                 &palette,
-                if !blitted || (translucent_window && native_chrome) {
-                    // Internal pages round themselves. Native chrome can show
-                    // directly through the already-cut webview corners.
+                if !blitted {
                     ui::Corners::NoMask
                 } else if translucent_window {
                     ui::Corners::Cut
@@ -1454,22 +1561,16 @@ impl RunningApp {
                     ui::Corners::Masked
                 },
                 ui::CardFrame {
-                    top_glow: settings.top_glow,
+                    backdrop_tint: ui::window_chrome_tint(&palette, window_glass),
                     border: settings.content_border,
                     shadow: settings
                         .content_shadow
                         .then_some(settings.content_shadow_amount),
-                    halo: settings
-                        .content_halo
-                        .then_some((settings.content_halo_tint, settings.content_halo_amount)),
                 },
             );
 
             ui_output = Some(output);
         });
-
-        self.favicons = favicons;
-        self.settings = settings;
 
         // Downloads the user allowed in the pass just drawn. Started here
         // rather than inside it, because the UI pass holds `controls` borrowed
@@ -1494,17 +1595,52 @@ impl RunningApp {
 
         let mut ambient = false;
         if let Some(output) = ui_output {
-            #[cfg(target_os = "macos")]
-            if let Some(glass) = &self.liquid_glass {
-                glass.update(&output.native_glass, self.egui_glow.egui_ctx.zoom_factor());
-            }
             self.content_rect_points = output.content_rect;
             self.page_rect_points = output.page_rect;
+            self.sidebar_overlay = output.sidebar_overlay;
+            self.sidebar_bounds = output.sidebar_bounds;
+            self.controls_open = output.controls_open;
+            self.settings_open = output.settings_open;
+            let scale = self.egui_glow.egui_ctx.pixels_per_point();
+            let cursor = self.cursor_points(scale);
+            if self.hovered_webview.is_some()
+                && (self.hovered_webview != active_webview
+                    || (self.pointer_owner != PointerOwner::Page
+                        && !cursor.is_some_and(|point| self.pointer_hits_page(point))))
+            {
+                self.leave_webview();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let ctx = &self.egui_glow.egui_ctx;
+                let zoom = ctx.zoom_factor();
+                let controls_over_page = !output.settings_open
+                    && active_webview.is_some()
+                    && window_controls.is_some_and(|rect| {
+                        output.content_rect.intersects(rect)
+                            && !output
+                                .sidebar_overlay
+                                .is_some_and(|sidebar| sidebar.contains_rect(rect))
+                    });
+                let controls_hovered = window_controls.is_some_and(|rect| {
+                    cursor.is_some_and(|point| rect.expand(8.0 / zoom).contains(point))
+                });
+                let opacity = ctx.animate_bool_with_time(
+                    egui::Id::unique("native_window_controls_visible"),
+                    !controls_over_page || controls_hovered,
+                    palette.material.animation.min(0.16),
+                );
+                vibrancy::set_window_controls_opacity(&state.window, opacity);
+                if let Some(backdrop) = &self._vibrancy {
+                    let native = output.native_glass;
+                    let fallback = native.sidebar.filter(|_| !native.sidebar_captured);
+                    backdrop.update_sidebar(fallback, zoom);
+                    backdrop.update_address(native.address, zoom);
+                }
+            }
             state
                 .content_origin
                 .set((output.content_rect.min.x, output.content_rect.min.y));
-            self.controls_open = output.controls_open;
-            self.settings_open = output.settings_open;
             ambient = output.ambient;
             // Debug-only, and only when asked: go somewhere so the picture at
             // the end of this frame lands in the middle of a page transition.
@@ -1522,7 +1658,7 @@ impl RunningApp {
             }
             if self.shot.as_ref().is_some_and(crate::shot::Shot::cycle) {
                 self.draining = true;
-                self.apply_action(UiAction::CycleLayout);
+                self.apply_action(UiAction::ToggleSidebar);
                 self.draining = false;
             }
             self.draining = true;
@@ -1553,12 +1689,10 @@ impl RunningApp {
         // while one is still growing out of the bell.
         {
             let toasts = state.toasts.borrow();
-            let mut due = toasts.next_deadline(frame_now);
-            if toasts.morphing(frame_now) {
-                let frame = frame_now + std::time::Duration::from_millis(16);
-                due = Some(due.map_or(frame, |at| at.min(frame)));
+            if palette.material.animation > 0.0 && toasts.morphing(frame_now) {
+                self.request_animation_frame();
             }
-            if let Some(deadline) = due {
+            if let Some(deadline) = toasts.next_deadline(frame_now) {
                 self.pending_repaint_at = Some(
                     self.pending_repaint_at
                         .map_or(deadline, |at| at.min(deadline)),
@@ -1572,29 +1706,6 @@ impl RunningApp {
             self.library_saved_at = std::time::Instant::now();
         }
 
-        // Whatever egui asked for during this pass, taken whichever branch runs
-        // so a stale deadline cannot survive into the next one.
-        let egui_deadline = self.repaint_at.take();
-        if self.egui_glow.egui_ctx.requested_repaint_last_pass() {
-            state.window.request_redraw();
-        } else if let Some(deadline) = egui_deadline {
-            // Delayed request (caret blink, a clock's next minute): wake on a
-            // timer instead of redrawing at max FPS until it fires.
-            //
-            // Two things used to be wrong here. It woke after a flat 300ms
-            // regardless of what was asked for, and `has_requested_repaint()` is
-            // true whenever *any* delay is pending — so the stock new tab page,
-            // which ships a clock asking for twenty seconds, re-armed 300ms
-            // forever and never idled. And it *assigned* rather than taking the
-            // earlier of the two, so the 33ms the ambient backdrop had just
-            // asked for two branches up was overwritten by the clock's, and the
-            // default animated backdrop ran at three frames a second.
-            self.pending_repaint_at = Some(
-                self.pending_repaint_at
-                    .map_or(deadline, |at| at.min(deadline)),
-            );
-        }
-
         // Paint order: bind the window framebuffer, egui paint (runs the blit
         // callback first, then draws chrome over it), swap.
         let _ = state.rendering_context.make_current();
@@ -1602,16 +1713,15 @@ impl RunningApp {
         // Nothing in surfman or Servo clears the window framebuffer, so clear
         // it to fully transparent ourselves: with a non-opaque layer, any
         // pixel the chrome does not cover shows what is behind the window.
-        {
-            use glow::HasContext as _;
-            let gl = state.window_rendering_context.glow_gl_api();
-            // SAFETY: `prepare_for_rendering` just made this context current
-            // and bound the window framebuffer. Setting a clear colour and
-            // clearing the bound framebuffer need nothing beyond that.
-            unsafe {
-                gl.clear_color(0.0, 0.0, 0.0, 0.0);
-                gl.clear(glow::COLOR_BUFFER_BIT);
-            }
+        use glow::HasContext as _;
+        let gl = state.window_rendering_context.glow_gl_api();
+        // SAFETY: the window context is current and its framebuffer is bound.
+        // Reset the clear state inherited from Servo's draws.
+        unsafe {
+            gl.disable(glow::SCISSOR_TEST);
+            gl.color_mask(true, true, true, true);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
         }
         self.egui_glow.paint(&state.window);
         // The picture of a page on its way out, taken in the one moment it can
@@ -1684,7 +1794,63 @@ impl RunningApp {
             }
             state.window.request_redraw();
         }
+        // Submit the completed GL command stream before surfman publishes its
+        // IOSurface. Core Animation samples that surface in a separate process.
+        // Commit native glass and the framebuffer together so the effect
+        // always samples the backdrop from the same frame.
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_quartz_core::CATransaction;
+            // SAFETY: the window OpenGL context is still current.
+            unsafe { gl.flush() };
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
+            if let Some(backdrop) = &self._vibrancy {
+                backdrop.show_window_glass(window_glass);
+            }
+            if let Some(overlays) = &mut self.glass_overlays {
+                overlays.present(&self.egui_glow.egui_ctx);
+            }
+        }
+        state.window.pre_present_notify();
         state.window_rendering_context.present();
+        #[cfg(target_os = "macos")]
+        objc2_quartz_core::CATransaction::commit();
+
+        // Include repaint requests from native overlays made during painting.
+        let egui_deadline = self.repaint_at.take();
+        if self.egui_glow.egui_ctx.requested_repaint_last_pass()
+            || egui_deadline.is_some_and(|deadline| deadline <= std::time::Instant::now())
+        {
+            self.request_animation_frame();
+        } else if let Some(deadline) = egui_deadline {
+            self.pending_repaint_at = Some(
+                self.pending_repaint_at
+                    .map_or(deadline, |at| at.min(deadline)),
+            );
+        }
+    }
+
+    fn request_animation_frame(&mut self) {
+        // Surfman already waits for the display's next swap interval when
+        // presenting on macOS. A second display-link wait here halves the
+        // number of frames an animation can present.
+        if cfg!(target_os = "macos") {
+            self.state.window.request_redraw();
+            return;
+        }
+        if self.animation_pending {
+            return;
+        }
+        if let Some(driver) = self.state.window_rendering_context.refresh_driver() {
+            self.animation_pending = true;
+            let proxy = self.animation_waker.0.clone();
+            driver.observe_next_frame(Box::new(move || {
+                let _ = proxy.send_event(WakerEvent::AnimationFrame);
+            }));
+        } else {
+            self.state.window.request_redraw();
+        }
     }
 
     /// Ask for a picture of the page on its way out.
@@ -1719,7 +1885,10 @@ impl RunningApp {
             return;
         }
         let palette = self.palette();
-        if !transition::Crossing::wanted(&palette) || self.page_rect_points.width() < 1.0 {
+        if !self.animations_allowed()
+            || !transition::Crossing::wanted(&palette)
+            || self.page_rect_points.width() < 1.0
+        {
             return;
         }
         self.crossing_wanted = Some(transition::Wanted {
@@ -1779,13 +1948,35 @@ impl RunningApp {
                 let kind = state.browser.borrow().active_tab().map(|tab| tab.kind);
                 (kind != Some(TabKind::Trouble(*trouble))).then_some(transition::Way::On)
             },
-            UiAction::Navigate(_) | UiAction::NewTab { .. } => Some(transition::Way::On),
+            UiAction::Navigate(_) | UiAction::OpenAddress(_) | UiAction::NewTab { .. } => {
+                Some(transition::Way::On)
+            },
             _ => None,
         };
         if let Some(way) = going {
             self.want_crossing(way);
         }
         match action {
+            UiAction::OpenCommand(mode) => {
+                if self.settings.seen_setup && state.controls.borrow().is_empty() {
+                    let mut browser = state.browser.borrow_mut();
+                    browser.command_bar = Some(ui::CommandBar::new(mode, &browser.address_bar));
+                    state.window.request_redraw();
+                }
+            },
+            UiAction::OpenAddress(address) => {
+                if let Ok(url) = Url::parse(&address) {
+                    if url.scheme() == "zervo" {
+                        self.apply_action(UiAction::Navigate(address));
+                    } else {
+                        let mut browser = state.browser.borrow_mut();
+                        let workspace = browser.active_workspace;
+                        let tab = browser.add_tab(workspace, address);
+                        drop(browser);
+                        state.open_tab(tab, url);
+                    }
+                }
+            },
             UiAction::Navigate(address) => {
                 let Ok(url) = Url::parse(&address) else {
                     return;
@@ -1911,11 +2102,6 @@ impl RunningApp {
                 self.settings.save();
                 state.window.request_redraw();
             },
-            UiAction::CycleLayout => {
-                self.settings.layout = self.settings.layout.next();
-                self.settings.save();
-                state.window.request_redraw();
-            },
             UiAction::SavePassword => {
                 let (site, username, password) = {
                     let browser = state.browser.borrow();
@@ -1964,71 +2150,39 @@ impl RunningApp {
                 }
                 state.window.request_redraw();
             },
-            UiAction::MoveNavItem { item, side, index } => {
-                let settings = &mut self.settings;
-                settings.navbar_left.retain(|placed| *placed != item);
-                settings.navbar_right.retain(|placed| *placed != item);
-                let list = match side {
-                    ui::NavSide::Left => &mut settings.navbar_left,
-                    ui::NavSide::Right => &mut settings.navbar_right,
-                };
-                let at = index.min(list.len());
-                list.insert(at, item);
-                settings.save();
-                state.window.request_redraw();
-            },
-            UiAction::RemoveNavItem(item) => {
-                self.settings.navbar_left.retain(|placed| *placed != item);
-                self.settings.navbar_right.retain(|placed| *placed != item);
-                self.settings.save();
-                state.window.request_redraw();
-            },
-            UiAction::AddNavItem(item) => {
-                if !self.settings.navbar_left.contains(&item)
-                    && !self.settings.navbar_right.contains(&item)
-                {
-                    self.settings.navbar_right.push(item);
+            UiAction::AddWidget(kind) => {
+                let mut widget = dashboard::Placed::new(kind);
+                if let Some(row) = dashboard::free_row(&self.settings.sidebar_widgets) {
+                    widget.row = row;
+                    self.settings.sidebar_widgets.push(widget);
+                    self.settings.sidebar_shelf_height =
+                        dashboard::open_height(&self.settings.sidebar_widgets);
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
-            UiAction::AddWidget(kind) => {
-                let mut widget = dashboard::Placed::new(kind);
-                (widget.col, widget.row) = dashboard::free_cell(
-                    &self.settings.navbar_widgets,
-                    widget.size,
-                    dashboard::COLUMNS,
-                );
-                self.settings.navbar_widgets.push(widget);
-                self.settings.save();
-                state.window.request_redraw();
-            },
             UiAction::RemoveWidget(index) => {
-                if index < self.settings.navbar_widgets.len() {
-                    self.settings.navbar_widgets.remove(index);
+                if index < self.settings.sidebar_widgets.len() {
+                    self.settings.sidebar_widgets.remove(index);
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
             UiAction::SwapWidgets(a, b) => {
-                let widgets = &mut self.settings.navbar_widgets;
-                if a < widgets.len() && b < widgets.len() && a != b {
-                    widgets.swap(a, b);
+                if dashboard::swap_widgets(&mut self.settings.sidebar_widgets, a, b) {
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
-            UiAction::PlaceWidget { index, col, row } => {
-                if let Some(widget) = self.settings.navbar_widgets.get_mut(index) {
-                    widget.col = col;
+            UiAction::PlaceWidget { index, row } => {
+                if let Some(widget) = self.settings.sidebar_widgets.get_mut(index) {
                     widget.row = row;
                     self.settings.save();
                 }
                 state.window.request_redraw();
             },
             UiAction::ResizeWidget(index, size) => {
-                if let Some(widget) = self.settings.navbar_widgets.get_mut(index) {
-                    widget.size = size;
+                if dashboard::resize_widget(&mut self.settings.sidebar_widgets, index, size) {
                     self.settings.save();
                 }
                 state.window.request_redraw();
@@ -2128,19 +2282,16 @@ impl RunningApp {
             },
             UiAction::ResetLayout => {
                 let settings = &mut self.settings;
-                settings.navbar_left = ui::NavItem::default_left();
-                settings.navbar_right = ui::NavItem::default_right();
-                settings.navbar_widgets = dashboard::Placed::defaults();
+                settings.sidebar_widgets = dashboard::Placed::defaults();
+                settings.reset_sidebar_sections();
                 settings.newtab_tiles = newtab::Tile::defaults();
                 settings.newtab_world_clocks = newtab::Zone::defaults();
-                settings.navbar_height = ui::NAVBAR_DEFAULT_HEIGHT;
-                settings.address_pill_width = ui::ADDRESS_PILL_DEFAULT_WIDTH;
                 settings.sidebar_width = ui::SIDEBAR_DEFAULT_WIDTH;
                 settings.save();
                 // egui remembers the panel's width itself, and would otherwise
                 // keep the old one until the next launch.
                 self.egui_glow.egui_ctx.data_mut(|data| {
-                    data.remove::<egui::PanelState>(egui::Id::new(ui::SIDEBAR_ID));
+                    data.remove::<egui::PanelState>(egui::Id::unique(ui::SIDEBAR_ID));
                 });
                 state.window.request_redraw();
             },
@@ -2164,6 +2315,12 @@ impl RunningApp {
                 self.downloads.clear_finished();
                 state.window.request_redraw();
             },
+            UiAction::CustomizeChrome => {
+                state.browser.borrow_mut().settings_section = crate::state::SettingsSection::Layout;
+                self.apply_action(UiAction::OpenSettings);
+            },
+            #[cfg(target_os = "macos")]
+            UiAction::OpenSystemAppearance => vibrancy::open_appearance_settings(),
             UiAction::OpenSettings => {
                 let tab_id = state.browser.borrow_mut().find_or_create_settings_tab();
                 state.activate_tab(tab_id);
@@ -2192,8 +2349,17 @@ impl RunningApp {
             },
             UiAction::CloseTab(tab_id) => state.close_tab(tab_id),
             UiAction::TogglePin(tab_id) => {
-                if let Some(tab) = state.browser.borrow_mut().tab_mut(tab_id) {
+                let mut browser = state.browser.borrow_mut();
+                if let Some(tab) = browser
+                    .tab_mut(tab_id)
+                    .filter(|tab| tab.kind == TabKind::Web)
+                {
                     tab.pinned = !tab.pinned;
+                    tab.pin_anchor = tab.pinned.then(|| library::Favourite {
+                        url: tab.url.clone(),
+                        title: tab.title.clone(),
+                    });
+                    browser.save_spaces();
                 }
                 state.window.request_redraw();
             },
@@ -2201,40 +2367,77 @@ impl RunningApp {
                 tab,
                 workspace,
                 index,
+                folder,
             } => {
-                let moved = {
-                    let mut browser = state.browser.borrow_mut();
-                    let moved = browser.move_tab(tab, workspace, index);
-                    if moved {
-                        browser.active_workspace = workspace;
-                    }
-                    moved
-                };
+                let moved = state
+                    .browser
+                    .borrow_mut()
+                    .move_tab(tab, workspace, index, folder);
                 if moved {
-                    // Through SelectTab, not by assigning active_tab: that
-                    // field is the model's opinion, and the engine only shows,
-                    // focuses and unthrottles a webview when activate_tab says
-                    // so. Setting it directly leaves the page you were on
-                    // displayed and focused while the sidebar claims otherwise.
-                    // Following the tab is what the gesture means — dropping it
-                    // somewhere you are not looking reads as having lost it.
-                    self.apply_action(ui::UiAction::SelectTab(tab));
+                    self.apply_action(UiAction::SelectTab(tab));
+                    state.browser.borrow().save_spaces();
                 }
-                state.window.request_redraw();
             },
             UiAction::GroupTabs { onto, dragged } => {
-                {
+                let grouped = {
                     let mut browser = state.browser.borrow_mut();
-                    let name = Self::group_name(&browser, onto, dragged);
-                    let index = browser.group_tabs(name, onto, dragged);
-                    browser.active_workspace = index;
-                    // Opened for editing straight away: the group is the answer
-                    // to a question the user has not been asked yet.
-                    browser.workspace_edit = Some((index, browser.workspaces[index].name.clone()));
+                    let grouped = browser.group_tabs(onto, dragged);
+                    if let Some((folder, true)) = grouped {
+                        browser.workspace_edit = None;
+                        browser.folder_edit =
+                            Some((folder, l10n::text("sidebar-new-folder").to_owned()));
+                    }
+                    grouped.is_some()
+                };
+                if grouped {
+                    self.apply_action(UiAction::SelectTab(dragged));
+                    state.browser.borrow().save_spaces();
+                    state.window.request_redraw();
                 }
-                // See MoveTab — the engine has to be told, not just the model.
-                self.apply_action(ui::UiAction::SelectTab(dragged));
+            },
+            UiAction::NewFolder(tab) => {
+                let mut browser = state.browser.borrow_mut();
+                let workspace = browser.active_workspace;
+                let tabs = &browser.workspaces[workspace].tabs;
+                if tab.is_some_and(|id| tabs.iter().all(|tab| tab.id != id)) {
+                    return;
+                }
+                let index = tabs.len();
+                let name = l10n::text("sidebar-new-folder").to_owned();
+                let folder = browser.add_folder(workspace, name.clone());
+                if let Some(tab) = tab {
+                    browser.move_tab(tab, workspace, index, Some(folder));
+                }
+                browser.workspace_edit = None;
+                browser.folder_edit = Some((folder, name));
+                browser.save_spaces();
                 state.window.request_redraw();
+            },
+            UiAction::RenameFolder(id, name) => {
+                let mut browser = state.browser.borrow_mut();
+                let name = name.trim();
+                if !name.is_empty()
+                    && let Some(folder) = browser.folder_mut(id)
+                {
+                    folder.name = name.to_owned();
+                    browser.save_spaces();
+                    state.window.request_redraw();
+                }
+            },
+            UiAction::ToggleFolder(id) => {
+                let mut browser = state.browser.borrow_mut();
+                if let Some(folder) = browser.folder_mut(id) {
+                    folder.collapsed = !folder.collapsed;
+                    browser.save_spaces();
+                    state.window.request_redraw();
+                }
+            },
+            UiAction::RemoveFolder(id) => {
+                let mut browser = state.browser.borrow_mut();
+                if browser.remove_folder(id) {
+                    browser.save_spaces();
+                    state.window.request_redraw();
+                }
             },
             UiAction::RenameWorkspace(index, name) => {
                 let mut browser = state.browser.borrow_mut();
@@ -2244,17 +2447,45 @@ impl RunningApp {
                         workspace.name = name.to_owned();
                     }
                 }
-                drop(browser);
+                browser.save_spaces();
                 state.window.request_redraw();
             },
             UiAction::NewWorkspace => {
-                let mut browser = state.browser.borrow_mut();
-                let name = format!("Workspace {}", browser.workspaces.len() + 1);
-                let index = browser.add_workspace(name);
-                browser.active_workspace = index;
+                let index = {
+                    let mut browser = state.browser.borrow_mut();
+                    let name = l10n::message(
+                        "sidebar-new-space-name",
+                        [("number", (browser.workspaces.len() + 1).into())],
+                    );
+                    let index = browser.add_workspace(&name);
+                    browser.workspace_edit = Some((index, name));
+                    index
+                };
+                self.apply_action(UiAction::SelectWorkspace(index));
+            },
+            UiAction::RemoveWorkspace(index) => {
+                let selection = {
+                    let mut browser = state.browser.borrow_mut();
+                    browser
+                        .remove_workspace(index)
+                        .then_some(browser.active_workspace)
+                };
+                if let Some(index) = selection {
+                    self.apply_action(UiAction::SelectWorkspace(index));
+                }
             },
             UiAction::SelectWorkspace(index) => {
-                state.browser.borrow_mut().active_workspace = index;
+                let tab = {
+                    let mut browser = state.browser.borrow_mut();
+                    if index >= browser.workspaces.len() {
+                        return;
+                    }
+                    browser
+                        .tab_for_workspace(index)
+                        .unwrap_or_else(|| browser.add_zervo_page(index))
+                };
+                self.apply_action(UiAction::SelectTab(tab));
+                state.browser.borrow().save_spaces();
             },
             UiAction::DragWindow => {
                 let _ = state.window.drag_window();
@@ -2294,11 +2525,6 @@ impl RunningApp {
                     theme::apply(&self.egui_glow.egui_ctx, &palette);
                     self.state.window.request_redraw();
                 }
-                #[cfg(target_os = "macos")]
-                if self.settings.app_icon != self.applied_icon {
-                    self.applied_icon = self.settings.app_icon;
-                    set_dock_icon(self.settings.app_icon);
-                }
                 state.window.request_redraw();
             },
         }
@@ -2322,53 +2548,27 @@ impl RunningApp {
                 self.apply_action(ui::UiAction::NewTab { workspace });
             },
             Action::NextWorkspace | Action::PreviousWorkspace => {
-                let mut browser = state.browser.borrow_mut();
-                let count = browser.workspaces.len();
-                if count > 1 {
-                    let step = if matches!(action, Action::NextWorkspace) {
-                        1
-                    } else {
-                        count - 1
-                    };
-                    browser.active_workspace = (browser.active_workspace + step) % count;
+                let next = state
+                    .browser
+                    .borrow()
+                    .adjacent_workspace(matches!(action, Action::NextWorkspace));
+                if let Some(index) = next {
+                    self.apply_action(UiAction::SelectWorkspace(index));
                 }
             },
             Action::ToggleShelf => {
-                let uncovered = ui::shelf_uncovered_height(&self.settings.navbar_widgets);
-                self.settings.navbar_height =
-                    if self.settings.navbar_height > ui::NAVBAR_DEFAULT_HEIGHT + 10.0 {
-                        ui::NAVBAR_DEFAULT_HEIGHT
-                    } else {
-                        uncovered
-                    };
+                if !self.settings.show_sidebar_widgets {
+                    return;
+                }
+                self.settings.sidebar_shelf_height = if self.settings.sidebar_shelf_height > 1.0 {
+                    0.0
+                } else {
+                    dashboard::open_height(&self.settings.sidebar_widgets)
+                };
                 self.settings.save();
             },
         }
         state.window.request_redraw();
-    }
-
-    /// A provisional name for a group made from two tabs.
-    ///
-    /// Their shared host, when they have one — grouping two pages from the
-    /// same site is the common case and "github.com" is a better guess than
-    /// anything generic. Internal pages are skipped rather than parsed: the
-    /// authority of `zervo://newtab` is `newtab`, so two new tabs would
-    /// otherwise produce a workspace called "newtab". Otherwise the numbered
-    /// default, which at least says what to replace.
-    fn group_name(browser: &state::BrowserState, onto: TabId, dragged: TabId) -> String {
-        let host = |id: TabId| {
-            browser
-                .tab(id)
-                .filter(|tab| tab.url.starts_with("https://") || tab.url.starts_with("http://"))
-                .and_then(|tab| tab.url.split("://").nth(1))
-                .and_then(|rest| rest.split('/').next())
-                .map(|host| host.trim_start_matches("www.").to_owned())
-                .filter(|host| !host.is_empty())
-        };
-        match (host(onto), host(dragged)) {
-            (Some(a), Some(b)) if a == b => a,
-            _ => format!("Workspace {}", browser.workspaces.len() + 1),
-        }
     }
 
     fn palette(&self) -> Palette {
@@ -2415,10 +2615,23 @@ impl RunningApp {
     /// chrome currently is — so changing the theme twice in quick succession
     /// carries on from the middle rather than snapping back.
     fn start_theme_fade(&mut self) {
-        let from = self.palette();
-        self.theme_fade = Some((from, std::time::Instant::now()));
-        self.apply_platform_theme();
+        if self.animations_allowed() {
+            let from = self.palette();
+            self.theme_fade = Some((from, std::time::Instant::now()));
+            self.apply_platform_theme();
+        } else {
+            self.theme_fade = None;
+            self.apply_theme();
+        }
         self.state.window.request_redraw();
+    }
+
+    fn animations_allowed(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if vibrancy::accessibility_preferences().1 {
+            return false;
+        }
+        self.settings.appearance.motion > 0.0
     }
 
     /// Re-style the chrome and tell every webview the new prefers-color-scheme.
@@ -2448,7 +2661,12 @@ impl RunningApp {
                 theme::SystemBackdrop::Opaque => NSVisualEffectMaterial::WindowBackground,
                 _ => NSVisualEffectMaterial::UnderWindowBackground,
             };
-            vibrancy.set_material_animated(material, THEME_FADE.as_secs_f64());
+            let duration = if self.animations_allowed() {
+                THEME_FADE.as_secs_f64()
+            } else {
+                0.0
+            };
+            vibrancy.set_material_animated(material, duration);
         }
     }
 
@@ -2489,53 +2707,6 @@ impl RunningApp {
                 self.favicons.insert(tab.id, texture);
             }
         }
-    }
-}
-
-/// Rasterize the Zervo icon and set it as the Dock icon at runtime. (An .app
-/// bundle will carry the real Icon Composer icon; this covers dev runs.)
-#[cfg(target_os = "macos")]
-fn set_dock_icon(icon: settings::AppIcon) {
-    // Both variants are composed from the layers of the Icon Composer
-    // document in assets/icon/Zervo.icon, so the Dock icon and the bundled
-    // .icns always come from the same artwork.
-    const DEFAULT_SVG: &str = include_str!("../assets/icon/zervo-icon-default.svg");
-    const TRANSPARENT_SVG: &str = include_str!("../assets/icon/zervo-icon-transparent.svg");
-    let icon_svg = match icon {
-        settings::AppIcon::Default => DEFAULT_SVG,
-        settings::AppIcon::Transparent => TRANSPARENT_SVG,
-    };
-    let options = resvg::usvg::Options::default();
-    let Ok(tree) = resvg::usvg::Tree::from_str(icon_svg, &options) else {
-        return;
-    };
-    let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(512, 512) else {
-        return;
-    };
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::from_scale(0.5, 0.5),
-        &mut pixmap.as_mut(),
-    );
-    let Ok(png) = pixmap.encode_png() else {
-        return;
-    };
-
-    use objc2::AnyThread;
-    use objc2_app_kit::{NSApplication, NSImage};
-    use objc2_foundation::NSData;
-    let Some(mtm) = objc2::MainThreadMarker::new() else {
-        return;
-    };
-    let data = NSData::with_bytes(&png);
-    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
-        return;
-    };
-    let app = NSApplication::sharedApplication(mtm);
-    // Safety: called on the main thread (MainThreadMarker above) with a
-    // valid NSImage; matches AppKit's documented usage.
-    unsafe {
-        app.setApplicationIconImage(Some(&image));
     }
 }
 
@@ -2602,46 +2773,16 @@ fn install_fonts(ctx: &egui::Context) {
         fonts.families.entry(family).or_default().push(noto.clone());
     }
 
-    // The display family: one real light face, for the handful of runs set
-    // large enough that Regular is the wrong typeface rather than a missing
-    // nuance. See `ui::DISPLAY_FAMILY` for why this cannot simply be SF Pro at
-    // another weight.
-    //
-    // Helvetica Neue Thin is face 12 of a fourteen-face collection every macOS
-    // has shipped for twenty years, and `FontData::index` is how a collection
-    // is addressed. Elsewhere the family is left to fall through to the
-    // proportional stack, which on egui's own bundled fonts is Ubuntu-Light
-    // and already lighter than its UI weight.
-    let mut display: Vec<String> = Vec::new();
-    #[cfg(target_os = "macos")]
-    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/HelveticaNeue.ttc") {
-        fonts.font_data.insert(
-            "display".to_owned(),
-            Arc::new(egui::FontData {
-                font: bytes.into(),
-                index: 12,
-                tweak: egui::FontTweak::default(),
-            }),
-        );
-        display.push("display".to_owned());
-    }
-    display.extend(
-        fonts
-            .families
-            .get(&egui::FontFamily::Proportional)
-            .cloned()
-            .unwrap_or_default(),
-    );
-    fonts
-        .families
-        .insert(egui::FontFamily::Name(ui::DISPLAY_FAMILY.into()), display);
-
     ctx.set_fonts(fonts);
 }
 
 impl Drop for RunningApp {
     fn drop(&mut self) {
         let _ = self.state.rendering_context.make_current();
+        #[cfg(target_os = "macos")]
+        if let Some(overlays) = &self.glass_overlays {
+            overlays.destroy(&self.state.window_rendering_context.glow_gl_api());
+        }
         self.egui_glow.destroy();
     }
 }
@@ -2654,6 +2795,8 @@ struct Waker(winit::event_loop::EventLoopProxy<WakerEvent>);
 enum WakerEvent {
     /// The engine has something to do; spin its event loop.
     Engine,
+    /// The window's display is ready for the next animation frame.
+    AnimationFrame,
     /// The platform's accessibility client is asking for the tree, or asking
     /// for something in it to be activated. `accesskit_winit` delivers these
     /// through the same proxy, which is why this is an enum now.

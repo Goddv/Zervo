@@ -9,121 +9,47 @@
 [![Release](https://img.shields.io/github/v/tag/Goddv/Zervo?label=release&sort=semver)](https://github.com/Goddv/Zervo/releases)
 [![License](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE)
 [![Engine](https://img.shields.io/badge/engine-Servo-informational)](https://servo.org)
-![Rust](https://img.shields.io/badge/rust-1.97-orange)
+![Rust](https://img.shields.io/badge/rust-1.100-orange)
 
-**macOS today — Linux and Windows build from the same tag and are untested.**
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-<a href="assets/screenshots/zervo-newtab-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-newtab-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-newtab-light.png">
-  <img alt="The Zervo window with the sidebar open: workspaces and tabs in a column on the left, a shelf of widgets below them, and a new tab page showing the time, one search field, the session you left and the sites you use" src="assets/screenshots/zervo-newtab-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-<td width="50%" valign="top">
-
-<a href="assets/screenshots/zervo-bar-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-bar-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-bar-light.png">
-  <img alt="The same window with the sidebar collapsed: a slim bar across the top with the address pill centred, over servo.org rendered by Servo" src="assets/screenshots/zervo-bar-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-</tr>
-<tr>
-<td align="center"><sub><b>Sidebar</b> — navigation, workspaces, tabs and widgets in one column<br>
-<a href="assets/screenshots/zervo-newtab-light.png">light</a> · <a href="assets/screenshots/zervo-newtab-dark.png">dark</a>, full size</sub></td>
-<td align="center"><sub><b>Collapsed</b> — navigation moves into a bar across the top<br>
-<a href="assets/screenshots/zervo-bar-light.png">light</a> · <a href="assets/screenshots/zervo-bar-dark.png">dark</a>, full size</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-<a href="assets/screenshots/zervo-float-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-float-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-float-light.png">
-  <img alt="The window with no sidebar and no bar: the address pill floats near the bottom edge over the new tab page, and the chrome is otherwise out of the way" src="assets/screenshots/zervo-float-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-<td width="50%" valign="top">
-
-<a href="assets/screenshots/zervo-page-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-page-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-page-light.png">
-  <img alt="The sidebar open over a web page, its glass carrying the colour of whatever sits behind the window" src="assets/screenshots/zervo-page-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-</tr>
-<tr>
-<td align="center"><sub><b>Floating</b> — put the bar wherever you like, including nowhere<br>
-<a href="assets/screenshots/zervo-float-light.png">light</a> · <a href="assets/screenshots/zervo-float-dark.png">dark</a>, full size</sub></td>
-<td align="center"><sub><b>Glass</b> — the sidebar takes its light from what is behind it<br>
-<a href="assets/screenshots/zervo-page-light.png">light</a> · <a href="assets/screenshots/zervo-page-dark.png">dark</a>, full size</sub></td>
-</tr>
-</table>
-
-<sub>All four are the same theme — <b>Zervo</b>, the default — in light and dark.</sub>
-
-<br><br>
-
-<a href="assets/screenshots/zervo-appearance.png">
-<img alt="The Appearance settings page: a live specimen of the material pinned under the title, the preset row, and controls for the theme, the accent and how far it reaches into the chrome" src="assets/screenshots/zervo-appearance.png" width="82%">
-</a>
-
-<sub><b>Appearance</b> — every value the chrome is built from is a control, and the<br>
-specimen at the top is the real material rather than a picture of one:<br>
-it is wrong exactly when the chrome is wrong.</sub>
+[macOS downloads](https://github.com/Goddv/Zervo/releases) · [Latest preview builds](https://github.com/Goddv/Zervo/actions/workflows/release.yml)
 
 </div>
 
 ---
 
-Zervo is a browser chrome — sidebar, workspaces, tabs, settings — wrapped around
-Servo, Mozilla's independent web engine written in Rust. There is no Chromium
-and no Gecko underneath: the page you are looking at is rendered by Servo.
-
-It is an experiment, and an honest one: Servo is not yet a complete web engine,
-so some sites will not work. See [Limitations](#limitations).
+Zervo is a macOS browser powered by Servo, an independent web engine written
+in Rust. Organise tabs with Spaces and folders in a docked sidebar or browse
+in Full Page mode with the sidebar available on hover.
 
 ## What it looks like
 
 ### The window
 
-- **Sidebar-first, or bar-first.** Everything lives in one collapsible sidebar:
-  navigation, the address bar, pinned "essentials", workspaces and tabs. Collapse
-  it and navigation moves into a bar across the top, with the address pill
-  centred on the window and the sidebar left holding only tabs.
-- **A bar you arrange.** Drag its buttons between the two sides, take them off,
-  put them back. Drag the bar itself taller and it uncovers a shelf of widgets —
-  a clock, now playing and transport controls — laid out on a grid, dropped
-  where you like and resized by the corner.
-- **Workspaces.** Tabs are grouped into named spaces, each with its own colour.
+- **Spaces.** Each Space has its own tabs and folders. Swipe across the sidebar
+  to switch Spaces. Right-click a tab to pin it or move it. Favourites are
+  shared across Spaces.
+- **Command bar.** Press ⌘T for a new tab or ⌘L to edit the address. Search tabs,
+  favourites, and history, or start with `>` to find browser actions.
+- **Full Page.** Press ⌘S to dock or hide the sidebar. Move the pointer to the
+  left edge to reveal it temporarily.
+- **Native macOS chrome.** The sidebar, page surround, popovers, and dialogs
+  use AppKit Liquid Glass on macOS 26 and later. Zervo follows the macOS glass
+  appearance and Reduce Transparency settings.
+- **Customizable chrome.** Open Settings → Layout or click the sliders in the
+  sidebar. Show or hide sections and reorder them by dragging or using the
+  arrow buttons. Toggle sidebar tools and the widget shelf, or restore the
+  sidebar defaults.
 - **Favourites and history.** The star saves a page and hovering it opens the
   list; history is searchable and grouped by how long ago.
 - **Saved logins**, kept in the system keychain rather than in Zervo's own files.
 
 ### The new tab page
 
-- **It greets you rather than briefing you.** The time, one search field, the
-  session you actually left, and the three sites you use. A new tab is opened
-  to go somewhere.
-- **Or a board of thirteen cards on a twelve-column grid** — clock, world
+- **New Tab.** The search page and optional icon card use the same Zervo artwork
+  as first-run setup and About.
+- **A customizable board of thirteen cards on a twelve-column grid** — clock, world
   clocks, search, pinned tabs, most-visited, recent, favourites, downloads, now
-  playing, a note, a to-do list, workspaces, the mark. One press away, and
+  playing, a note, a to-do list, spaces, and the Zervo icon. One press away, and
   every card can be dragged, resized and taken off.
 - **Eight backdrops**, chosen from the page's own header: Plain, Gradient, Grid,
   Mesh, Aurora, Waves, Particles, or a photograph fetched from Wikimedia Commons
@@ -139,37 +65,12 @@ so some sites will not work. See [Limitations](#limitations).
   shadow reach and how far glass frosts are decided in one place and reach the
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
-- **And every number in it is a setting.** Settings → Appearance has one
-  control per named field: the fill, the sheen, the blur, the edge, the corner
-  scale, the glow, the settle time, and how far the accent reaches into the
-  chrome. Save an arrangement under a name, or copy it out as the Rust `const`
-  you would otherwise have written by hand.
-- **Zervo's own material is the finished one.** Four more presets — Candy,
-  Flat, Liquid Glass, Material — came out of the same design study and are
-  offered beside it, but they are experiments rather than settled work and are
-  still being tuned.
-- **The seam between the chrome and the page is one setting with four steps**,
-  and each step brings the page transition its own geometry implies: a card
-  recedes, a tint dissolves in place, a frame slides, a page under floating
-  glass travels up while the glass stays put.
-- **Frosted, over anything.** The chrome sits on real macOS vibrancy, and
-  everything floating over a page frosts against a blurred copy of whatever that
-  page is showing — so a menu over a website is the same glass as a card over a
-  photograph. The Liquid Glass option uses AppKit for the docked sidebar and
-  toolbar on macOS 26 and later. In-page overlays and older systems use the
-  portable frosted material.
-- **Themed.** Light/dark/auto following the system, ten accent presets plus a
-  colour of your own, and the accent is propagated into the engine so pages see
-  the matching `prefers-color-scheme`.
+- **Appearance.** Choose a theme and accent, or let the active Space provide the
+  accent. New profiles start with classic Apple blue at 0.20 tint strength.
+- **Page frame.** In Sidebar mode, inset the page in a rounded card or place it
+  flush against the window edges. Outline and shadow are configurable.
 
-The material system is the seam a theme for another platform is written
-against — Windows, GTK, Android Material, Liquid Glass. Five arrangements ship,
-and every value one is built from is a control on `zervo://settings` →
-Appearance: the fill, the sheen, the blur, the edge, the corner scale, the
-glow, the settle time, how far the accent reaches, and where the chrome ends
-and the page begins. It is documented in [docs/THEMING.md](docs/THEMING.md),
-including what is still not there — palettes, and somewhere to save an
-arrangement under a name of your own.
+See [docs/THEMING.md](docs/THEMING.md) for the material system.
 
 ## Building
 
@@ -183,12 +84,12 @@ cargo build --profile dev-fast
 ./target/dev-fast/zervo
 ```
 
-The toolchain is pinned in `rust-toolchain.toml` and matches Servo's own.
+The toolchain is pinned in `rust-toolchain.toml` for local builds and CI.
 `rustup` will install it automatically; if it complains about unavailable
 components, install it explicitly:
 
 ```bash
-rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+rustup toolchain install 1.100.0 --profile minimal --component clippy,rustfmt
 ```
 
 ### Downloads
@@ -205,21 +106,12 @@ See [docs/SERVO.md](docs/SERVO.md) for the engine pin and patch status.
 ### Packaging
 
 ```bash
-./scripts/bundle-macos.sh --dmg                  # macOS, this machine's architecture
-./scripts/package-linux.sh --all                 # Linux packages, including AppImage and Flatpak
-pwsh scripts/package-windows.ps1 -Installer      # Windows, .zip and a setup .exe
+./scripts/bundle-macos.sh --dmg --features engine-downloads,media
 ```
 
-A release tag produces all of it: two `.dmg`s, one per Mac architecture; a
-`.deb`; an `.rpm` for Fedora 44; an AppImage and a Flatpak; a portable tarball; `PKGBUILD`s
-for the AUR; a Windows zip and installer; and a `SHA256SUMS` covering the lot.
-
-Nothing is signed. On macOS that means macOS will refuse to open the app until
-the quarantine flag is cleared, and on Windows it means SmartScreen shows a
-warning on first run. [docs/PACKAGING.md](docs/PACKAGING.md) covers exactly what
-a user sees on each platform, what signing would cost, and the traps — a
-link-time one on macOS if you have GStreamer installed, and the reason there is
-no Windows ARM64 build.
+GitHub Actions builds Apple Silicon and Intel disk images from `main`.
+Tagged releases also include the source archive and checksums.
+See [Packaging and distribution](docs/PACKAGING.md).
 
 ## Layout
 
@@ -228,7 +120,7 @@ no Windows ARM64 build.
 | `src/main.rs` | winit shell, the frame pipeline, input routing, shortcuts |
 | `src/app.rs` | engine glue — owns Servo, implements `WebViewDelegate` |
 | `src/state.rs` | workspaces, tabs, chrome state |
-| `src/ui.rs` | the whole chrome, drawn with egui; emits `UiAction`s |
+| `src/ui/` | the whole chrome, drawn with egui; emits `UiAction`s |
 | `zervo-core/src/theme.rs` | palettes, accents, and the material every surface is built from |
 | `zervo-core/src/glass.rs` | the one place a surface is drawn |
 | `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
@@ -241,65 +133,12 @@ no Windows ARM64 build.
 | `patches/servo/` | engine patches Zervo can build against |
 
 There is a longer tour in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-including how the chrome and the engine share one GL context, and
-[docs/THEMING.md](docs/THEMING.md) describes the material system a theme for
-another platform would be written against.
+including how the chrome and the engine share a graphics context.
 
-## Platforms
+## Platform support
 
-Every release tag builds these packages. For current builds, run **Release** in GitHub Actions with the tag field blank.
-
-| Platform | Package | State |
-| --- | --- | --- |
-| **macOS** 11+, Apple Silicon | `.dmg` (arm64), GStreamer bundled | ✅ Used daily by its author |
-| **macOS** 11+, Intel | `.dmg` (x86_64), GStreamer bundled | ⚠️ Builds — never started |
-| **Ubuntu 24.04+ / Debian 13** x86_64 | `.deb` | CI installs and smoke-tests |
-| **Fedora 44** x86_64 | `.rpm` | ⚠️ Builds and installs — never started |
-| **glibc 2.35+** x86_64 | `.AppImage` | CI tests Ubuntu 22.04 and Debian 13 |
-| **Linux with Flatpak** x86_64 | `.flatpak` | CI installs and launches the sandbox |
-| **Arch** | `PKGBUILD` for the AUR, not yet published | ⚠️ Validated, never built |
-| **Windows** x64 | `.zip` and an installer | ⚠️ Builds — startup crash fixed in 0.4.1, unconfirmed |
-| **Windows** ARM64 | — | ⛔ Blocked upstream; the x64 build runs under Prism |
-
-macOS ships as two downloads, one per architecture, each built natively. They
-could be one universal bundle — `lipo` will fuse them and the bundler takes
-`--universal` — but each of these is roughly half the size, because a
-single-architecture bundle has its GStreamer libraries thinned to match, and a
-download that says which Mac it is for is worth more than one that runs on
-both. Both need macOS 11 or later rather than 13.
-
-Linux and Windows are x86_64 only. There is no technical obstacle to arm64 on
-Linux; there is simply nobody asking for it yet.
-
-The AppImage links against glibc 2.35 and uses host graphics and GStreamer
-libraries. The Flatpak provides those dependencies through its runtime.
-See [Linux packaging and install instructions](docs/PACKAGING.md#linux).
-
-Windows on ARM has no build because Servo does not have one: a `float16_t`
-collision between MSVC's `<arm_fp16.h>` and the vendored `glsl-optimizer`, whose
-fix is still unmerged both upstream and in Servo. The x64 build runs on those
-machines through Prism, which emulates x64 user-mode code and does not emulate
-the GPU path. See [docs/PACKAGING.md](docs/PACKAGING.md).
-
-**Still a macOS release first.** Every package comes from the same tag, and
-egui draws the portable materials. AppKit supplies the native Liquid Glass and
-frosted window backdrops on macOS.
-
-0.4.1 fixes the one thing Windows was known to do: die on startup, before any
-window, reading `GL_VERSION` from a context surfman's WGL backend had never
-made current. Windows now composites through ANGLE — EGL over Direct3D 11 —
-which is what Servo's own Windows builds do. That is a fix made from the crash
-log; nobody has watched it start.
-
-Nobody has started Zervo on Linux at all either. The packages compile, package
-and install; whether a window opens is untested, and X11 versus Wayland and the
-GL setup have never been exercised. **A report that it does not start is as
-useful as one that says it does** —
-[open an issue](https://github.com/Goddv/Zervo/issues) either way.
-
-Two things macOS keeps that the others do not: the frosted vibrancy behind the
-chrome, which is AppKit's, and bundled media — GStreamer is an ordinary package
-on Linux and a piece of work not yet done on Windows.
+Active builds target macOS on Apple Silicon and Intel. Native Liquid Glass
+requires macOS 26 or later. Linux and Windows builds are paused.
 
 ## Limitations
 
@@ -309,11 +148,9 @@ on Linux and a piece of work not yet done on Windows.
   cannot render gets `zervo://unsupported`, which names what is missing and
   hands the page to another browser, and a content process that falls over
   gets `zervo://crashed` rather than a frozen picture of itself.
-- **Streaming video does not work.** YouTube and the rest need Media Source
-  Extensions, which Servo does not have. Local and progressive video plays.
+- **Streaming video support varies.** Some services may fail to play.
 - **No extensions.** The engine has none, so neither does the button.
-- **Passwords cannot be filled into web forms.** The engine offers no hook for
-  a submitted form, so saved logins are a vault plus HTTP authentication.
+- **Saved logins.** Use the browser's fill action to enter a saved login.
 - **No sync, no profiles.** Not yet.
 - **Palettes are not themeable.** How a surface is *built* is yours to set, and
   so is how far the accent reaches into it — and an arrangement can be saved

@@ -71,6 +71,21 @@ struct Permission {
     host: String,
 }
 
+pub struct PageCoordinates {
+    pub bounds: Rect,
+    pub points_per_device_pixel: f32,
+    pub points_per_css_pixel: f32,
+}
+
+impl PageCoordinates {
+    fn to_window(&self, anchor: servo::DeviceIntRect, points_per_pixel: f32) -> Rect {
+        Rect::from_min_max(
+            self.bounds.min + vec2(anchor.min.x as f32, anchor.min.y as f32) * points_per_pixel,
+            self.bounds.min + vec2(anchor.max.x as f32, anchor.max.y as f32) * points_per_pixel,
+        )
+    }
+}
+
 /// Controls waiting for the user, oldest first.
 #[derive(Default)]
 pub struct Controls {
@@ -196,7 +211,6 @@ impl Controls {
             palette,
             Some(content_rect),
             rect,
-            14,
             |ui| {
                 let top = ui.max_rect().min;
                 ui.painter().text(
@@ -263,7 +277,6 @@ impl Controls {
             palette,
             Some(content_rect),
             rect,
-            14,
             |ui| {
                 let top = ui.max_rect().min;
                 ui.painter().text(
@@ -342,7 +355,6 @@ impl Controls {
             palette,
             Some(content_rect),
             rect,
-            14,
             |ui| {
                 let top = ui.max_rect().min;
                 ui.painter().text(
@@ -427,7 +439,6 @@ impl Controls {
             palette,
             Some(content_rect),
             rect,
-            14,
             |ui| {
                 let top = ui.max_rect().min;
                 ui.painter().text(
@@ -508,18 +519,16 @@ impl Controls {
     /// stacked page dialogs are a nuisance, and a page cannot reasonably need
     /// two answers at once.
     ///
-    /// `origin` labels dialogs. `scale` and `content_rect` convert the device
-    /// pixel positions Servo reports, which are relative to the webview, into
-    /// window points.
+    /// `origin` labels dialogs, and `page` maps Servo's anchors to window points.
     pub fn draw(
         &mut self,
         root: &mut Ui,
         palette: &Palette,
-        content_rect: Rect,
-        scale: f32,
+        page: PageCoordinates,
         origin: &str,
         vault: &crate::passwords::Vault,
     ) {
+        let content_rect = page.bounds;
         // An authentication challenge takes the screen on its own: it is the
         // one dialog here whose OK hands something away.
         if self.auth.is_some() {
@@ -554,14 +563,6 @@ impl Controls {
         let enter = ctx.input(|input| input.key_pressed(egui::Key::Enter));
         let mut resolution = None;
 
-        // Servo reports positions in device pixels relative to the webview.
-        let to_window = |rect: servo::DeviceIntRect| {
-            Rect::from_min_max(
-                content_rect.min + vec2(rect.min.x as f32 / scale, rect.min.y as f32 / scale),
-                content_rect.min + vec2(rect.max.x as f32 / scale, rect.max.y as f32 / scale),
-            )
-        };
-
         match &mut self.pending[index] {
             EmbedderControl::SimpleDialog(dialog) => {
                 resolution = draw_dialog(
@@ -575,7 +576,8 @@ impl Controls {
                 );
             },
             EmbedderControl::SelectElement(select) => {
-                let anchor = to_window(select.position());
+                // Servo currently sends element bounds as CSS pixels.
+                let anchor = page.to_window(select.position(), page.points_per_css_pixel);
                 let options = select.options().to_vec();
                 let multiple = select.allow_select_multiple();
                 let mut chosen = select.selected_options();
@@ -614,7 +616,7 @@ impl Controls {
                 }
             },
             EmbedderControl::ColorPicker(picker) => {
-                let anchor = to_window(picker.position());
+                let anchor = page.to_window(picker.position(), page.points_per_css_pixel);
                 match draw_color_picker(
                     &ctx,
                     palette,
@@ -635,7 +637,7 @@ impl Controls {
                 }
             },
             EmbedderControl::ContextMenu(menu) => {
-                let anchor = to_window(menu.position());
+                let anchor = page.to_window(menu.position(), page.points_per_device_pixel);
                 match draw_context_menu(
                     &ctx,
                     &measure,
@@ -677,25 +679,19 @@ impl Controls {
     }
 }
 
-/// A floating panel: scrim over the page, card on top. Returns the card's `Ui`.
+const PANEL_PADDING: f32 = 14.0;
+
+/// A floating glass panel with an optional scrim beneath it.
 fn panel<R>(
     ctx: &egui::Context,
     id: &str,
     palette: &Palette,
     scrim: Option<Rect>,
     rect: Rect,
-    radius: u8,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    let contrasted;
-    let palette = match scrim {
-        Some(_) => palette,
-        None => {
-            contrasted = palette.over(rect);
-            &contrasted
-        },
-    };
-    egui::Area::new(Id::new(id))
+    let fallback = scrim.map_or_else(|| palette.over(rect), |_| *palette);
+    egui::Area::new(Id::unique(id))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)
@@ -713,22 +709,32 @@ fn panel<R>(
                     dim(palette),
                 );
             }
-            let painter = ui.painter();
-            // Backed opaquely: these float over live page content and the
-            // glass material is only about 95% opaque, which is fine over the
-            // chrome but lets page text ghost through a menu.
-            for shape in glass::shapes(
-                rect,
-                palette,
-                Glass::of(crate::theme::Surface::Menu)
-                    .radius_exact(radius)
-                    .opaque(palette.bg)
-                    .border(palette.border),
-            ) {
-                painter.add(shape);
+            let role = if scrim.is_some() {
+                crate::overlay_glass::Role::Dialog
+            } else {
+                crate::overlay_glass::Role::Menu
+            };
+            let surface = crate::overlay_glass::Surface::begin(ui);
+            let palette = if surface.is_native() {
+                palette
+            } else {
+                &fallback
+            };
+            if !surface.is_native() {
+                glass::paint(
+                    ui.painter(),
+                    rect,
+                    palette,
+                    Glass::of(crate::theme::Surface::Menu)
+                        .radius_exact(role.radius())
+                        .opaque(palette.bg)
+                        .border(palette.border),
+                );
             }
-            let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(14.0)));
+            let mut inner =
+                ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(PANEL_PADDING)));
             let value = add(&mut inner);
+            surface.finish(ui, rect, role);
             ui.advance_cursor_after_rect(rect);
             value
         })
@@ -805,16 +811,17 @@ fn draw_dialog(
 ) -> Option<Resolution> {
     let Keys { escape, enter } = keys;
     let width = 420.0_f32.min(content_rect.width() - 48.0);
-    let message = dialog.message().to_owned();
     let galley = measure.layout(
-        message.clone(),
+        dialog.message().to_owned(),
         FontId::proportional(13.5),
         palette.text,
         width - 28.0,
     );
     let prompt = matches!(dialog, SimpleDialog::Prompt(_));
-    let height = 28.0 + 18.0 + galley.size().y + if prompt { 42.0 } else { 0.0 } + 40.0;
-    let rect = Rect::from_center_size(content_rect.center(), vec2(width, height));
+    let fixed = PANEL_PADDING * 2.0 + 18.0 + if prompt { 42.0 } else { 0.0 } + 40.0;
+    let max_height = (content_rect.height() - 24.0).min(480.0);
+    let body_height = galley.size().y.min((max_height - fixed).max(0.0));
+    let rect = Rect::from_center_size(content_rect.center(), vec2(width, fixed + body_height));
 
     let mut resolution = None;
     panel(
@@ -823,7 +830,6 @@ fn draw_dialog(
         palette,
         Some(content_rect),
         rect,
-        14,
         |ui| {
             // Say who is asking. These messages are written by the page, and
             // must not read as though Zervo is asking.
@@ -834,16 +840,27 @@ fn draw_dialog(
                 FontId::proportional(11.5),
                 palette.text_muted,
             );
-            ui.painter().galley(
+            let message = Rect::from_min_size(
                 ui.max_rect().min + vec2(0.0, 18.0),
-                galley.clone(),
-                palette.text,
+                vec2(ui.max_rect().width(), body_height),
             );
+            if galley.size().y > body_height {
+                crate::overlay_glass::scroll_body(ui, message, |ui| {
+                    ui.label(
+                        egui::RichText::new(dialog.message())
+                            .size(13.5)
+                            .color(palette.text),
+                    );
+                });
+            } else {
+                ui.painter()
+                    .galley(message.min, galley.clone(), palette.text);
+            }
 
             let mut confirmed = enter;
             if prompt {
                 let field = Rect::from_min_size(
-                    ui.max_rect().min + vec2(0.0, 22.0 + galley.size().y),
+                    ui.max_rect().min + vec2(0.0, 22.0 + body_height),
                     vec2(ui.max_rect().width(), 30.0),
                 );
                 let SimpleDialog::Prompt(prompt) = dialog else {
@@ -851,10 +868,14 @@ fn draw_dialog(
                 };
                 let mut value = prompt.current_value().to_owned();
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+                let material = crate::overlay_glass::Surface::begin(&child);
                 let response = child.add_sized(
                     field.size(),
-                    TextEdit::singleline(&mut value).font(FontId::proportional(13.0)),
+                    material.text_edit(
+                        TextEdit::singleline(&mut value).font(FontId::proportional(13.0)),
+                    ),
                 );
+                material.finish(&child, field, crate::overlay_glass::Role::Field);
                 if response.changed() {
                     prompt.set_current_value(&value);
                 }
@@ -927,60 +948,56 @@ fn draw_select(
         };
     }
     let width = anchor.width().max(180.0).min(content_rect.width() - 24.0);
-    let height =
-        (rows * ROW + 16.0 + if multiple { 36.0 } else { 0.0 }).min(content_rect.height() * 0.7);
-    let rect = clamp_to(
-        Rect::from_min_size(pos2(anchor.min.x, anchor.max.y + 4.0), vec2(width, height)),
-        content_rect,
-    );
+    let footer = if multiple { 36.0 } else { 0.0 };
+    let max_height = (content_rect.height() * 0.65).min(352.0);
+    let height = (rows.max(1.0) * ROW + PANEL_PADDING * 2.0 + footer).min(max_height);
+    let rect = crate::ui::anchored_popup(anchor, vec2(width, height), content_rect, false);
 
     let mut picked = None;
-    panel(ctx, "zervo_select", palette, None, rect, 10, |ui| {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for entry in options {
-                    match entry {
-                        SelectElementOptionOrOptgroup::Option(option) => {
+    panel(ctx, "zervo_select", palette, None, rect, |ui| {
+        let list = ui.max_rect().with_max_y(ui.max_rect().bottom() - footer);
+        crate::overlay_glass::scroll_body(ui, list, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for entry in options {
+                match entry {
+                    SelectElementOptionOrOptgroup::Option(option) => {
+                        if select_row(
+                            ui,
+                            palette,
+                            &option.label,
+                            option.is_disabled,
+                            selected.contains(&option.id),
+                            0.0,
+                        ) {
+                            picked = Some(Picked::Option(option.id));
+                        }
+                    },
+                    SelectElementOptionOrOptgroup::Optgroup { label, options } => {
+                        let (rect, _) =
+                            ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+                        ui.painter().text(
+                            pos2(rect.min.x + 6.0, rect.center().y),
+                            Align2::LEFT_CENTER,
+                            label,
+                            FontId::proportional(11.5),
+                            palette.text_muted,
+                        );
+                        for option in options {
                             if select_row(
                                 ui,
                                 palette,
                                 &option.label,
                                 option.is_disabled,
                                 selected.contains(&option.id),
-                                0.0,
+                                12.0,
                             ) {
                                 picked = Some(Picked::Option(option.id));
                             }
-                        },
-                        SelectElementOptionOrOptgroup::Optgroup { label, options } => {
-                            let (rect, _) = ui.allocate_exact_size(
-                                vec2(ui.available_width(), ROW),
-                                Sense::hover(),
-                            );
-                            ui.painter().text(
-                                pos2(rect.min.x + 6.0, rect.center().y),
-                                Align2::LEFT_CENTER,
-                                label,
-                                FontId::proportional(11.5),
-                                palette.text_muted,
-                            );
-                            for option in options {
-                                if select_row(
-                                    ui,
-                                    palette,
-                                    &option.label,
-                                    option.is_disabled,
-                                    selected.contains(&option.id),
-                                    12.0,
-                                ) {
-                                    picked = Some(Picked::Option(option.id));
-                                }
-                            }
-                        },
-                    }
+                        }
+                    },
                 }
-            });
+            }
+        });
         if multiple {
             let row = Rect::from_min_max(
                 pos2(ui.max_rect().min.x, ui.max_rect().max.y - 28.0),
@@ -1033,9 +1050,10 @@ fn select_row(
     } else {
         palette.text
     };
-    ui.painter().text(
-        pos2(rect.min.x + 8.0 + indent, rect.center().y),
-        Align2::LEFT_CENTER,
+    crate::overlay_glass::row_label(
+        ui,
+        rect.with_min_x(rect.left() + 8.0 + indent)
+            .with_max_x(rect.right() - 8.0),
         label,
         FontId::proportional(13.0),
         colour,
@@ -1081,27 +1099,30 @@ fn draw_color_picker(
         (217, 210, 233),
     ];
     const CELL: f32 = 26.0;
-    const COLUMNS: usize = 6;
+    let columns =
+        (((content_rect.width() - 16.0 - 2.0 * PANEL_PADDING + 4.0) / CELL) as usize).clamp(1, 6);
 
-    let rows = SWATCHES.len().div_ceil(COLUMNS) as f32;
-    let rect = clamp_to(
-        Rect::from_min_size(
-            pos2(anchor.min.x, anchor.max.y + 4.0),
-            vec2(COLUMNS as f32 * CELL + 28.0, rows * CELL + 28.0 + 36.0),
+    let rows = SWATCHES.len().div_ceil(columns) as f32;
+    let rect = crate::ui::anchored_popup(
+        anchor,
+        vec2(
+            columns as f32 * CELL + 2.0 * PANEL_PADDING - 4.0,
+            rows * CELL + 2.0 * PANEL_PADDING - 4.0,
         ),
         content_rect,
+        false,
     );
 
     let mut result = None;
-    panel(ctx, "zervo_color_picker", palette, None, rect, 10, |ui| {
+    panel(ctx, "zervo_color_picker", palette, None, rect, |ui| {
         for (index, (red, green, blue)) in SWATCHES.iter().enumerate() {
-            let column = index % COLUMNS;
-            let row = index / COLUMNS;
+            let column = index % columns;
+            let row = index / columns;
             let cell = Rect::from_min_size(
                 ui.max_rect().min + vec2(column as f32 * CELL, row as f32 * CELL),
                 vec2(CELL - 4.0, CELL - 4.0),
             );
-            let response = ui.interact(cell, ui.id().with(index), Sense::click());
+            let response = ui.interact(cell, ui.scope_id().with(index), Sense::click());
             ui.painter().rect_filled(
                 cell,
                 palette.corner(Tier::Control),
@@ -1146,7 +1167,7 @@ fn draw_context_menu(
     const ROW: f32 = 28.0;
     const SEPARATOR: f32 = 9.0;
 
-    let mut height = 12.0;
+    let mut height = PANEL_PADDING * 2.0;
     let mut width: f32 = 170.0;
     for item in items {
         match item {
@@ -1157,87 +1178,77 @@ fn draw_context_menu(
                     .layout_no_wrap(label.clone(), FontId::proportional(13.0), palette.text)
                     .size()
                     .x;
-                width = width.max(measured + 34.0);
+                width = width.max(measured + 2.0 * PANEL_PADDING + 16.0);
             },
         }
     }
-    let rect = clamp_to(
-        Rect::from_min_size(anchor.min, vec2(width, height)),
+    let rect = crate::ui::clamp_into(
+        Rect::from_min_size(anchor.min, vec2(width.min(420.0), height)),
         content_rect,
     );
 
     let mut result = None;
-    panel(ctx, "zervo_context_menu", palette, None, rect, 10, |ui| {
-        for (index, item) in items.iter().enumerate() {
-            match item {
-                ContextMenuItem::Separator => {
-                    let (rect, _) = ui
-                        .allocate_exact_size(vec2(ui.available_width(), SEPARATOR), Sense::hover());
-                    ui.painter().hline(
-                        rect.x_range(),
-                        rect.center().y,
-                        Stroke::new(1.0_f32, palette.border),
-                    );
-                },
-                ContextMenuItem::Item {
-                    label,
-                    action,
-                    enabled,
-                } => {
-                    let (rect, response) = ui.allocate_exact_size(
-                        vec2(ui.available_width(), ROW),
-                        if *enabled {
-                            Sense::click()
-                        } else {
-                            Sense::hover()
-                        },
-                    );
-                    if *enabled && response.hovered() {
-                        ui.painter().rect_filled(
-                            rect,
-                            palette.corner(Tier::Control),
-                            palette.surface_hover,
+    panel(ctx, "zervo_context_menu", palette, None, rect, |ui| {
+        crate::overlay_glass::scroll_body(ui, ui.max_rect(), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for item in items {
+                match item {
+                    ContextMenuItem::Separator => {
+                        let (rect, _) = ui.allocate_exact_size(
+                            vec2(ui.available_width(), SEPARATOR),
+                            Sense::hover(),
                         );
-                    }
-                    let colour = if *enabled {
-                        palette.text
-                    } else {
-                        palette.text_muted.gamma_multiply(0.6)
-                    };
-                    ui.painter().text(
-                        pos2(rect.min.x + 8.0, rect.center().y),
-                        Align2::LEFT_CENTER,
+                        ui.painter().hline(
+                            rect.x_range(),
+                            rect.center().y,
+                            Stroke::new(1.0_f32, palette.border),
+                        );
+                    },
+                    ContextMenuItem::Item {
                         label,
-                        FontId::proportional(13.0),
-                        colour,
-                    );
-                    let _ = index;
-                    if *enabled && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                        result = Some(Some(*action));
-                    }
-                },
+                        action,
+                        enabled,
+                    } => {
+                        let (rect, response) = ui.allocate_exact_size(
+                            vec2(ui.available_width(), ROW),
+                            if *enabled {
+                                Sense::click()
+                            } else {
+                                Sense::hover()
+                            },
+                        );
+                        if *enabled && response.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                palette.corner(Tier::Control),
+                                palette.surface_hover,
+                            );
+                        }
+                        let colour = if *enabled {
+                            palette.text
+                        } else {
+                            palette.text_muted.gamma_multiply(0.6)
+                        };
+                        crate::overlay_glass::row_label(
+                            ui,
+                            rect.shrink2(vec2(8.0, 0.0)),
+                            label,
+                            FontId::proportional(13.0),
+                            colour,
+                        );
+                        if *enabled && response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+                        {
+                            result = Some(Some(*action));
+                        }
+                    },
+                }
             }
-        }
+        });
     });
     if result.is_none() && settled && clicked_outside(ctx, rect) {
         result = Some(None);
     }
     result
-}
-
-/// Keep a popup inside the content card, flipping it above its anchor when
-/// there is no room below.
-fn clamp_to(rect: Rect, bounds: Rect) -> Rect {
-    let mut min = rect.min;
-    if rect.max.x > bounds.max.x - 8.0 {
-        min.x = (bounds.max.x - 8.0 - rect.width()).max(bounds.min.x + 8.0);
-    }
-    if rect.max.y > bounds.max.y - 8.0 {
-        min.y = (bounds.max.y - 8.0 - rect.height()).max(bounds.min.y + 8.0);
-    }
-    min.x = min.x.max(bounds.min.x + 8.0);
-    min.y = min.y.max(bounds.min.y + 8.0);
-    Rect::from_min_size(min, rect.size())
 }
 
 fn clicked_outside(ctx: &egui::Context, rect: Rect) -> bool {
