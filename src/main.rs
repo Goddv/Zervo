@@ -914,7 +914,13 @@ impl RunningApp {
             event => {
                 let response = self.egui_glow.on_window_event(&state.window, event);
                 if response.repaint {
-                    state.window.request_redraw();
+                    if matches!(event, WindowEvent::CursorMoved { .. }) {
+                        // Preserve every motion event for hit testing and drags.
+                        // Present the resulting hover state once per refresh.
+                        self.request_animation_frame();
+                    } else {
+                        state.window.request_redraw();
+                    }
                 }
                 // A move over chrome can still have to clear the page's hover.
                 consumed = if matches!(event, WindowEvent::CursorMoved { .. }) {
@@ -1706,22 +1712,17 @@ impl RunningApp {
         // Nothing in surfman or Servo clears the window framebuffer, so clear
         // it to fully transparent ourselves: with a non-opaque layer, any
         // pixel the chrome does not cover shows what is behind the window.
-        {
-            use glow::HasContext as _;
-            let gl = state.window_rendering_context.glow_gl_api();
-            // SAFETY: `prepare_for_rendering` just made this context current
-            // and bound the window framebuffer. Setting a clear colour and
-            // clearing the bound framebuffer need nothing beyond that.
-            unsafe {
-                gl.clear_color(0.0, 0.0, 0.0, 0.0);
-                gl.clear(glow::COLOR_BUFFER_BIT);
-            }
+        use glow::HasContext as _;
+        let gl = state.window_rendering_context.glow_gl_api();
+        // SAFETY: the window context is current and its framebuffer is bound.
+        // Reset the clear state inherited from Servo's draws.
+        unsafe {
+            gl.disable(glow::SCISSOR_TEST);
+            gl.color_mask(true, true, true, true);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
         }
         self.egui_glow.paint(&state.window);
-        #[cfg(target_os = "macos")]
-        if let Some(overlays) = &mut self.glass_overlays {
-            overlays.present(&self.egui_glow.egui_ctx, palette.dark);
-        }
         // The picture of a page on its way out, taken in the one moment it can
         // be: the chrome has just been painted, the framebuffer still holds the
         // page the reader is leaving, and the buffers have not swapped. The
@@ -1792,8 +1793,25 @@ impl RunningApp {
             }
             state.window.request_redraw();
         }
+        // Submit the completed GL command stream before surfman publishes its
+        // IOSurface. Core Animation samples that surface in a separate process.
+        // Commit native glass and the framebuffer together so the effect
+        // always samples the backdrop from the same frame.
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_quartz_core::CATransaction;
+            // SAFETY: the window OpenGL context is still current.
+            unsafe { gl.flush() };
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
+            if let Some(overlays) = &mut self.glass_overlays {
+                overlays.present(&self.egui_glow.egui_ctx, palette.dark);
+            }
+        }
         state.window.pre_present_notify();
         state.window_rendering_context.present();
+        #[cfg(target_os = "macos")]
+        objc2_quartz_core::CATransaction::commit();
 
         // Include repaint requests from native overlays made during painting.
         let egui_deadline = self.repaint_at.take();
@@ -2704,18 +2722,24 @@ fn set_dock_icon(icon: settings::AppIcon, dark: bool) {
     };
     let app = NSApplication::sharedApplication(mtm);
     let png = match icon {
-        settings::AppIcon::Default if dark => std::borrow::Cow::Borrowed(
-            include_bytes!("../assets/icon/zervo-macos-dark-512.png").as_slice(),
-        ),
         settings::AppIcon::Default => {
-            let bundled = std::env::current_exe()
-                .is_ok_and(|path| path.with_file_name("../Resources/Zervo.icns").is_file());
-            if bundled {
+            let bundled_light = !dark
+                && std::env::current_exe()
+                    .is_ok_and(|path| path.with_file_name("../Resources/Zervo.icns").is_file());
+            if bundled_light {
                 // SAFETY: the main-thread marker keeps AppKit access on its thread.
                 unsafe { app.setApplicationIconImage(None) };
                 return;
             }
-            std::borrow::Cow::Borrowed(include_bytes!("../assets/icon/zervo-512.png").as_slice())
+            let artwork = if dark {
+                include_bytes!("../assets/icon/zervo-macos-dark-512.png").as_slice()
+            } else {
+                include_bytes!("../assets/icon/zervo-512.png").as_slice()
+            };
+            let Some(png) = dock_icon_png(artwork) else {
+                return;
+            };
+            png
         },
         settings::AppIcon::Transparent => {
             let svg = include_str!("../assets/icon/zervo-icon-transparent.svg");
@@ -2734,7 +2758,7 @@ fn set_dock_icon(icon: settings::AppIcon, dark: bool) {
             let Ok(png) = pixmap.encode_png() else {
                 return;
             };
-            std::borrow::Cow::Owned(png)
+            png
         },
     };
     let data = NSData::with_bytes(&png);
@@ -2744,6 +2768,38 @@ fn set_dock_icon(icon: settings::AppIcon, dark: bool) {
     // SAFETY: the application and image are used on AppKit's main thread.
     unsafe {
         app.setApplicationIconImage(Some(&image));
+    }
+}
+
+/// Custom Dock images bypass the inset the system applies to bundle icons.
+#[cfg(target_os = "macos")]
+fn dock_icon_png(artwork: &[u8]) -> Option<Vec<u8>> {
+    const SIZE: u32 = 512;
+    const INSET: u32 = 50;
+    const TILE: u32 = SIZE - 2 * INSET;
+    let tile = image::load_from_memory(artwork)
+        .ok()?
+        .resize_exact(TILE, TILE, image::imageops::FilterType::Lanczos3)
+        .into_rgba8();
+    let mut canvas = image::RgbaImage::new(SIZE, SIZE);
+    image::imageops::replace(&mut canvas, &tile, i64::from(INSET), i64::from(INSET));
+    let mut png = std::io::Cursor::new(Vec::new());
+    canvas.write_to(&mut png, image::ImageFormat::Png).ok()?;
+    Some(png.into_inner())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[test]
+fn custom_dock_tiles_match_the_bundle_icon_inset() {
+    for artwork in [
+        include_bytes!("../assets/icon/zervo-512.png").as_slice(),
+        include_bytes!("../assets/icon/zervo-macos-dark-512.png").as_slice(),
+    ] {
+        let png = dock_icon_png(artwork).unwrap();
+        let pixels = image::load_from_memory(&png).unwrap().into_rgba8();
+        assert_eq!(pixels.dimensions(), (512, 512));
+        let opaque = (0..512).filter(|&x| pixels.get_pixel(x, 256).0[3] > 127);
+        assert!(opaque.eq(50..462));
     }
 }
 

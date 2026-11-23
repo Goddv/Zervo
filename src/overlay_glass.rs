@@ -254,7 +254,6 @@ mod macos {
         NSVisualEffectView, NSWindowOrderingMode,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
-    use objc2_quartz_core::CATransaction;
     use winit::raw_window_handle::HasWindowHandle;
 
     define_class!(
@@ -446,16 +445,8 @@ mod macos {
             ready
         }
 
+        /// Publish in the same Core Animation transaction as the page surface.
         pub(crate) fn present(&mut self, ctx: &egui::Context, dark: bool) {
-            // The slide is already timed by egui. Publish the frame and ink
-            // together without a second implicit animation in Core Animation.
-            CATransaction::begin();
-            CATransaction::setDisableActions(true);
-            self.update_views(ctx, dark);
-            CATransaction::commit();
-        }
-
-        fn update_views(&mut self, ctx: &egui::Context, dark: bool) {
             let renderer = self.renderer.clone();
             let mut renderer = renderer.lock().unwrap();
             if std::mem::take(&mut renderer.repaint) {
@@ -675,7 +666,10 @@ mod macos {
                 }
             }
             for material in self.decorations.iter().skip(frame.decorations.len()) {
-                material.effect.view().setHidden(true);
+                let view = material.effect.view();
+                if !view.isHidden() {
+                    view.setHidden(true);
+                }
             }
             if self.root.isHidden() {
                 self.root.setHidden(false);
