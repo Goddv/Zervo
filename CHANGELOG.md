@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0 — 23 November 2026
+
+Zervo 0.6.0 focuses on macOS. Downloads are available for Apple Silicon and
+Intel Macs.
+
+- The sidebar can stay docked or appear on hover in Full Page mode. Spaces
+  have their own tab folders, and a swipe across the sidebar switches Spaces.
+- AppKit supplies Liquid Glass for the page surround, sidebar, and floating
+  controls on macOS 26 and later. Zervo follows the system glass appearance
+  and accessibility settings.
+- Glass overlays stay on the GPU. Sidebar transitions need fewer redraw
+  waits, and the page surround follows the rounded window edges.
+- First-run setup, New Tab, and About share the new Servo-inspired artwork.
+  New profiles start with classic Apple blue and a 0.20 accent strength.
+  Appearance keeps the page outline and shadow controls.
+- Servo 0.8.0 includes Zervo’s download and notification patches and an HTTP/2
+  compatibility fix. About reports the engine and toolkit versions.
+- The browser interface uses Fluent localization, with English fallback and
+  a Japanese translation. See [Translating Zervo](docs/TRANSLATING.md).
+
+Linux and Windows builds are paused while development focuses on macOS.
+
 ## 0.5.0 — 23 August 2026
 
 **This release is where the chrome was redesigned, and it is a big one.** Eight

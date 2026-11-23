@@ -452,9 +452,9 @@ as a draft unless you ask otherwise, which is how to rehearse one.
 
 ### Cutting a release
 
-1. Bump `version` in `Cargo.toml` and `zervo-core/Cargo.toml`, add a
-   `CHANGELOG.md` entry and a `<release>` to
-   `assets/linux/app.zervo.Zervo.metainfo.xml`.
+1. Bump the application and core versions, refresh `Cargo.lock`, and add a
+   `CHANGELOG.md` entry. Update the AppStream entry for releases that include
+   Linux packages.
 2. Commit, tag `vX.Y.Z`, push the tag.
 3. Watch. A cold build is hours; a warm one considerably less.
 4. Check the draft, then let it publish — or publish it yourself if you ran the

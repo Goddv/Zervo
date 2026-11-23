@@ -28,11 +28,16 @@ ignore = [
     # needs rusqlite 0.41 or newer. Servo uses the same exception (#49746).
     # The issue requires a locally supplied database and mismatched WAL.
     "RUSTSEC-2026-0459",
+    { id = "RUSTSEC-2026-0594", reason = "WebDriver pins cookie 0.16 for parsing. The affected PrivateJar feature is disabled and banned below. Servo uses the fixed 0.18.3." },
 ]
 
 [bans]
 multiple-versions = "allow"   # Servo's graph guarantees plenty; not news.
 wildcards = "deny"            # A `*` version in our own manifests is.
+
+[[bans.features]]
+crate = "cookie@<0.18.3"
+deny = ["private", "secure"]
 
 [licenses]
 # Zervo is MPL-2.0. These are the licences its dependency graph actually uses;

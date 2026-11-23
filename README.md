@@ -156,11 +156,8 @@ requires macOS 26 or later. Linux and Windows builds are paused.
   so is how far the accent reaches into it — and an arrangement can be saved
   under a name of your own. The colours the two themes start from are still
   constants. See [docs/THEMING.md](docs/THEMING.md).
-- **0.5.0 is a redesign, and it wants testing.** The chrome, the new tab page,
-  the error pages and the first run all changed. 0.6.0 is the polish pass;
-  until then, [open an issue](https://github.com/Goddv/Zervo/issues) for
-  anything that reads wrong — and say which preset, theme and layout you were
-  in, because most of what has been fixed so far only happened in one of them.
+- **Feedback.** [Open an issue](https://github.com/Goddv/Zervo/issues) with
+  the macOS version, theme, and sidebar layout you were using.
 - **Unsigned builds.** See [docs/PACKAGING.md](docs/PACKAGING.md).
 
 ## Contributing

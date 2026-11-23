@@ -85,6 +85,7 @@ jobs:
           # this reads `Cargo.lock` and compiles nothing. Saying so keeps a
           # confusing "toolchain is not installed" error out of a passing log.
           rust-version: stable
+          arguments: --all-features --locked
           command: check advisories bans licenses sources
 
   scripts:
