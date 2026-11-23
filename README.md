@@ -11,99 +11,45 @@
 [![Engine](https://img.shields.io/badge/engine-Servo-informational)](https://servo.org)
 ![Rust](https://img.shields.io/badge/rust-1.100-orange)
 
-**Sidebar Spaces preview**
-
-<sub>The screenshots below show the original Zervo layout.</sub>
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-<a href="assets/screenshots/zervo-newtab-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-newtab-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-newtab-light.png">
-  <img alt="The Zervo window with the sidebar open: workspaces and tabs in a column on the left, a shelf of widgets below them, and a new tab page showing the time, one search field, the session you left and the sites you use" src="assets/screenshots/zervo-newtab-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-<td width="50%" valign="top">
-
-<a href="assets/screenshots/zervo-page-light.png">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/zervo-page-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/zervo-page-light.png">
-  <img alt="The sidebar open over a web page, its glass carrying the colour of whatever sits behind the window" src="assets/screenshots/zervo-page-light.png" width="100%">
-</picture>
-</a>
-
-</td>
-</tr>
-<tr>
-<td align="center"><sub><b>Sidebar</b> — navigation, workspaces, tabs and widgets in one column<br>
-<a href="assets/screenshots/zervo-newtab-light.png">light</a> · <a href="assets/screenshots/zervo-newtab-dark.png">dark</a>, full size</sub></td>
-<td align="center"><sub><b>Glass</b> — the sidebar takes its light from what is behind it<br>
-<a href="assets/screenshots/zervo-page-light.png">light</a> · <a href="assets/screenshots/zervo-page-dark.png">dark</a>, full size</sub></td>
-</tr>
-</table>
-
-<sub>The Zervo preset in light and dark.</sub>
-
-<br><br>
-
-<a href="assets/screenshots/zervo-appearance.png">
-<img alt="The Appearance settings page: a live specimen of the material pinned under the title, the preset row, and controls for the theme, the accent and how far it reaches into the chrome" src="assets/screenshots/zervo-appearance.png" width="82%">
-</a>
-
-<sub><b>Appearance</b> — every value the chrome is built from is a control, and the<br>
-specimen at the top is the real material rather than a picture of one:<br>
-it is wrong exactly when the chrome is wrong.</sub>
+[macOS downloads](https://github.com/Goddv/Zervo/releases) · [Latest preview builds](https://github.com/Goddv/Zervo/actions/workflows/release.yml)
 
 </div>
 
 ---
 
-Zervo is a browser chrome — sidebar, workspaces, tabs, settings — wrapped around
-Servo, Mozilla's independent web engine written in Rust. There is no Chromium
-and no Gecko underneath: the page you are looking at is rendered by Servo.
-
-It is an experiment, and an honest one: Servo is not yet a complete web engine,
-so some sites will not work. See [Limitations](#limitations).
+Zervo is a macOS browser powered by Servo, an independent web engine written
+in Rust. Organise tabs with Spaces and folders in a docked sidebar or browse
+in Full Page mode with the sidebar available on hover.
 
 ## What it looks like
 
 ### The window
 
-- **Spaces.** The sidebar shows the current space’s pinned and open tabs.
-  Switch or create a space at the bottom. Right-click a tab to pin it or move it
-  to another space. Space names and pins survive restarts. Favourites are
-  accessible from every space.
-- **Command bar.** Use ⌘T on macOS or Ctrl+T elsewhere to open a new tab.
-  Use ⌘L or Ctrl+L to edit the current address. Search open tabs, favourites,
-  and recent history, or start with `>` to filter browser actions.
-- **Compact mode.** Use ⌘S or Ctrl+S to hide or show the sidebar. Move the
-  pointer to the left edge to reveal it temporarily in Full Page mode.
-- **Native macOS chrome.** AppKit lays out the window buttons and supplies
-  the blur and tint for the docked sidebar. The Solid setting and Reduce
-  Transparency use opaque surfaces.
+- **Spaces.** Each Space has its own tabs and folders. Swipe across the sidebar
+  to switch Spaces. Right-click a tab to pin it or move it. Favourites are
+  shared across Spaces.
+- **Command bar.** Press ⌘T for a new tab or ⌘L to edit the address. Search tabs,
+  favourites, and history, or start with `>` to find browser actions.
+- **Full Page.** Press ⌘S to dock or hide the sidebar. Move the pointer to the
+  left edge to reveal it temporarily.
+- **Native macOS chrome.** The sidebar, page surround, popovers, and dialogs
+  use AppKit Liquid Glass on macOS 26 and later. Zervo follows the macOS glass
+  appearance and Reduce Transparency settings.
 - **Customizable chrome.** Open Settings → Layout or click the sliders in the
   sidebar. Show or hide sections and reorder them by dragging or using the
   arrow buttons. Toggle sidebar tools and the widget shelf, or restore the
   sidebar defaults.
-- **Workspaces.** Tabs are grouped into named spaces, each with its own colour.
 - **Favourites and history.** The star saves a page and hovering it opens the
   list; history is searchable and grouped by how long ago.
 - **Saved logins**, kept in the system keychain rather than in Zervo's own files.
 
 ### The new tab page
 
-- **It greets you rather than briefing you.** The time, one search field, the
-  session you actually left, and the three sites you use. A new tab is opened
-  to go somewhere.
-- **Or a board of thirteen cards on a twelve-column grid** — clock, world
+- **New Tab.** The search page and optional icon card use the same Zervo artwork
+  as first-run setup and About.
+- **A customizable board of thirteen cards on a twelve-column grid** — clock, world
   clocks, search, pinned tabs, most-visited, recent, favourites, downloads, now
-  playing, a note, a to-do list, workspaces, the mark. One press away, and
+  playing, a note, a to-do list, spaces, and the Zervo icon. One press away, and
   every card can be dragged, resized and taken off.
 - **Eight backdrops**, chosen from the page's own header: Plain, Gradient, Grid,
   Mesh, Aurora, Waves, Particles, or a photograph fetched from Wikimedia Commons
@@ -119,17 +65,10 @@ so some sites will not work. See [Limitations](#limitations).
   shadow reach and how far glass frosts are decided in one place and reach the
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
-- **Appearance settings.** macOS uses Liquid Glass as its material. Linux
-  and Windows offer built-in presets and material controls in Settings → Appearance.
-- **Page frame.** In Sidebar mode, macOS can inset the page in a rounded
-  card or place it flush against the sidebar and window edges.
-- **Native macOS materials.** The pinned sidebar uses AppKit's sidebar
-  material. Dialogs, popovers and floating controls use Liquid Glass on macOS
-  26 and later, with frosted surfaces on earlier versions. The app follows
-  the system's Reduce Transparency setting.
-- **Themed.** Light/dark/auto following the system, ten accent presets plus a
-  colour of your own, and the accent is propagated into the engine so pages see
-  the matching `prefers-color-scheme`.
+- **Appearance.** Choose a theme and accent, or let the active Space provide the
+  accent. New profiles start with classic Apple blue at 0.20 tint strength.
+- **Page frame.** In Sidebar mode, inset the page in a rounded card or place it
+  flush against the window edges. Outline and shadow are configurable.
 
 See [docs/THEMING.md](docs/THEMING.md) for the material system.
 
@@ -167,21 +106,12 @@ See [docs/SERVO.md](docs/SERVO.md) for the engine pin and patch status.
 ### Packaging
 
 ```bash
-./scripts/bundle-macos.sh --dmg                  # macOS, this machine's architecture
-./scripts/package-linux.sh --all                 # Linux packages, including AppImage and Flatpak
-pwsh scripts/package-windows.ps1 -Installer      # Windows, .zip and a setup .exe
+./scripts/bundle-macos.sh --dmg --features engine-downloads,media
 ```
 
-A release tag produces all of it: two `.dmg`s, one per Mac architecture; a
-`.deb`; an `.rpm` for Fedora 44; an AppImage and a Flatpak; a portable tarball; `PKGBUILD`s
-for the AUR; a Windows zip and installer; and a `SHA256SUMS` covering the lot.
-
-Nothing is signed. On macOS that means macOS will refuse to open the app until
-the quarantine flag is cleared, and on Windows it means SmartScreen shows a
-warning on first run. [docs/PACKAGING.md](docs/PACKAGING.md) covers exactly what
-a user sees on each platform, what signing would cost, and the traps — a
-link-time one on macOS if you have GStreamer installed, and the reason there is
-no Windows ARM64 build.
+GitHub Actions builds Apple Silicon and Intel disk images from `main`.
+Tagged releases also include the source archive and checksums.
+See [Packaging and distribution](docs/PACKAGING.md).
 
 ## Layout
 
@@ -190,7 +120,7 @@ no Windows ARM64 build.
 | `src/main.rs` | winit shell, the frame pipeline, input routing, shortcuts |
 | `src/app.rs` | engine glue — owns Servo, implements `WebViewDelegate` |
 | `src/state.rs` | workspaces, tabs, chrome state |
-| `src/ui.rs` | the whole chrome, drawn with egui; emits `UiAction`s |
+| `src/ui/` | the whole chrome, drawn with egui; emits `UiAction`s |
 | `zervo-core/src/theme.rs` | palettes, accents, and the material every surface is built from |
 | `zervo-core/src/glass.rs` | the one place a surface is drawn |
 | `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
@@ -203,65 +133,12 @@ no Windows ARM64 build.
 | `patches/servo/` | engine patches Zervo can build against |
 
 There is a longer tour in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-including how the chrome and the engine share one GL context, and
-[docs/THEMING.md](docs/THEMING.md) describes the material system a theme for
-another platform would be written against.
+including how the chrome and the engine share a graphics context.
 
-## Platforms
+## Platform support
 
-Every release tag builds these packages. For current builds, run **Release** in GitHub Actions with the tag field blank.
-
-| Platform | Package | State |
-| --- | --- | --- |
-| **macOS** 11+, Apple Silicon | `.dmg` (arm64), GStreamer bundled | ✅ Used daily by its author |
-| **macOS** 11+, Intel | `.dmg` (x86_64), GStreamer bundled | ⚠️ Builds — never started |
-| **Ubuntu 24.04+ / Debian 13** x86_64 | `.deb` | CI installs and smoke-tests |
-| **Fedora 44** x86_64 | `.rpm` | ⚠️ Builds and installs — never started |
-| **glibc 2.35+** x86_64 | `.AppImage` | CI tests Ubuntu 22.04 and Debian 13 |
-| **Linux with Flatpak** x86_64 | `.flatpak` | CI installs and launches the sandbox |
-| **Arch** | `PKGBUILD` for the AUR, not yet published | ⚠️ Validated, never built |
-| **Windows** x64 | `.zip` and an installer | ⚠️ Builds — startup crash fixed in 0.4.1, unconfirmed |
-| **Windows** ARM64 | — | ⛔ Blocked upstream; the x64 build runs under Prism |
-
-macOS ships as two downloads, one per architecture, each built natively. They
-could be one universal bundle — `lipo` will fuse them and the bundler takes
-`--universal` — but each of these is roughly half the size, because a
-single-architecture bundle has its GStreamer libraries thinned to match, and a
-download that says which Mac it is for is worth more than one that runs on
-both. Both need macOS 11 or later rather than 13.
-
-Linux and Windows are x86_64 only. There is no technical obstacle to arm64 on
-Linux; there is simply nobody asking for it yet.
-
-The AppImage links against glibc 2.35 and uses host graphics and GStreamer
-libraries. The Flatpak provides those dependencies through its runtime.
-See [Linux packaging and install instructions](docs/PACKAGING.md#linux).
-
-Windows on ARM has no build because Servo does not have one: a `float16_t`
-collision between MSVC's `<arm_fp16.h>` and the vendored `glsl-optimizer`, whose
-fix is still unmerged both upstream and in Servo. The x64 build runs on those
-machines through Prism, which emulates x64 user-mode code and does not emulate
-the GPU path. See [docs/PACKAGING.md](docs/PACKAGING.md).
-
-**Still a macOS release first.** Every package comes from the same tag, and
-egui draws the portable materials. AppKit supplies the native Liquid Glass and
-frosted window backdrops on macOS.
-
-0.4.1 fixes the one thing Windows was known to do: die on startup, before any
-window, reading `GL_VERSION` from a context surfman's WGL backend had never
-made current. Windows now composites through ANGLE — EGL over Direct3D 11 —
-which is what Servo's own Windows builds do. That is a fix made from the crash
-log; nobody has watched it start.
-
-Nobody has started Zervo on Linux at all either. The packages compile, package
-and install; whether a window opens is untested, and X11 versus Wayland and the
-GL setup have never been exercised. **A report that it does not start is as
-useful as one that says it does** —
-[open an issue](https://github.com/Goddv/Zervo/issues) either way.
-
-Two things macOS keeps that the others do not: the frosted vibrancy behind the
-chrome, which is AppKit's, and bundled media — GStreamer is an ordinary package
-on Linux and a piece of work not yet done on Windows.
+Active builds target macOS on Apple Silicon and Intel. Native Liquid Glass
+requires macOS 26 or later. Linux and Windows builds are paused.
 
 ## Limitations
 
@@ -271,11 +148,9 @@ on Linux and a piece of work not yet done on Windows.
   cannot render gets `zervo://unsupported`, which names what is missing and
   hands the page to another browser, and a content process that falls over
   gets `zervo://crashed` rather than a frozen picture of itself.
-- **Streaming video does not work.** YouTube and the rest need Media Source
-  Extensions, which Servo does not have. Local and progressive video plays.
+- **Streaming video support varies.** Some services may fail to play.
 - **No extensions.** The engine has none, so neither does the button.
-- **Passwords cannot be filled into web forms.** The engine offers no hook for
-  a submitted form, so saved logins are a vault plus HTTP authentication.
+- **Saved logins.** Use the browser's fill action to enter a saved login.
 - **No sync, no profiles.** Not yet.
 - **Palettes are not themeable.** How a surface is *built* is yours to set, and
   so is how far the accent reaches into it — and an arrangement can be saved

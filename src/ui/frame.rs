@@ -1,6 +1,6 @@
 //! The chrome behind everything, and the frame around the content card.
 //!
-//! Gradients, the glow across the top, the card's halo and shadow, and the
+//! The chrome background, the card's shadow and outline, and the
 //! antialiased masks that round the corners of a page the engine blitted as a
 //! square. None of it reads `ChromeContext`: every function here takes a
 //! `Palette` and a handful of numbers, which is what made this the first part
@@ -32,13 +32,8 @@ pub fn vertical_gradient(painter: &egui::Painter, rect: Rect, top: Color32, bott
     painter.add(Shape::mesh(mesh));
 }
 
-/// Height of the chrome's top glow strip, in points.
-pub(crate) const CHROME_GRADIENT_HEIGHT: f32 = 280.0;
-
-/// Smoothstep falloff for the glow strip. Its slope reaches zero at the
-/// bottom, so the strip melts into the flat chrome instead of ending on a
-/// visible line (a linear ramp leaves a mach band where the slope breaks).
-pub(crate) fn glow_falloff(t: f32) -> f32 {
+/// Smoothstep falloff for a soft gradient.
+fn gradient_falloff(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
@@ -53,7 +48,7 @@ pub(crate) fn eased_gradient(painter: &egui::Painter, rect: Rect, top: Color32, 
     let mut mesh = Mesh::default();
     for strip in 0..=STRIPS {
         let t = strip as f32 / STRIPS as f32;
-        let color = lerp_premultiplied(top, bottom, glow_falloff(t));
+        let color = top.lerp_to_gamma(bottom, gradient_falloff(t));
         let y = rect.min.y + rect.height() * t;
         mesh.colored_vertex(pos2(rect.min.x, y), color);
         mesh.colored_vertex(pos2(rect.max.x, y), color);
@@ -66,72 +61,6 @@ pub(crate) fn eased_gradient(painter: &egui::Painter, rect: Rect, top: Color32, 
     painter.add(Shape::mesh(mesh));
 }
 
-/// The lightest chrome color, at the very top of the window: a whisper of
-/// accent, echoing Zen Browser's workspace tinting. Light comes from above in both
-/// themes, so the top is always the lighter end.
-pub(crate) fn glow_strip_top(palette: &Palette, strength: f32) -> Color32 {
-    let full = theme::mix(
-        {
-            let lift = if palette.dark { 14 } else { 6 };
-            Color32::from_rgb(
-                (palette.bg.r() as i16 + lift).clamp(0, 255) as u8,
-                (palette.bg.g() as i16 + lift).clamp(0, 255) as u8,
-                (palette.bg.b() as i16 + lift + 2).clamp(0, 255) as u8,
-            )
-        },
-        palette.accent,
-        0.07,
-    );
-    // Scale the whole effect back toward the flat chrome color.
-    theme::mix(palette.bg, full, strength.clamp(0.0, 1.0))
-}
-
-/// The chrome color at a given window-space `y` — used both to paint the
-/// gradient and to tint anything that must blend into it seamlessly.
-/// The colour `paint_chrome_fill` actually leaves at height `y`, alpha and all.
-///
-/// Not `chrome_color_at` multiplied by the opacity afterwards. That mixes the
-/// gradient at full alpha and multiplies the result; the fill multiplies its
-/// two ends first and mixes those. Both take the resolved backing opacity so
-/// a cut corner and the window surround show the same amount of material.
-pub(crate) fn chrome_fill_at(
-    root: &Ui,
-    y: f32,
-    palette: &Palette,
-    top_glow: f32,
-    opacity: f32,
-) -> Color32 {
-    let bg = palette.bg.gamma_multiply(opacity);
-    if top_glow <= 0.0 {
-        return bg;
-    }
-    let top = root.ctx().content_rect().top();
-    if y >= top + CHROME_GRADIENT_HEIGHT {
-        return bg;
-    }
-    let t = glow_falloff((y - top) / CHROME_GRADIENT_HEIGHT);
-    // Premultiplied, because both ends are translucent whenever `opacity` is.
-    // `theme::mix` returns an opaque colour, so it handed back the glow's RGB
-    // already scaled down by the tint and then declared it fully opaque — a
-    // near-black patch wherever the chrome is see-through and the glow band
-    // reaches. The card's bottom corners sit past the band and took the early
-    // return above, which is why only the top two were ever black.
-    lerp_premultiplied(
-        glow_strip_top(palette, top_glow).gamma_multiply(opacity),
-        bg,
-        t,
-    )
-}
-
-pub(crate) fn chrome_color_at(root: &Ui, y: f32, palette: &Palette, top_glow: f32) -> Color32 {
-    if top_glow <= 0.0 {
-        return palette.bg;
-    }
-    let top = root.ctx().content_rect().top();
-    let t = glow_falloff((y - top) / CHROME_GRADIENT_HEIGHT);
-    theme::mix(glow_strip_top(palette, top_glow), palette.bg, t)
-}
-
 /// Tint left over the window's native glass. Keep only a small workspace
 /// wash so the system's material is visible along the inset.
 pub fn window_chrome_tint(palette: &Palette, window_glass: bool) -> f32 {
@@ -142,12 +71,10 @@ pub fn window_chrome_tint(palette: &Palette, window_glass: bool) -> f32 {
     }
 }
 
-/// Flat chrome fill plus the window-wide top gradient, painted under
-/// everything else.
+/// Paint the chrome background beneath the page and sidebar.
 pub(crate) fn paint_chrome_base(
     root: &Ui,
     palette: &Palette,
-    top_glow: f32,
     opacity: f32,
     sidebar_right: Option<f32>,
 ) {
@@ -158,146 +85,16 @@ pub(crate) fn paint_chrome_base(
         let clip = Rect::from_min_max(pos2(right, window.top()), window.max);
         painter = painter.with_clip_rect(clip);
     }
-    paint_chrome_fill(&painter, window, window.top(), palette, top_glow, opacity);
-    paint_chrome_aurora(root, &painter, window, palette);
-}
-
-/// The window's own light, under everything.
-///
-/// Turn 5 asks for the accent to stop being a highlight and become a light
-/// source, and most of what makes its artboards look the way they do is not a
-/// tint on the surfaces at all — it is three enormous soft radials behind
-/// them, drifting. Without that the chrome is a flat grey with a slightly
-/// coloured hue and the surfaces have nothing to be lit *by*, which is exactly
-/// what "the accent as a light source" was arguing against.
-///
-/// It is also what makes a translucent light theme legible. Past the first
-/// seam step the page stops painting a base of its own, so if the window has
-/// nothing behind it either then pale glass sits on pale nothing and the text
-/// on it goes with them. The ground is what both problems were missing.
-///
-/// Scaled by the accent strength, so the arrangement that ships quiet stays
-/// quiet: at the shipped 0.045 this is invisible, and it has to be, or the
-/// fallback would stop being the fallback.
-pub(crate) fn paint_chrome_aurora(
-    root: &Ui,
-    painter: &egui::Painter,
-    window: Rect,
-    palette: &Palette,
-) {
-    let candy = palette.appearance.candy;
-    // Below roughly the shipped ratio there is nothing to say.
-    let strength = ((candy - 0.06) / 0.24).clamp(0.0, 1.0);
-    if strength <= 0.0 {
-        return;
-    }
-    // The study's own three lights, converted off its stylesheet rather than
-    // guessed at. Each is `radial-gradient(rx ry at x y, colour 0%, transparent
-    // 62%)` inside a box inset -18% on every side, so both the centres and the
-    // radii are in a frame 1.36 times the window: `at 18% 22%` lands at 6% 12%
-    // of the window, and a 44% radius that reaches nothing at 62% of itself is
-    // 0.37 of the window across. Two of them are mostly off the edge, which is
-    // what makes them read as light coming in from outside rather than as
-    // three circles arranged on the background.
-    //
-    // Two are the accent and the middle one is its partner round the wheel —
-    // one hue at three sizes is a gradient, two hues are a room with two lamps
-    // in it. `soft_blob` is round where the study's are slightly elliptical,
-    // which at this softness is not a difference anybody can see.
-    let width = window.width();
-    let time = root.input(|input| input.time) as f32;
-    // The light theme takes about half: the study never drew candy in light,
-    // and at full strength three saturated lights on a pale ground stop being
-    // light and become paint.
-    let scale = if palette.dark { 1.0 } else { 0.5 } * strength;
-    for (x, y, size, tint, alpha, phase) in [
-        (0.065, 0.119, 0.371, palette.accent, 0.85, 0.0),
-        (0.962, 0.908, 0.405, palette.warm, 0.60, 2.1),
-        (0.663, -0.098, 0.438, palette.accent, 0.45, 4.2),
-    ] {
-        // The study's `drift` keyframes, at their period: thirty seconds for
-        // one pass, which is slow enough that you never catch it moving and
-        // fast enough that the window is never quite the same twice.
-        let wander = vec2(
-            (time * 0.05 + phase).sin() * width * 0.03,
-            (time * 0.04 + phase).cos() * width * 0.02,
-        );
-        crate::ui::backdrops::soft_blob(
-            painter,
-            pos2(
-                window.min.x + window.width() * x,
-                window.min.y + window.height() * y,
-            ) + wander,
-            width * size,
-            tint.gamma_multiply(alpha * scale),
-        );
-    }
-    // A drifting light has to be repainted to drift.
-    root.ctx()
-        .request_repaint_after(std::time::Duration::from_millis(33));
-}
-
-/// Blend two colours that are already premultiplied, keeping them
-/// premultiplied.
-///
-/// `theme::mix` cannot do this: it returns an *opaque* colour. Handed two
-/// translucent premultiplied colours it produces one whose RGB has been scaled
-/// down by an alpha it then throws away — which at a low tint is very nearly
-/// black. ARCHITECTURE.md has warned about this for as long as it has existed;
-/// it is what made the content card's top corners black.
-pub(crate) fn lerp_premultiplied(a: Color32, b: Color32, t: f32) -> Color32 {
-    let inv = 1.0 - t;
-    let channel = |a: u8, b: u8| (a as f32 * inv + b as f32 * t) as u8;
-    Color32::from_rgba_premultiplied(
-        channel(a.r(), b.r()),
-        channel(a.g(), b.g()),
-        channel(a.b(), b.b()),
-        channel(a.a(), b.a()),
-    )
-}
-
-/// Fill `rect` with the chrome's colour, including the glow band across the
-/// top of the window. `window_top` anchors the band, so a rect that starts
-/// below the window's top edge still lines up with the rest of the chrome.
-pub(crate) fn paint_chrome_fill(
-    painter: &egui::Painter,
-    rect: Rect,
-    window_top: f32,
-    palette: &Palette,
-    top_glow: f32,
-    opacity: f32,
-) {
-    let bg = palette.bg.gamma_multiply(opacity);
-    if top_glow <= 0.0 {
-        painter.rect_filled(rect, CornerRadius::ZERO, bg);
-        return;
-    }
-
-    // The glow band and the flat fill below it are painted as DISJOINT rects.
-    // Overlapping them would composite two translucent layers on top of each
-    // other inside the band, making it measurably more opaque than the chrome
-    // below and leaving a hard horizontal seam where the band ends.
-    let band_bottom = (window_top + CHROME_GRADIENT_HEIGHT).min(rect.max.y);
-    let band = Rect::from_min_max(rect.min, pos2(rect.max.x, band_bottom));
-    let rest = Rect::from_min_max(pos2(rect.min.x, band_bottom), rect.max);
-    if rest.is_positive() {
-        painter.rect_filled(rest, CornerRadius::ZERO, bg);
-    }
-    if band.is_positive() {
-        eased_gradient(
-            painter,
-            band,
-            glow_strip_top(palette, top_glow).gamma_multiply(opacity),
-            bg,
-        );
-    }
+    painter.rect_filled(
+        window,
+        CornerRadius::ZERO,
+        palette.bg.gamma_multiply(opacity),
+    );
 }
 
 /// Compute the inset card rect. Full Page mode leaves the top edge clear.
 pub(crate) fn paint_content_backdrop(root: &Ui, outer: Rect, palette: &Palette, top: f32) -> Rect {
-    // No background fill here: the window-wide chrome base already covers
-    // this area, and filling it again would cut the gradient off at the
-    // sidebar edge.
+    // The chrome background is painted once for the entire window.
     // The card's shadow is NOT painted here: the webview blit overwrites the
     // whole square content rect, which would erase the shadow inside the
     // rounded corners and leave square unshadowed patches. It is painted as
@@ -325,46 +122,7 @@ pub(crate) fn paint_content_backdrop(root: &Ui, outer: Rect, palette: &Palette, 
 /// distant one gets is the page's own edge carried up to it.
 pub const PANEL_REACH: f32 = 400.0;
 
-/// A soft glow around the content card, when asked for.
-pub(crate) fn paint_card_halo(
-    root: &Ui,
-    painter: &egui::Painter,
-    rect: Rect,
-    radius: f32,
-    palette: &Palette,
-    top_glow: f32,
-    halo: (crate::settings::HaloTint, f32),
-) {
-    let (tint, amount) = halo;
-    // The square box has to be covered, not merely approached. Its furthest
-    // point from the arc is radius * (sqrt(2) - 1) at each corner, and a
-    // falloff that begins at the silhouette has decayed to a third of its
-    // strength by the time it gets there. So the ring holds full strength out
-    // to the wedge and only then fades.
-    let wedge = radius * (std::f32::consts::SQRT_2 - 1.0);
-    painter.add(glass::shadow_tinted(
-        rect,
-        radius,
-        (wedge + radius * 0.42 + 6.0) * amount,
-        // The held stretch covers the page's square corners, which sit a fixed
-        // distance out — turning the halo up spreads it further, it does not
-        // move what it is covering.
-        wedge.min(wedge * amount),
-        glass::Inner::Outside,
-        |at| match tint {
-            crate::settings::HaloTint::Accent => palette.accent,
-            crate::settings::HaloTint::Chrome => chrome_color_at(root, at.y, palette, top_glow),
-        },
-    ));
-}
-
-/// A soft shadow hugging the content card.
-///
-/// `Outside`, unlike every other surface: what is inside this silhouette is
-/// the web page, blitted pixel for pixel, and a feather row drawn over it
-/// leaves a dark fringe around the whole page.
-/// What a spread slider reads, calling out the shape both were drawn at before
-/// either was adjustable rather than leaving it to be guessed from the handle.
+/// Describe the shadow spread relative to its default size.
 pub(crate) fn spread_note(amount: f32) -> String {
     if (amount - 1.0).abs() < 0.02 {
         "Default.".to_owned()
@@ -373,6 +131,7 @@ pub(crate) fn spread_note(amount: f32) -> String {
     }
 }
 
+/// A soft shadow outside the content card's silhouette.
 pub(crate) fn paint_card_shadow(
     painter: &egui::Painter,
     rect: Rect,
@@ -415,15 +174,11 @@ pub enum Corners {
 /// them changed the render with nothing to complain about.
 #[derive(Clone, Copy)]
 pub struct CardFrame {
-    /// Strength of the lit band across the top of the window.
-    pub top_glow: f32,
     /// The same backing tint as the surround, for the cut webview corners.
     pub backdrop_tint: f32,
     pub border: bool,
     /// Spread, when the card casts a shadow.
     pub shadow: Option<f32>,
-    /// Tint and amount, when the card carries a halo.
-    pub halo: Option<(crate::settings::HaloTint, f32)>,
 }
 
 pub fn finish_content_frame(
@@ -434,15 +189,12 @@ pub fn finish_content_frame(
     frame: CardFrame,
 ) {
     let CardFrame {
-        top_glow,
         backdrop_tint,
         border,
         shadow,
-        halo,
     } = frame;
     let painter = root.ctx().layer_painter(egui::LayerId::background());
-    // The oversized fans must only bleed inward over the blit — clip them so
-    // they can't notch the halo painted around the card.
+    // Clip the antialiased corner masks to the edges of the webview blit.
     let fan_painter = painter.with_clip_rect(content_rect);
     let radius = theme::content_radius(palette);
     let pad = 1.5;
@@ -508,8 +260,6 @@ pub fn finish_content_frame(
     // with it, so it covers the top as well as the bottom. Checked by cutting
     // the top corners and painting nothing back: the notch shows the frosted
     // backdrop, same as below.
-    let chrome_at =
-        |y: f32, opacity: f32, glow: f32| chrome_fill_at(root, y, palette, glow, opacity);
 
     // All four corner masks in ONE mesh: independent triangles each get their
     // own antialiased edges, and the AA seams between adjacent fan triangles
@@ -562,19 +312,15 @@ pub fn finish_content_frame(
             // Over an uncut one it would be a thin wash over the page's white
             // square, so there it has to be opaque — that is the whole job.
             //
-            // The glow applies either way. Leaving it out was a workaround for
-            // a bug in `chrome_fill_at`, not a decision: it blended with
-            // `theme::mix`, which returns an opaque colour, so a translucent
-            // glow came back nearly black. That is fixed, so the mask can carry
-            // the same lit band the chrome beside it carries.
-            let opacity = match corners_style {
-                Corners::Cut => backdrop_tint,
-                _ => 1.0,
+            let opacity = if corners_style == Corners::Cut {
+                backdrop_tint
+            } else {
+                1.0
             };
-            let glow = top_glow;
-            mesh.colored_vertex(corner_out, chrome_at(corner_out.y, opacity, glow));
+            let fill = palette.bg.gamma_multiply(opacity);
+            mesh.colored_vertex(corner_out, fill);
             for point in &arc {
-                mesh.colored_vertex(*point, chrome_at(point.y, opacity, glow));
+                mesh.colored_vertex(*point, fill);
             }
             for segment in 0..segments as u32 {
                 mesh.add_triangle(base, base + 1 + segment, base + 2 + segment);
@@ -591,29 +337,10 @@ pub fn finish_content_frame(
                 })
                 .collect();
 
-            arc_edges.push((true_arc, chrome_at(corner.y, opacity, glow)));
+            arc_edges.push((true_arc, fill));
         }
         fan_painter.add(Shape::mesh(mesh));
-        // Bridge the step where the mask meets the chrome.
-        //
-        // A mask has to be opaque: what it covers is the page's square corner,
-        // blitted pixel for pixel. The chrome beside it is a thin tint over the
-        // system's backdrop, and that backdrop is composited by the window
-        // server outside this framebuffer — so we cannot read it, reproduce it,
-        // or match it. Opaque chrome colour lands about five per cent off, and
-        // the hard edge where the two meet reads as a jagged corner.
-        //
-        // It shows at the bottom and not the top because the toolbar above the
-        // card is opaque, so up there the two happen to agree.
-        //
-        // So the mask fades out over a few points past the rect, where there is
-        // no page to hide and nothing to lose. Only at the corners, tapering to
-        // nothing where the arc meets the edge — a ring all the way round would
-        // be the halo, which is a decision rather than a repair.
-        // One physical pixel wide, so it feathers the mesh edge and no more.
-        // At 1.4 points it was nearly three pixels, laid half over the page —
-        // a chrome-coloured bite out of the page along the arcs but not along
-        // the straight edges, which read as a chip just past each corner.
+        // Feather just the arc edge. A wider stroke clips into the page.
         let hairline = 1.0 / root.pixels_per_point();
         for (arc, colour) in arc_edges {
             fan_painter.add(Shape::line(arc, Stroke::new(hairline, colour)));
@@ -623,21 +350,8 @@ pub fn finish_content_frame(
     // Drawn AFTER the corner masks: filling it beforehand works on internal
     // pages but not on web pages, where the blit wipes the square content rect
     // and leaves unshadowed patches in the corners.
-    // The halo and the shadow are rings around one silhouette, so they take a
-    // single radius: the widest corner the card actually has. A square corner
-    // simply gets the ring's straight run, which is what it should have.
+    // The shadow ring follows the card's widest corner.
     let ring_radius = [nw, ne, se, sw].iter().copied().fold(0.0_f32, f32::max);
-    if let Some((tint, amount)) = halo {
-        paint_card_halo(
-            root,
-            &painter,
-            content_rect,
-            ring_radius,
-            palette,
-            top_glow,
-            (tint, amount),
-        );
-    }
     if let Some(amount) = shadow {
         paint_card_shadow(&painter, content_rect, ring_radius, palette, amount);
     }

@@ -50,44 +50,6 @@ impl SearchEngine {
     }
 }
 
-/// What the halo around the content card is coloured with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum HaloTint {
-    /// The accent, so the card reads as lit by it.
-    Accent,
-    /// The chrome's own colour, so the halo is depth rather than colour.
-    Chrome,
-}
-
-impl HaloTint {
-    pub const ALL: [HaloTint; 2] = [HaloTint::Accent, HaloTint::Chrome];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            HaloTint::Accent => tr("options-accent"),
-            HaloTint::Chrome => tr("options-chrome"),
-        }
-    }
-}
-
-/// The system bundle icon or the alternate Dock mark without a backing tile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AppIcon {
-    Default,
-    Transparent,
-}
-
-impl AppIcon {
-    pub const ALL: [AppIcon; 2] = [AppIcon::Default, AppIcon::Transparent];
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            AppIcon::Default => tr("options-default"),
-            AppIcon::Transparent => tr("options-transparent"),
-        }
-    }
-}
-
 /// Where the sidebar lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
@@ -340,9 +302,6 @@ pub struct Settings {
     pub user_agent_compat: bool,
     /// Save files without asking where.
     pub downloads_auto: bool,
-    /// Strength of the glow strip across the top of the window, 0.0..=1.0.
-    /// Zero turns it off entirely.
-    pub top_glow: f32,
     /// Accent-tinted outline around the web content card.
     pub content_border: bool,
     /// A soft shadow around the content card.
@@ -352,14 +311,8 @@ pub struct Settings {
     /// tracing the edge rather than as depth — but that depends on how big the
     /// window is and what is behind it, so it is a choice rather than a rule.
     pub content_shadow: bool,
-    /// A soft glow around the content card, and what colours it.
-    pub content_halo: bool,
-    pub content_halo_tint: HaloTint,
-    /// How far each spreads, as a multiple of the shape they were drawn at
-    /// before either was adjustable. One is what the shadow has always looked
-    /// like, and the halo is tuned to match it rather than to its own scale.
+    /// Shadow spread as a multiple of its standard size.
     pub content_shadow_amount: f32,
-    pub content_halo_amount: f32,
     /// Everything about how Zervo is built: which preset, where the seam
     /// falls, what a surface is made of, how it moves, how far the accent
     /// reaches. See [`crate::theme::Appearance`].
@@ -400,10 +353,10 @@ pub struct Settings {
     /// zero: a card on a bright photograph with no veil under it cannot be
     /// read, whatever the photograph.
     pub wallpaper_dim: f32,
-
-    /// Dock icon variant.
-    pub app_icon: AppIcon,
 }
+
+pub const MAX_ACCENT_STRENGTH: f32 = 0.4;
+const DEFAULT_ACCENT_STRENGTH: f32 = 0.2;
 
 fn sidebar_default_appearance() -> crate::theme::Appearance {
     use crate::theme::{Appearance, Preset, Seam, Spine};
@@ -423,8 +376,8 @@ fn sidebar_default_appearance() -> crate::theme::Appearance {
         } else {
             0.8
         },
-        candy: 0.025,
-        workspace_accent: true,
+        candy: DEFAULT_ACCENT_STRENGTH,
+        workspace_accent: false,
         spine: Spine::Nothing,
         ..preset.appearance()
     }
@@ -457,7 +410,7 @@ impl Default for Settings {
         Self {
             language: String::new(),
             theme: ThemeMode::Auto,
-            accent: AccentColor::Lavender,
+            accent: AccentColor::Blue,
             homepage: "https://servo.org".to_owned(),
             search_engine: SearchEngine::DuckDuckGo,
             new_tab_page: NewTabPage::ZervoPage,
@@ -485,13 +438,9 @@ impl Default for Settings {
             sidebar_widgets: crate::dashboard::Placed::defaults(),
             user_agent_compat: true,
             downloads_auto: true,
-            top_glow: 0.20,
             content_border: true,
             content_shadow: false,
-            content_halo: false,
-            content_halo_tint: HaloTint::Accent,
             content_shadow_amount: 1.0,
-            content_halo_amount: 1.0,
             appearance: sidebar_default_appearance(),
             legacy_translucency: None,
             gestures: crate::gestures::Gestures::default(),
@@ -501,7 +450,6 @@ impl Default for Settings {
             wallpaper_source: crate::wallpaper::Source::Commons,
             wallpaper_cadence: crate::wallpaper::Cadence::Daily,
             wallpaper_dim: 0.55,
-            app_icon: AppIcon::Default,
         }
     }
 }
@@ -674,8 +622,49 @@ mod tests {
                 Translucency::Solid
             }
         );
-        assert!(appearance.workspace_accent);
         assert!(Preset::ALL.contains(&Preset::Zervo));
+    }
+
+    #[test]
+    fn default_accent_is_blue_at_medium_strength() {
+        let settings = Settings::default();
+        assert_eq!(settings.accent, AccentColor::Blue);
+        assert_eq!(settings.appearance.candy, 0.2);
+        assert!(!settings.appearance.workspace_accent);
+    }
+
+    #[test]
+    fn legacy_icon_and_glow_settings_are_ignored() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "accent": "Teal",
+            "appearance": {"candy": 0.2, "workspace_accent": true},
+            "app_icon": "Transparent",
+            "top_glow": 0.8,
+            "content_halo": true,
+            "content_halo_tint": "Chrome",
+            "content_halo_amount": 1.2,
+            "content_border": false,
+            "content_shadow": true,
+            "content_shadow_amount": 1.5,
+        }))
+        .unwrap();
+        assert_eq!(settings.accent, AccentColor::Teal);
+        assert_eq!(settings.appearance.candy, 0.2);
+        assert!(settings.appearance.workspace_accent);
+        assert!(!settings.content_border);
+        assert!(settings.content_shadow);
+        assert_eq!(settings.content_shadow_amount, 1.5);
+
+        let written = serde_json::to_value(settings).unwrap();
+        for key in [
+            "app_icon",
+            "top_glow",
+            "content_halo",
+            "content_halo_tint",
+            "content_halo_amount",
+        ] {
+            assert!(written.get(key).is_none());
+        }
     }
 
     #[cfg(target_os = "macos")]

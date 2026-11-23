@@ -12,7 +12,7 @@ use egui::{
 
 use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
-use crate::settings::{AppIcon, NewTabBackground, NewTabPage, SearchEngine};
+use crate::settings::{MAX_ACCENT_STRENGTH, NewTabBackground, NewTabPage, SearchEngine};
 use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier};
 use crate::widgets;
 
@@ -874,25 +874,14 @@ pub(crate) fn settings_appearance(
             palette,
             tr("settings-accent-strength-in-the-chrome"),
             candy,
-            0.0..=0.4,
+            0.0..=MAX_ACCENT_STRENGTH,
             |value| format!("{value:.3}"),
         )
         .settled
         {
             actions.push(UiAction::SettingsChanged);
         }
-        let candy = chrome.settings.appearance.candy;
-        note(
-            ui,
-            palette,
-            if candy <= 0.06 {
-                tr("settings-what-shipped-is-0-045-quiet-enough")
-            } else if candy >= 0.24 {
-                tr("settings-the-chrome-is-unmistakably-coloured-and-the")
-            } else {
-                tr("settings-the-accent-reads-as-a-room-rather")
-            },
-        );
+        note(ui, palette, tr("settings-accent-strength-help"));
     });
 
     if chrome.settings.layout.is_sidebar() {
@@ -1100,16 +1089,12 @@ pub(crate) fn settings_appearance(
         if widgets::toggle(
             ui,
             &mut chrome.settings.appearance.sweep,
-            tr("settings-specular-sweep-when-a-surface-resizes"),
+            tr("settings-sidebar-specular-sweep"),
             palette,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
-        note(
-            ui,
-            palette,
-            tr("settings-one-pass-of-light-across-any-surface"),
-        );
+        note(ui, palette, tr("settings-sidebar-specular-sweep-help"));
 
         ui.add_space(8.0);
         if widgets::toggle(
@@ -1287,51 +1272,7 @@ fn settings_window_section(
     palette: &Palette,
     actions: &mut Vec<UiAction>,
 ) {
-    settings_section(ui, palette, tr("settings-app-icon"), |ui| {
-        let icons = AppIcon::ALL;
-        let labels: Vec<&str> = icons.iter().map(crate::settings::AppIcon::label).collect();
-        let current = icons
-            .iter()
-            .position(|icon| *icon == chrome.settings.app_icon)
-            .unwrap_or(0);
-        if let Some(index) = widgets::segmented(ui, current, &labels, palette) {
-            chrome.settings.app_icon = icons[index];
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(tr("settings-transparent-lets-the-desktop-show-through-the"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
-    });
-
     settings_section(ui, palette, tr("common-window"), |ui| {
-        ui.label(
-            RichText::new(tr("settings-top-glow-strip"))
-                .size(13.0)
-                .color(palette.text),
-        );
-        // `.settled` rather than `.changed`: the chrome reads the value live, so
-        // the picture follows the drag either way, and this decides only when
-        // the settings file is rewritten. See `widgets::SliderOut`.
-        if widgets::slider(ui, &mut chrome.settings.top_glow, 0.0..=1.0, palette).settled {
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.label(
-            RichText::new(if chrome.settings.top_glow <= 0.0 {
-                tr("settings-off-flat-chrome-no-light-across-the").to_owned()
-            } else {
-                format!(
-                    "{:.0}% — accent-tinted light across the top of the window.",
-                    chrome.settings.top_glow * 100.0
-                )
-            })
-            .size(11.5)
-            .color(palette.text_muted),
-        );
-        ui.add_space(10.0);
-
         if widgets::toggle(
             ui,
             &mut chrome.settings.content_border,
@@ -1374,52 +1315,6 @@ fn settings_window_section(
             }
             ui.label(
                 RichText::new(spread_note(chrome.settings.content_shadow_amount))
-                    .size(11.5)
-                    .color(palette.text_muted),
-            );
-        }
-        ui.add_space(10.0);
-
-        if widgets::toggle(
-            ui,
-            &mut chrome.settings.content_halo,
-            tr("settings-halo-around-content"),
-            palette,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        ui.label(
-            RichText::new(tr("settings-a-glow-spreading-out-from-the-card"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
-        if chrome.settings.content_halo {
-            ui.add_space(8.0);
-            let labels: Vec<&str> = crate::settings::HaloTint::ALL
-                .iter()
-                .map(|t| t.label())
-                .collect();
-            let current = crate::settings::HaloTint::ALL
-                .iter()
-                .position(|t| *t == chrome.settings.content_halo_tint)
-                .unwrap_or(0);
-            if let Some(picked) = widgets::segmented(ui, current, &labels, palette) {
-                chrome.settings.content_halo_tint = crate::settings::HaloTint::ALL[picked];
-                actions.push(UiAction::SettingsChanged);
-            }
-            ui.add_space(6.0);
-            if widgets::slider(
-                ui,
-                &mut chrome.settings.content_halo_amount,
-                0.2..=2.0,
-                palette,
-            )
-            .settled
-            {
-                actions.push(UiAction::SettingsChanged);
-            }
-            ui.label(
-                RichText::new(spread_note(chrome.settings.content_halo_amount))
                     .size(11.5)
                     .color(palette.text_muted),
             );
@@ -2055,29 +1950,7 @@ pub(crate) fn settings_passwords(
 
 pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
     settings_section(ui, palette, tr("settings-build-and-engine"), |ui| {
-        let dark_icon = cfg!(target_os = "macos") && palette.dark;
-        let icon_id = Id::unique(("about_application_icon", dark_icon));
-        let icon = ui
-            .ctx()
-            .data(|data| data.get_temp::<TextureHandle>(icon_id));
-        let icon = icon.or_else(|| {
-            let png = if dark_icon {
-                include_bytes!("../../assets/icon/zervo-macos-dark-512.png").as_slice()
-            } else {
-                include_bytes!("../../assets/icon/zervo-128.png").as_slice()
-            };
-            let pixels = image::load_from_memory(png).ok()?.into_rgba8();
-            let color = egui::ColorImage::from_rgba_unmultiplied(
-                [pixels.width() as usize, pixels.height() as usize],
-                pixels.as_raw(),
-            );
-            let texture = ui
-                .ctx()
-                .load_texture("Zervo icon", color, egui::TextureOptions::LINEAR);
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(icon_id, texture.clone()));
-            Some(texture)
-        });
+        let icon = application_icon(ui, palette.dark);
         ui.horizontal(|ui| {
             if let Some(icon) = icon.as_ref() {
                 ui.image((icon.id(), vec2(50.0, 50.0)));

@@ -170,7 +170,6 @@ objc2-foundation = { version = "0.3.1", default-features = false, features = [
 ] }
 objc2-io-surface = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation"] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CALayer", "CATransaction"] }
-resvg = "0.50.0"
 
 [profile.release]
 opt-level = 3

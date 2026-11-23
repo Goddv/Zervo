@@ -2,21 +2,6 @@
 //!
 //! First-run choices use the same settings as the browser chrome.
 //!
-//! ## Why the limitations screen is the point
-//!
-//! Most onboarding sells. This one sets expectations, because the alternative
-//! is worse for exactly the reader it is trying to keep: somebody who meets a
-//! black video player and no explanation concludes the browser is broken, and
-//! somebody who was told concludes the engine is young. Same fact, opposite
-//! outcome — and only one of the two comes back.
-//!
-//! ## Why the material comes first
-//!
-//! It is the one question whose answer you can see while you are answering
-//! it. Each card is drawn with a palette resolved from that preset, so the
-//! choice is made by looking rather than by reading five descriptions of
-//! glass.
-
 use crate::l10n::text as tr;
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Rect, RichText, Sense, Stroke,
@@ -67,30 +52,9 @@ pub(crate) fn draw(root: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<
     let ctx = root.ctx().clone();
     let window = ctx.content_rect();
     let palette = chrome.palette;
-    let accent = theme::workspace_color_from(0, chrome.settings.space_colour);
-
-    // ── The ground. Retints toward the chosen space as soon as it is chosen,
-    // so step two's answer is visible behind step three.
-    let painter = root.painter();
-    painter.rect_filled(window, CornerRadius::ZERO, palette.bg);
-    for step in 0..24 {
-        let t = step as f32 / 23.0;
-        painter.rect_filled(
-            Rect::from_min_max(
-                pos2(window.min.x, window.min.y + window.height() * t),
-                pos2(
-                    window.max.x,
-                    window.min.y + window.height() * (t + 1.0 / 23.0),
-                ),
-            ),
-            CornerRadius::ZERO,
-            theme::mix(
-                theme::mix(palette.bg, accent, 0.30),
-                theme::mix(palette.bg, Color32::BLACK, 0.25),
-                t,
-            ),
-        );
-    }
+    let accent = palette.accent;
+    root.painter()
+        .rect_filled(window, CornerRadius::ZERO, palette.bg);
 
     let at = step(&ctx, palette.material.animation);
     let now = target(&ctx);
@@ -138,7 +102,7 @@ fn panel(
 ) {
     let index = index + u8::from(NATIVE_MATERIAL && index > 0);
     match index {
-        0 => welcome(ui, chrome, actions, body, accent),
+        0 => welcome(ui, chrome, actions, body),
         1 => material(ui, chrome, actions, body),
         2 => space(ui, chrome, actions, body, accent),
         3 => layout(ui, chrome, actions, body),
@@ -170,22 +134,12 @@ fn heading(ui: &mut Ui, palette: &Palette, accent: Color32, kicker: &str, title:
     ui.add_space(26.0);
 }
 
-fn welcome(
-    ui: &mut Ui,
-    chrome: &mut ChromeContext,
-    actions: &mut Vec<UiAction>,
-    body: Rect,
-    accent: Color32,
-) {
+fn welcome(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, body: Rect) {
     let palette = chrome.palette;
-    ui.add_space((body.height() - 330.0).max(0.0) * 0.5);
-    let (icon, _) = ui.allocate_exact_size(vec2(112.0, 112.0), Sense::hover());
-    ui.painter().rect_filled(
-        icon,
-        CornerRadius::same(palette.radius(Tier::Window) * 2),
-        theme::mix(palette.bg, accent, 0.35),
-    );
-    super::draw_zervo_mark(ui.painter(), icon.center(), 52.0, palette.text);
+    ui.add_space((body.height() - 345.0).max(0.0) * 0.5);
+    if let Some(icon) = super::application_icon(ui, palette.dark) {
+        ui.image((icon.id(), vec2(112.0, 112.0)));
+    }
     ui.add_space(30.0);
     ui.label(RichText::new("Zervo").size(52.0).color(palette.text));
     ui.add_space(16.0);
@@ -194,13 +148,17 @@ fn welcome(
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             ui.label(
-                RichText::new(tr("setup-a-calm-workspace-oriented-browser-on-servo"))
+                RichText::new(tr("setup-welcome-description"))
                     .size(15.0)
                     .color(palette.text_muted),
             );
         },
     );
     ui.add_space(12.0);
+    if chrome.native_glass.window_backdrop {
+        ui.label(RichText::new(tr("setup-system-glass")).color(palette.text_muted));
+        ui.add_space(12.0);
+    }
     super::language_picker(ui, chrome.settings, actions);
 }
 
@@ -376,7 +334,7 @@ fn space(
         accent,
         tr("setup-step-2-of-4"),
         tr("setup-name-your-first-space"),
-        tr("setup-tabs-live-in-named-spaces-its-colour"),
+        tr("setup-spaces-description"),
     );
     ui.allocate_ui_with_layout(
         vec2(320.0, 0.0),
@@ -435,7 +393,7 @@ fn space(
             });
             ui.add_space(14.0);
             ui.label(
-                RichText::new(tr("setup-you-can-add-more-later-and-drag"))
+                RichText::new(tr("setup-spaces-color-note"))
                     .size(11.5)
                     .color(palette.text_muted),
             );
@@ -451,7 +409,7 @@ fn layout(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>, 
         &palette,
         theme::workspace_color_from(0, chrome.settings.space_colour),
         tr("setup-step-3-of-4"),
-        tr("setup-where-should-the-chrome-live"),
+        tr("setup-choose-a-layout"),
         tr("setup-switch-between-layouts"),
     );
     ui.horizontal(|ui| {
@@ -530,13 +488,13 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
         theme::workspace_color_from(0, chrome.settings.space_colour),
         tr("setup-step-4-of-4"),
         tr("setup-before-you-start"),
-        tr("setup-servo-is-young-these-are-real-they"),
+        tr("setup-platform-compatibility"),
     );
     let rows: [(Icon, &str, &str); 4] = [
         (
             Icon::Music,
-            tr("setup-streaming-video-will-not-play"),
-            tr("setup-no-media-source-extensions-local-and-progressive"),
+            tr("setup-streaming-compatibility"),
+            tr("setup-streaming-compatibility-note"),
         ),
         (
             Icon::Extensions,
@@ -545,8 +503,8 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
         ),
         (
             Icon::Lock,
-            tr("setup-passwords-cannot-fill-themselves-in"),
-            tr("setup-kept-in-your-keychain-but-the-engine"),
+            tr("setup-fill-saved-logins"),
+            tr("setup-fill-saved-logins-note"),
         ),
         (
             Icon::Warning,
@@ -593,7 +551,7 @@ fn limits(ui: &mut Ui, chrome: &ChromeContext, body: Rect) {
             }
             ui.add_space(6.0);
             ui.label(
-                RichText::new(tr("setup-keeping-another-browser-around-is-sensible-zervo"))
+                RichText::new(tr("setup-open-page-elsewhere"))
                     .size(11.5)
                     .color(palette.text_muted),
             );

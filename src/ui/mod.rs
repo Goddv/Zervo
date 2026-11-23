@@ -38,7 +38,7 @@ use frame::*;
 use settings_page::*;
 use text::*;
 
-pub use backdrops::{draw_zervo_mark, paint_newtab_background};
+pub use backdrops::paint_newtab_background;
 pub use command::{CommandBar, CommandMode};
 pub use frame::{
     CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient, window_chrome_tint,
@@ -46,6 +46,43 @@ pub use frame::{
 pub use text::{
     anchored_popup, clamp_into, display_name, ellipsize, host_of, initial, normalize_url,
 };
+
+pub(crate) fn application_icon(ui: &Ui, dark: bool) -> Option<TextureHandle> {
+    let dark_icon = cfg!(target_os = "macos") && dark;
+    let icon_id = Id::unique(("application_icon", dark_icon));
+    let icon = ui
+        .ctx()
+        .data(|data| data.get_temp::<TextureHandle>(icon_id));
+    icon.or_else(|| {
+        let png = if dark_icon {
+            include_bytes!("../../assets/icon/zervo-macos-dark-512.png").as_slice()
+        } else {
+            include_bytes!("../../assets/icon/zervo-128.png").as_slice()
+        };
+        let pixels = image::load_from_memory(png).ok()?.into_rgba8();
+        let color = egui::ColorImage::from_rgba_unmultiplied(
+            [pixels.width() as usize, pixels.height() as usize],
+            pixels.as_raw(),
+        );
+        let texture = ui
+            .ctx()
+            .load_texture("Zervo icon", color, egui::TextureOptions::LINEAR);
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(icon_id, texture.clone()));
+        Some(texture)
+    })
+}
+
+pub(crate) fn paint_application_icon(ui: &Ui, rect: Rect, dark: bool) {
+    if let Some(icon) = application_icon(ui, dark) {
+        ui.painter().image(
+            icon.id(),
+            rect,
+            Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
+}
 
 #[derive(Debug)]
 pub enum UiAction {
@@ -331,13 +368,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     let native_sidebar = chrome.uses_native_sidebar() && present >= 1.0;
     let chrome_tint = window_chrome_tint(&chrome.palette, chrome.native_glass.window_backdrop);
     if !native_sidebar || chrome.native_glass.window_backdrop {
-        paint_chrome_base(
-            root,
-            &chrome.palette,
-            chrome.settings.top_glow,
-            chrome_tint,
-            None,
-        );
+        paint_chrome_base(root, &chrome.palette, chrome_tint, None);
     }
     // The docked and revealed sidebar share widget IDs. Draw only one per frame.
     let sidebar_docked = present > 0.0;
@@ -366,7 +397,6 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         paint_chrome_base(
             root,
             &chrome.palette,
-            chrome.settings.top_glow,
             chrome_tint,
             chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
         );
@@ -2315,13 +2345,13 @@ fn draw_sidebar_peek(
     ui.set_clip_rect(ctx.content_rect());
     let surface = crate::overlay_glass::Surface::begin(ui);
     if !surface.is_native() {
-        paint_chrome_fill(
-            ui.painter(),
+        ui.painter().rect_filled(
             drawn,
-            ctx.content_rect().top(),
-            &chrome.palette,
-            chrome.settings.top_glow,
-            chrome.palette.chrome_tint().clamp(0.2, 1.0),
+            CornerRadius::ZERO,
+            chrome
+                .palette
+                .bg
+                .gamma_multiply(chrome.palette.chrome_tint().clamp(0.2, 1.0)),
         );
         if chrome.palette.translucency.is_translucent() {
             glass::paint(
@@ -2460,7 +2490,7 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
 /// read as an alarm rather than as progress.
 const SWEEP_PERIOD: f64 = 1.5;
 
-/// One pass of light across a surface that is changing size.
+/// One pass of light across the sidebar as it docks or undocks.
 ///
 /// Real glass catches the light when it moves, and this is the cheapest way to
 /// say a thing is glass and not a rectangle: no shader, one gradient, and it

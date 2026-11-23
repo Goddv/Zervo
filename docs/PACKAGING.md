@@ -1,52 +1,22 @@
 # Packaging and distribution
 
-Everything a release produces comes out of `scripts/`, and CI does nothing a
-person cannot do by hand.
+Build a macOS app and disk image for the current architecture.
 
 ```bash
-# macOS — an .app and a disk image for this machine's architecture
 ./scripts/bundle-macos.sh --dmg --features engine-downloads,media
-
-# Linux — every format the machine has the tools for
-./scripts/package-linux.sh --all --features engine-downloads,media
-
-# Windows
-pwsh scripts/package-windows.ps1 -Features engine-downloads,media -Installer
 ```
 
-Each script takes `--help`.
-
-## What a release contains
-
-| File | Built on | Runs on |
-| --- | --- | --- |
-| `Zervo-<v>-arm64.dmg` | macOS 15, Apple Silicon | macOS 11 and later, Apple Silicon |
-| `Zervo-<v>-x86_64.dmg` | macOS 15, Intel | macOS 11 and later, Intel |
-| `zervo_<v>_amd64.deb` | Ubuntu 24.04 | Ubuntu 24.04 or Debian 13 and compatible distributions |
-| `zervo-<v>-1.fc44.x86_64.rpm` | Fedora 44 | Fedora 44 |
-| `Zervo-<v>-x86_64.AppImage` (+ `.zsync`) | Ubuntu 22.04 | glibc 2.35+ and compatible host graphics and GStreamer libraries |
-| `Zervo-<v>-x86_64.flatpak` | Ubuntu 22.04 binary, GNOME 50 runtime | x86_64 Linux with Flatpak |
-| `zervo-<v>-x86_64-linux-gnu.tar.gz` | Ubuntu 24.04 | anything the `.deb` runs on, unpacked anywhere |
-| `Zervo-<v>-windows-x64.zip`, `-setup.exe` | Windows Server 2025 | Windows 10 1809 and later, x64 and ARM64 under Prism |
-| `zervo-aur-packages.tar.gz` | — | `PKGBUILD` + `.SRCINFO` for the AUR |
-| `SHA256SUMS` | — | every file above |
-
-Everything except macOS is x86_64. There is no technical obstacle to arm64 on
-Linux — the runners are generally available and free — but nobody is asking for
-it, and each one is another hour of engine build.
-
-The `.deb` links against Ubuntu 24.04 libraries, which keeps its glibc
-requirement below Debian 13’s version. The Linux workflow also installs and
-launches the `.deb` and AppImage inside a Debian 13 container.
-
----
+GitHub Actions builds Apple Silicon and Intel disk images on every push to
+`main`. A tagged release adds the source archive and `SHA256SUMS`. Linux and
+Windows packaging is paused. Their scripts and [workflow definitions](../.github/paused-workflows)
+are retained for resuming support.
 
 ## macOS
 
 ### Two disk images, one per architecture
 
-CI builds each natively — `macos-15` for Apple Silicon, `macos-15-intel` for
-Intel — and ships both.
+CI builds both architectures natively with the macOS 26 runner images and
+includes the layered Icon Composer asset catalog.
 
 ```bash
 ./scripts/bundle-macos.sh --dmg                # this machine's architecture
@@ -430,26 +400,13 @@ on, and it will either work or say exactly why not.
 
 ## The release pipeline
 
-`.github/workflows/release.yml` owns a release, and it is the only workflow with
-a token that can write one.
+Pushes to `main` build macOS preview artifacts without creating a release.
+Download them from [Actions → Release](https://github.com/Goddv/Zervo/actions/workflows/release.yml).
+To build a specific ref, run the workflow manually with the tag field blank.
 
-```
-draft ──┬─ linux.yml   (deb, rpm, AppImage, Flatpak, PKGBUILD)
-        ├─ macos.yml   (.dmg ×2: arm64, x86_64)
-        ├─ windows.yml (zip + installer)
-        └─ source      (git archive)
-                │
-              aur ─────┐
-                       ├─ publish: SHA256SUMS, provenance, upload, publish
-```
-
-A tagged release publishes only after all required platform jobs pass.
-Both portable Linux formats are required and are included in `SHA256SUMS`.
-
-To build current source, open **Actions → Release → Run workflow**, select the
-branch, and leave **tag** blank. Download the packages from that run’s
-**Artifacts** section. This mode creates preview artifacts without creating
-or updating a GitHub Release.
+A matching `v*` tag builds the two disk images and the source archive, then
+attaches them and their checksums to the release. A manual tagged run leaves
+a draft unless publication is selected.
 
 ### When clang moves under you
 

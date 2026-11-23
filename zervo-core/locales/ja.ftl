@@ -44,7 +44,6 @@ common-no-downloads = ダウンロードはまだありません。
 
 ## 初回セットアップ
 
-setup-a-calm-workspace-oriented-browser-on-servo = Zervo はワークスペースでタブを整理できるブラウザーです。Rust で書かれた独立したエンジン Servo を搭載しています。
 setup-set-it-up = セットアップを始める
 setup-four-questions-about-a-minute = 約 1 分で設定できます。
 setup-step-1-of-4 = ステップ 1 / 4
@@ -59,20 +58,11 @@ setup-no-blur-no-sheen-square = ぼかしや光沢のない角張った外観
 setup-native-glass-on-supported-macs = 対応する Mac のネイティブ Liquid Glass
 setup-generous-corners-no-glass = 大きく丸みのある不透明な外観
 setup-name-your-first-space = 最初のワークスペースに名前を付ける
-setup-tabs-live-in-named-spaces-its-colour = タブはワークスペースごとに整理できます。ワークスペースの色をウィンドウにも使えます。
-setup-you-can-add-more-later-and-drag = ワークスペースはあとから追加できます。タブはドラッグして移動できます。
-setup-where-should-the-chrome-live = 操作バーの位置を選ぶ
 setup-before-you-start = ご利用の前に
-setup-servo-is-young-these-are-real-they = Servo は開発中です。エンジンの制約により、一部の機能はまだ使えません。
-setup-streaming-video-will-not-play = 一部のストリーミング動画は再生できません
-setup-no-media-source-extensions-local-and-progressive = Media Source Extensions には未対応です。ローカル動画やプログレッシブ配信は再生できます。
 setup-no-extensions = 拡張機能には未対応です
 setup-the-engine-has-none-so-neither-does = Servo はブラウザーの拡張機能に対応していません。
-setup-passwords-cannot-fill-themselves-in = パスワードの自動入力には操作が必要です
-setup-kept-in-your-keychain-but-the-engine = パスワードはキーチェーンに保存されます。フォームを送信しても自動では保存されません。
 setup-some-sites-just-break = 一部のサイトは正常に動作しません
 setup-missing-apis-or-a-refused-user-agent = 必要な API に未対応の場合や、サイトがブラウザーを受け入れない場合があります。
-setup-keeping-another-browser-around-is-sensible-zervo = 表示できないページは、別のブラウザーで開くこともできます。
 setup-space-ready = 「{ $name }」の準備ができました
 setup-change-layout-and-accent = レイアウトとアクセントカラーは、設定でいつでも変更できます。
 settings-page-frame = ページの枠
@@ -237,5 +227,3 @@ theme-frosted = すりガラス
 theme-flat = フラット
 theme-material = マテリアル
 options-full-page = 全画面ページ
-options-default = 既定
-options-transparent = 透明

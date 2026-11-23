@@ -108,7 +108,7 @@ impl Card {
             Card::Notes => tr("newtab-note"),
             Card::Tasks => tr("newtab-to-do"),
             Card::Workspaces => tr("newtab-workspaces"),
-            Card::Mark => tr("newtab-zervo-mark"),
+            Card::Mark => tr("newtab-zervo-icon"),
         }
     }
 
@@ -1645,7 +1645,7 @@ fn draw_tile(
         Card::Notes => draw_notes(area, chrome, body, live, id),
         Card::Tasks => draw_tasks(area, chrome, body, live, id),
         Card::Workspaces => draw_workspaces(area, chrome, body, live, id, actions),
-        Card::Mark => draw_mark(area, &palette, rect, ink),
+        Card::Mark => draw_mark(area, &palette, rect),
     }
     false
 }
@@ -1703,11 +1703,10 @@ fn draw_composed(
     let field_height = (hero.height() * 0.28).clamp(44.0, HERO_HEIGHT);
     let size = 42.0;
     let top = centre.y - (size + 46.0 + field_height) / 2.0;
-    crate::ui::draw_zervo_mark(
-        root.painter(),
-        pos2(centre.x, top + size / 2.0),
-        size,
-        hero_ink.text,
+    crate::ui::paint_application_icon(
+        root,
+        Rect::from_center_size(pos2(centre.x, top + size / 2.0), vec2(size, size)),
+        chrome.palette.dark,
     );
     hero_ink.write(
         root.painter(),
@@ -3239,16 +3238,13 @@ fn draw_workspaces(
     }
 }
 
-fn draw_mark(area: &mut Ui, palette: &Palette, rect: Rect, ink: &Ink) {
-    let height = (rect.height() * 0.44).clamp(20.0, 76.0);
-    let color = if ink.photo {
-        Color32::from_white_alpha(210)
-    } else if palette.dark {
-        Color32::from_white_alpha(200)
-    } else {
-        theme::mix(palette.text, palette.accent, 0.35)
-    };
-    crate::ui::draw_zervo_mark(area.painter(), rect.center(), height, color);
+fn draw_mark(area: &Ui, palette: &Palette, rect: Rect) {
+    let size = (rect.height() * 0.44).clamp(20.0, 76.0);
+    crate::ui::paint_application_icon(
+        area,
+        Rect::from_center_size(rect.center(), vec2(size, size)),
+        palette.dark,
+    );
 }
 
 // ── Small pieces every card uses ───────────────────────────────────────────

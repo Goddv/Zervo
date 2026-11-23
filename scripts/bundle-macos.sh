@@ -251,6 +251,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# macOS can render the layered icon in its selected appearance when the
+# active Xcode toolchain supports Icon Composer. Keep the flat ICNS fallback.
+if xcrun --find actool >/dev/null 2>&1; then
+    ICON_BUILD="$(mktemp -d)"
+    if xcrun --sdk macosx actool assets/icon/Zervo.icon \
+        --compile "$ICON_BUILD" --app-icon Zervo --platform macosx \
+        --target-device mac --minimum-deployment-target 26.0 \
+        --output-partial-info-plist "$ICON_BUILD/Icon.plist" --errors --warnings \
+        && [ -s "$ICON_BUILD/Assets.car" ]; then
+        cp "$ICON_BUILD/Assets.car" "$RES_DIR/Assets.car"
+        plutil -insert CFBundleIconName -string Zervo "$APP/Contents/Info.plist"
+    else
+        note "Icon Composer compilation unavailable. Using Zervo.icns."
+    fi
+    rm -rf "$ICON_BUILD"
+fi
+
 # Point zlib at the system copy.
 #
 # If GStreamer is installed, its `-sys` build scripts put the framework's lib

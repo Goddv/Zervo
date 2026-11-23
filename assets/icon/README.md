@@ -8,8 +8,9 @@ Icon Composer supplies the macOS enclosure, system light and dark backgrounds, t
 Export the macOS Default appearance as a 1024-pixel PNG and save it as
 `zervo-1024.png`. Run `./scripts/make-icons.py` to update the committed
 launcher PNGs and Windows ICO. The macOS bundler turns the export into
-`Zervo.icns` with the standard command-line tools. Save the resized 512-pixel
-macOS Dark export as `zervo-macos-dark-512.png` for the running Dock icon.
+`Zervo.icns` with the command-line tools. With an Icon Composer-compatible
+Xcode toolchain, it also compiles `Zervo.icon` into the bundle's asset catalog
+so macOS can apply the selected icon appearance. The resized Dark export,
+`zervo-macos-dark-512.png`, is used on the About page.
 
 `zervo-icon-default.svg` is the scalable Linux icon.
-`zervo-icon-transparent.svg` is the optional transparent Dock icon.

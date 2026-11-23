@@ -2290,7 +2290,7 @@ dependencies = [
  "ecolor",
  "emath",
  "font-types",
- "harfrust 0.12.0",
+ "harfrust",
  "log",
  "nohash-hasher",
  "parking_lot",
@@ -3405,19 +3405,6 @@ dependencies = [
  "bytemuck",
  "read-fonts 0.41.0",
  "smallvec",
-]
-
-[[package]]
-name = "harfrust"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "865dcc4105d51c323d8fedbb2d75b5e9c8ecddf5613f74c82f851d0afbc97114"
-dependencies = [
- "bitflags 2.13.2",
- "bytemuck",
- "read-fonts 0.46.0",
- "smallvec",
- "yoke",
 ]
 
 [[package]]
@@ -6817,25 +6804,7 @@ dependencies = [
  "rgb",
  "svgtypes",
  "tiny-skia 0.12.0",
- "usvg 0.48.1",
- "zune-jpeg",
-]
-
-[[package]]
-name = "resvg"
-version = "0.50.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77bb4b284cf8a5c8ae721594af53387fb755d2196fddb32b2acfb4fa9251fa0c"
-dependencies = [
- "bytemuck",
- "gif",
- "image-webp",
- "log",
- "pico-args",
- "rgb",
- "svgtypes",
- "tiny-skia 0.12.0",
- "usvg 0.50.0",
+ "usvg",
  "zune-jpeg",
 ]
 
@@ -8005,7 +7974,7 @@ dependencies = [
  "mime",
  "once_cell",
  "parking_lot",
- "resvg 0.48.1",
+ "resvg",
  "serde_core",
  "servo-allocator",
  "servo-hyper-serde",
@@ -8303,7 +8272,7 @@ dependencies = [
  "quick_cache",
  "rand 0.10.4",
  "regex",
- "resvg 0.48.1",
+ "resvg",
  "rusqlite",
  "rustc-hash 2.1.3",
  "rustls",
@@ -8361,7 +8330,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "rand 0.10.4",
- "resvg 0.48.1",
+ "resvg",
  "rustc-hash 2.1.3",
  "rustls",
  "rustls-pki-types",
@@ -8557,7 +8526,7 @@ dependencies = [
  "postcard",
  "rand 0.10.4",
  "regex",
- "resvg 0.48.1",
+ "resvg",
  "rustc-hash 2.1.3",
  "selectors",
  "serde",
@@ -10420,7 +10389,7 @@ dependencies = [
  "data-url",
  "flate2",
  "fontdb",
- "harfrust 0.12.0",
+ "harfrust",
  "imagesize",
  "kurbo",
  "log",
@@ -10429,34 +10398,6 @@ dependencies = [
  "simplecss",
  "siphasher",
  "skrifa 0.44.0",
- "strict-num",
- "svgtypes",
- "tiny-skia-path 0.12.0",
- "unicode-bidi",
- "unicode-script",
- "unicode-vo",
- "xmlwriter",
-]
-
-[[package]]
-name = "usvg"
-version = "0.50.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdb896f04730b97805bbc3191fc57e4bf03face0f14577dd42e783c4d8c98802"
-dependencies = [
- "base64 0.23.1",
- "data-url",
- "flate2",
- "fontdb",
- "harfrust 0.15.0",
- "imagesize",
- "kurbo",
- "log",
- "pico-args",
- "roxmltree 0.21.2",
- "simplecss",
- "siphasher",
- "skrifa 0.49.0",
  "strict-num",
  "svgtypes",
  "tiny-skia-path 0.12.0",
@@ -11983,7 +11924,6 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-io-surface",
  "objc2-quartz-core 0.3.2",
- "resvg 0.50.0",
  "rustls",
  "serde",
  "serde_json",

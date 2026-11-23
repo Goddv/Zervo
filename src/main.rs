@@ -234,8 +234,7 @@ struct RunningApp {
     animation_waker: Waker,
     animation_pending: bool,
     painted_webview: Option<WebViewId>,
-    /// What `apply_theme` was last run for, and the icon last handed to the
-    /// Dock. Every settings write used to redo both, and redoing the theme
+    /// What `apply_theme` was last run for. Reapplying the theme
     /// means restyling egui, retuning the window's appearance and the frosted
     /// material, and telling every webview its prefers-color-scheme changed —
     /// which makes the page relayout. Doing all that because someone toggled
@@ -256,7 +255,6 @@ struct RunningApp {
     /// is a slider, which would send one per frame of a drag. Restyling egui's
     /// own widgets from it is cheap, so that happens whenever any of it moves.
     applied_appearance: theme::Appearance,
-    applied_icon: (settings::AppIcon, bool),
     /// A theme change in flight: the palette it started from, and when.
     ///
     /// The chrome crosses over rather than snapping, because half of what the
@@ -598,8 +596,6 @@ impl ApplicationHandler<WakerEvent> for App {
         // The (transparent) titlebar material must follow the app theme, or a
         // light app under a dark system keeps a dark band across the top.
         sync_window_theme(&state.window, settings.theme);
-        #[cfg(target_os = "macos")]
-        set_dock_icon(settings.app_icon, resolved_dark);
 
         let (initial_tab, initial_url) = {
             let browser = state.browser.borrow();
@@ -620,7 +616,6 @@ impl ApplicationHandler<WakerEvent> for App {
             settings.appearance.translucency,
         );
         let applied_appearance = settings.appearance;
-        let applied_icon = (settings.app_icon, resolved_dark);
         // Whatever was cached last time, decoded on a thread so a launch never
         // waits on a photograph.
         let mut wallpaper = wallpaper::Wallpaper::default();
@@ -652,7 +647,6 @@ impl ApplicationHandler<WakerEvent> for App {
             applied_appearance,
             shot: shot::Shot::from_env(),
             space: 0,
-            applied_icon,
             theme_fade: None,
             downloads: downloads::DownloadManager::default(),
             wallpaper,
@@ -1567,15 +1561,11 @@ impl RunningApp {
                     ui::Corners::Masked
                 },
                 ui::CardFrame {
-                    top_glow: settings.top_glow,
                     backdrop_tint: ui::window_chrome_tint(&palette, window_glass),
                     border: settings.content_border,
                     shadow: settings
                         .content_shadow
                         .then_some(settings.content_shadow_amount),
-                    halo: settings
-                        .content_halo
-                        .then_some((settings.content_halo_tint, settings.content_halo_amount)),
                 },
             );
 
@@ -2535,8 +2525,6 @@ impl RunningApp {
                     theme::apply(&self.egui_glow.egui_ctx, &palette);
                     self.state.window.request_redraw();
                 }
-                #[cfg(target_os = "macos")]
-                self.sync_dock_icon(self.target_palette().dark);
                 state.window.request_redraw();
             },
         }
@@ -2646,15 +2634,6 @@ impl RunningApp {
         self.settings.appearance.motion > 0.0
     }
 
-    #[cfg(target_os = "macos")]
-    fn sync_dock_icon(&mut self, dark: bool) {
-        let icon = self.settings.app_icon;
-        if self.applied_icon != (icon, dark) {
-            self.applied_icon = (icon, dark);
-            set_dock_icon(icon, dark);
-        }
-    }
-
     /// Re-style the chrome and tell every webview the new prefers-color-scheme.
     fn apply_theme(&mut self) {
         theme::apply(&self.egui_glow.egui_ctx, &self.palette());
@@ -2669,8 +2648,6 @@ impl RunningApp {
         let target = self.target_palette();
         self.state.set_engine_theme(target.dark);
         sync_window_theme(&self.state.window, self.settings.theme);
-        #[cfg(target_os = "macos")]
-        self.sync_dock_icon(target.dark);
         // Every material here is appearance-adaptive on its own; what differs
         // is how much of the desktop survives it. `UnderWindowBackground` is
         // the clearest of them — it is meant for what shows *through* a window
@@ -2730,99 +2707,6 @@ impl RunningApp {
                 self.favicons.insert(tab.id, texture);
             }
         }
-    }
-}
-
-/// Apply the alternate Dock icon, or use the bundle's default icon.
-#[cfg(target_os = "macos")]
-fn set_dock_icon(icon: settings::AppIcon, dark: bool) {
-    use objc2::AnyThread;
-    use objc2_app_kit::{NSApplication, NSImage};
-    use objc2_foundation::NSData;
-
-    let Some(mtm) = objc2::MainThreadMarker::new() else {
-        return;
-    };
-    let app = NSApplication::sharedApplication(mtm);
-    let png = match icon {
-        settings::AppIcon::Default => {
-            let bundled_light = !dark
-                && std::env::current_exe()
-                    .is_ok_and(|path| path.with_file_name("../Resources/Zervo.icns").is_file());
-            if bundled_light {
-                // SAFETY: the main-thread marker keeps AppKit access on its thread.
-                unsafe { app.setApplicationIconImage(None) };
-                return;
-            }
-            let artwork = if dark {
-                include_bytes!("../assets/icon/zervo-macos-dark-512.png").as_slice()
-            } else {
-                include_bytes!("../assets/icon/zervo-512.png").as_slice()
-            };
-            let Some(png) = dock_icon_png(artwork) else {
-                return;
-            };
-            png
-        },
-        settings::AppIcon::Transparent => {
-            let svg = include_str!("../assets/icon/zervo-icon-transparent.svg");
-            let options = resvg::usvg::Options::default();
-            let Ok(tree) = resvg::usvg::Tree::from_str(svg, &options) else {
-                return;
-            };
-            let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(512, 512) else {
-                return;
-            };
-            resvg::render(
-                &tree,
-                resvg::tiny_skia::Transform::from_scale(0.5, 0.5),
-                &mut pixmap.as_mut(),
-            );
-            let Ok(png) = pixmap.encode_png() else {
-                return;
-            };
-            png
-        },
-    };
-    let data = NSData::with_bytes(&png);
-    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
-        return;
-    };
-    // SAFETY: the application and image are used on AppKit's main thread.
-    unsafe {
-        app.setApplicationIconImage(Some(&image));
-    }
-}
-
-/// Custom Dock images bypass the inset the system applies to bundle icons.
-#[cfg(target_os = "macos")]
-fn dock_icon_png(artwork: &[u8]) -> Option<Vec<u8>> {
-    const SIZE: u32 = 512;
-    const INSET: u32 = 50;
-    const TILE: u32 = SIZE - 2 * INSET;
-    let tile = image::load_from_memory(artwork)
-        .ok()?
-        .resize_exact(TILE, TILE, image::imageops::FilterType::Lanczos3)
-        .into_rgba8();
-    let mut canvas = image::RgbaImage::new(SIZE, SIZE);
-    image::imageops::replace(&mut canvas, &tile, i64::from(INSET), i64::from(INSET));
-    let mut png = std::io::Cursor::new(Vec::new());
-    canvas.write_to(&mut png, image::ImageFormat::Png).ok()?;
-    Some(png.into_inner())
-}
-
-#[cfg(all(test, target_os = "macos"))]
-#[test]
-fn custom_dock_tiles_match_the_bundle_icon_inset() {
-    for artwork in [
-        include_bytes!("../assets/icon/zervo-512.png").as_slice(),
-        include_bytes!("../assets/icon/zervo-macos-dark-512.png").as_slice(),
-    ] {
-        let png = dock_icon_png(artwork).unwrap();
-        let pixels = image::load_from_memory(&png).unwrap().into_rgba8();
-        assert_eq!(pixels.dimensions(), (512, 512));
-        let opaque = (0..512).filter(|&x| pixels.get_pixel(x, 256).0[3] > 127);
-        assert!(opaque.eq(50..462));
     }
 }
 

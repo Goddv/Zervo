@@ -1,5 +1,4 @@
-//! The eight procedural backdrops the new tab page can sit on, and the mark
-//! drawn in the middle of an empty one.
+//! The procedural backdrops for the new tab page.
 //!
 //! Pure painting: a painter, a rect, a palette and a clock. Nothing here knows
 //! what a tab is.
@@ -30,35 +29,6 @@ pub(crate) fn soft_blob(painter: &egui::Painter, center: egui::Pos2, radius: f32
         mesh.add_triangle(0, 1 + segment, 2 + segment);
     }
     painter.add(Shape::mesh(mesh));
-}
-
-/// The Zervo "Z" mark, drawn as a stroked path (same geometry as the app
-/// icon: straight bars, curved diagonal).
-pub fn draw_zervo_mark(painter: &egui::Painter, center: egui::Pos2, height: f32, color: Color32) {
-    let scale = height / 364.0;
-    let map = |x: f32, y: f32| {
-        pos2(
-            center.x + (x - 512.0) * scale,
-            center.y + (y - 512.0) * scale,
-        )
-    };
-    let mut points = vec![map(318.0, 330.0), map(706.0, 330.0)];
-    // Cubic bezier for the diagonal: (706,330) -> (640,432),(462,570) -> (318,694).
-    for step in 1..=16 {
-        let t = step as f32 / 16.0;
-        let inv = 1.0 - t;
-        let x = inv * inv * inv * 706.0
-            + 3.0 * inv * inv * t * 640.0
-            + 3.0 * inv * t * t * 462.0
-            + t * t * t * 318.0;
-        let y = inv * inv * inv * 330.0
-            + 3.0 * inv * inv * t * 432.0
-            + 3.0 * inv * t * t * 570.0
-            + t * t * t * 694.0;
-        points.push(map(x, y));
-    }
-    points.push(map(706.0, 694.0));
-    painter.add(Shape::line(points, Stroke::new(height * 0.27, color)));
 }
 
 /// Deterministic pseudo-random in 0..1 from an integer seed — used to place
