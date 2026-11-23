@@ -52,7 +52,12 @@ pub(crate) fn draw_settings_page(
     if wide {
         let nav = Rect::from_min_size(page.min, vec2(166.0, page.height()));
         let mut nav_area = area.new_child(egui::UiBuilder::new().max_rect(nav));
-        nav_area.label(RichText::new(tr("common-settings")).size(21.0).strong());
+        nav_area.label(
+            RichText::new(tr("common-settings"))
+                .size(21.0)
+                .strong()
+                .color(palette.text),
+        );
         nav_area.add_space(12.0);
         for section in SettingsSection::ALL {
             if settings_nav(
@@ -68,7 +73,12 @@ pub(crate) fn draw_settings_page(
         }
         pane.min.x = nav.right() + 24.0;
     } else {
-        area.label(RichText::new(tr("common-settings")).size(20.0).strong());
+        area.label(
+            RichText::new(tr("common-settings"))
+                .size(20.0)
+                .strong()
+                .color(palette.text),
+        );
         area.add_space(5.0);
         area.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(3.0, 4.0);
@@ -121,7 +131,8 @@ pub(crate) fn draw_settings_page(
     let search = entry.add(
         TextEdit::singleline(query)
             .id_salt("settings_search")
-            .hint_text(tr("settings-find"))
+            .text_color(palette.text)
+            .hint_text(RichText::new(tr("settings-find")).color(palette.text_muted))
             .desired_width((entry.available_width() - 34.0).max(1.0))
             .frame(Frame::NONE),
     );
@@ -824,6 +835,18 @@ pub(crate) fn settings_appearance(
             palette,
             tr("settings-auto-follows-the-system-appearance-and-day"),
         );
+    });
+
+    #[cfg(target_os = "macos")]
+    settings_section(ui, palette, tr("common-liquid-glass"), |ui| {
+        note(ui, palette, tr("settings-liquid-glass-native"));
+        ui.add_space(6.0);
+        if ui
+            .button(RichText::new(tr("settings-open-macos-appearance")).color(palette.text))
+            .clicked()
+        {
+            actions.push(UiAction::OpenSystemAppearance);
+        }
     });
 
     settings_section(ui, palette, tr("settings-accent-colour"), |ui| {

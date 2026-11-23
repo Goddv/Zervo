@@ -5647,6 +5647,7 @@ dependencies = [
  "libc",
  "objc2 0.6.5",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -11966,6 +11967,7 @@ dependencies = [
 name = "zervo"
 version = "0.5.0"
 dependencies = [
+ "cgl",
  "dirs",
  "egui",
  "egui-winit",
@@ -11979,6 +11981,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "objc2-io-surface",
  "objc2-quartz-core 0.3.2",
  "resvg 0.50.0",
  "rustls",

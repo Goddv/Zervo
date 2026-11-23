@@ -92,10 +92,8 @@ pub(crate) fn glow_strip_top(palette: &Palette, strength: f32) -> Color32 {
 ///
 /// Not `chrome_color_at` multiplied by the opacity afterwards. That mixes the
 /// gradient at full alpha and multiplies the result; the fill multiplies its
-/// two ends first and mixes those — and it clamps the opacity to a fifth,
-/// which anything reading the raw setting does not. Between them that came to
-/// three units out of 255, which is precisely what the corner masks were still
-/// showing against the chrome beside them.
+/// two ends first and mixes those. Both take the resolved backing opacity so
+/// a cut corner and the window surround show the same amount of material.
 pub(crate) fn chrome_fill_at(
     root: &Ui,
     y: f32,
@@ -103,7 +101,6 @@ pub(crate) fn chrome_fill_at(
     top_glow: f32,
     opacity: f32,
 ) -> Color32 {
-    let opacity = opacity.clamp(0.2, 1.0);
     let bg = palette.bg.gamma_multiply(opacity);
     if top_glow <= 0.0 {
         return bg;
@@ -133,6 +130,16 @@ pub(crate) fn chrome_color_at(root: &Ui, y: f32, palette: &Palette, top_glow: f3
     let top = root.ctx().content_rect().top();
     let t = glow_falloff((y - top) / CHROME_GRADIENT_HEIGHT);
     theme::mix(glow_strip_top(palette, top_glow), palette.bg, t)
+}
+
+/// Tint left over the window's native glass. Keep only a small workspace
+/// wash so the system's material is visible along the inset.
+pub fn window_chrome_tint(palette: &Palette, window_glass: bool) -> f32 {
+    if window_glass {
+        0.12
+    } else {
+        palette.chrome_tint().clamp(0.2, 1.0)
+    }
 }
 
 /// Flat chrome fill plus the window-wide top gradient, painted under
@@ -260,7 +267,6 @@ pub(crate) fn paint_chrome_fill(
     top_glow: f32,
     opacity: f32,
 ) {
-    let opacity = opacity.clamp(0.2, 1.0);
     let bg = palette.bg.gamma_multiply(opacity);
     if top_glow <= 0.0 {
         painter.rect_filled(rect, CornerRadius::ZERO, bg);
@@ -411,6 +417,8 @@ pub enum Corners {
 pub struct CardFrame {
     /// Strength of the lit band across the top of the window.
     pub top_glow: f32,
+    /// The same backing tint as the surround, for the cut webview corners.
+    pub backdrop_tint: f32,
     pub border: bool,
     /// Spread, when the card casts a shadow.
     pub shadow: Option<f32>,
@@ -427,6 +435,7 @@ pub fn finish_content_frame(
 ) {
     let CardFrame {
         top_glow,
+        backdrop_tint,
         border,
         shadow,
         halo,
@@ -499,7 +508,6 @@ pub fn finish_content_frame(
     // with it, so it covers the top as well as the bottom. Checked by cutting
     // the top corners and painting nothing back: the notch shows the frosted
     // backdrop, same as below.
-    let tint = palette.chrome_tint();
     let chrome_at =
         |y: f32, opacity: f32, glow: f32| chrome_fill_at(root, y, palette, glow, opacity);
 
@@ -560,7 +568,7 @@ pub fn finish_content_frame(
             // glow came back nearly black. That is fixed, so the mask can carry
             // the same lit band the chrome beside it carries.
             let opacity = match corners_style {
-                Corners::Cut => tint,
+                Corners::Cut => backdrop_tint,
                 _ => 1.0,
             };
             let glow = top_glow;

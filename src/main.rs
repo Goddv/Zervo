@@ -359,7 +359,10 @@ impl ApplicationHandler<WakerEvent> for App {
 
         // Frosted-glass backdrop behind the (translucent) chrome.
         #[cfg(target_os = "macos")]
-        let vibrancy = vibrancy::install(&window, objc2_app_kit::NSVisualEffectMaterial::Sidebar);
+        let vibrancy = vibrancy::install(
+            &window,
+            objc2_app_kit::NSVisualEffectMaterial::UnderWindowBackground,
+        );
 
         // Only true where the window was created transparent *and* a backdrop
         // was actually installed behind it. If the effect view failed to go in,
@@ -1277,7 +1280,7 @@ impl RunningApp {
 
         let palette = self.palette();
         #[cfg(target_os = "macos")]
-        let (palette, native_available) = {
+        let (palette, native_available, window_glass) = {
             let (reduce_transparency, reduce_motion) = vibrancy::accessibility_preferences();
             let mut palette = if reduce_transparency {
                 palette.with_translucency(theme::Translucency::Solid)
@@ -1287,10 +1290,16 @@ impl RunningApp {
             if reduce_motion {
                 palette.material.animation = 0.0;
             }
-            (palette, self._vibrancy.is_some() && !reduce_transparency)
+            let native_available = self._vibrancy.is_some() && !reduce_transparency;
+            let window_glass = palette.translucency == theme::Translucency::LiquidGlass
+                && self
+                    ._vibrancy
+                    .as_ref()
+                    .is_some_and(vibrancy::Vibrancy::has_window_glass);
+            (palette, native_available, window_glass)
         };
         #[cfg(not(target_os = "macos"))]
-        let native_available = false;
+        let (native_available, window_glass) = (false, false);
         #[cfg(target_os = "macos")]
         let window_controls =
             vibrancy::window_controls(&state.window, self.egui_glow.egui_ctx.zoom_factor());
@@ -1334,9 +1343,9 @@ impl RunningApp {
 
         // Native overlays sample the live webpage directly. The software
         // copy still supplies portable overlays and the new-tab materials.
-        let frosting = palette.translucency.is_translucent()
-            && (matches!(showing, Some((_, TabKind::NewTab)))
-                || (!native_overlays && matches!(showing, Some((_, TabKind::Web)))));
+        let frosting = !native_overlays
+            && palette.translucency.is_translucent()
+            && matches!(showing, Some((_, TabKind::NewTab | TabKind::Web)));
         let page_changed = self.frosted_for != showing;
         self.frosted_for = showing;
         if page_changed || !frosting {
@@ -1435,6 +1444,7 @@ impl RunningApp {
                 device_pixels_per_css_pixel,
                 native_glass: ui::NativeGlass {
                     vibrancy_available: native_available,
+                    window_backdrop: window_glass,
                     ..Default::default()
                 },
                 favicons: &self.favicons,
@@ -1558,6 +1568,7 @@ impl RunningApp {
                 },
                 ui::CardFrame {
                     top_glow: settings.top_glow,
+                    backdrop_tint: ui::window_chrome_tint(&palette, window_glass),
                     border: settings.content_border,
                     shadow: settings
                         .content_shadow
@@ -1804,8 +1815,11 @@ impl RunningApp {
             unsafe { gl.flush() };
             CATransaction::begin();
             CATransaction::setDisableActions(true);
+            if let Some(backdrop) = &self._vibrancy {
+                backdrop.show_window_glass(window_glass);
+            }
             if let Some(overlays) = &mut self.glass_overlays {
-                overlays.present(&self.egui_glow.egui_ctx, palette.dark);
+                overlays.present(&self.egui_glow.egui_ctx);
             }
         }
         state.window.pre_present_notify();
@@ -1828,6 +1842,13 @@ impl RunningApp {
     }
 
     fn request_animation_frame(&mut self) {
+        // Surfman already waits for the display's next swap interval when
+        // presenting on macOS. A second display-link wait here halves the
+        // number of frames an animation can present.
+        if cfg!(target_os = "macos") {
+            self.state.window.request_redraw();
+            return;
+        }
         if self.animation_pending {
             return;
         }
@@ -2308,6 +2329,8 @@ impl RunningApp {
                 state.browser.borrow_mut().settings_section = crate::state::SettingsSection::Layout;
                 self.apply_action(UiAction::OpenSettings);
             },
+            #[cfg(target_os = "macos")]
+            UiAction::OpenSystemAppearance => vibrancy::open_appearance_settings(),
             UiAction::OpenSettings => {
                 let tab_id = state.browser.borrow_mut().find_or_create_settings_tab();
                 state.activate_tab(tab_id);

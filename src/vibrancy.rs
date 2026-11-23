@@ -22,22 +22,36 @@ use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass};
 use objc2_app_kit::{
     NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSGlassEffectView,
-    NSTitlebarSeparatorStyle, NSToolbar, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowButton,
-    NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle, NSWorkspace,
+    NSGlassEffectViewStyle, NSTitlebarSeparatorStyle, NSToolbar, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowButton, NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle,
+    NSWorkspace,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSURL, ns_string};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// Keeps the backdrop alive and lets you retune it at runtime.
 pub struct Vibrancy {
     view: Retained<NSVisualEffectView>,
+    glass: Option<Retained<NSGlassEffectView>>,
     content: Retained<NSView>,
     sidebar: Retained<NSVisualEffectView>,
     address: Retained<NSVisualEffectView>,
 }
 
 impl Vibrancy {
+    pub fn has_window_glass(&self) -> bool {
+        self.glass.is_some()
+    }
+
+    pub fn show_window_glass(&self, visible: bool) {
+        if let Some(glass) = self.glass.as_ref()
+            && glass.isHidden() == visible
+        {
+            glass.setHidden(!visible);
+        }
+    }
+
     pub fn update_sidebar(&self, rect: Option<egui::Rect>, zoom: f32) {
         update_surface(&self.content, &self.sidebar, rect, zoom);
     }
@@ -246,6 +260,23 @@ pub fn install(
         Some(&content),
     );
 
+    let glass = new_glass_view();
+    if let Some(glass) = &glass {
+        // The window clips the outer silhouette. One continuous effect stays
+        // under the page and shows through the inset and rounded page corners.
+        glass.setFrame(frame_view.bounds());
+        glass.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        glass.setHidden(true);
+        frame_view.addSubview_positioned_relativeTo(
+            glass,
+            NSWindowOrderingMode::Below,
+            Some(&content),
+        );
+    }
+
     let sidebar = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), NSRect::ZERO);
     sidebar.setMaterial(NSVisualEffectMaterial::Sidebar);
     sidebar.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
@@ -266,6 +297,7 @@ pub fn install(
 
     Some(Vibrancy {
         view: effect,
+        glass,
         content,
         sidebar,
         address,
@@ -299,7 +331,18 @@ pub(crate) fn new_glass_view() -> Option<Retained<NSGlassEffectView>> {
     let _mtm = MainThreadMarker::new()?;
     let class = glass_class()?;
     // SAFETY: this is AppKit's public glass class, on the main thread.
-    unsafe { msg_send![class, new] }
+    let glass: Retained<NSGlassEffectView> = unsafe { msg_send![class, new] };
+    // Leave tint to AppKit so the glass responds to the system appearance.
+    glass.setStyle(NSGlassEffectViewStyle::Regular);
+    Some(glass)
+}
+
+pub(crate) fn open_appearance_settings() {
+    if let Some(url) = NSURL::URLWithString(ns_string!(
+        "x-apple.systempreferences:com.apple.Appearance-Settings.extension"
+    )) {
+        NSWorkspace::sharedWorkspace().openURL(&url);
+    }
 }
 
 pub fn accessibility_preferences() -> (bool, bool) {

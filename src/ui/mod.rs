@@ -40,7 +40,9 @@ use text::*;
 
 pub use backdrops::{draw_zervo_mark, paint_newtab_background};
 pub use command::{CommandBar, CommandMode};
-pub use frame::{CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient};
+pub use frame::{
+    CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient, window_chrome_tint,
+};
 pub use text::{
     anchored_popup, clamp_into, display_name, ellipsize, host_of, initial, normalize_url,
 };
@@ -80,6 +82,8 @@ pub enum UiAction {
     RemoveWorkspace(usize),
     SelectWorkspace(usize),
     OpenSettings,
+    #[cfg(target_os = "macos")]
+    OpenSystemAppearance,
     CustomizeChrome,
     /// Dismiss the notification with this id.
     DismissNotification(u64),
@@ -147,6 +151,7 @@ pub enum UiAction {
 #[derive(Default)]
 pub struct NativeGlass {
     pub vibrancy_available: bool,
+    pub window_backdrop: bool,
     pub sidebar: Option<Rect>,
     pub address: Option<(Rect, f32)>,
     pub sidebar_captured: bool,
@@ -324,12 +329,13 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         && chrome.palette.appearance.seam.chrome_floats()
         && matches!(active_kind, Some(TabKind::NewTab));
     let native_sidebar = chrome.uses_native_sidebar() && present >= 1.0;
-    if !native_sidebar {
+    let chrome_tint = window_chrome_tint(&chrome.palette, chrome.native_glass.window_backdrop);
+    if !native_sidebar || chrome.native_glass.window_backdrop {
         paint_chrome_base(
             root,
             &chrome.palette,
             chrome.settings.top_glow,
-            chrome.palette.chrome_tint(),
+            chrome_tint,
             None,
         );
     }
@@ -342,7 +348,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     };
 
     let outer = root.available_rect_before_wrap();
-    if native_sidebar {
+    if native_sidebar && !chrome.native_glass.window_backdrop {
         if chrome.native_glass.sidebar_captured
             && let Some(sidebar) = chrome.native_glass.sidebar
         {
@@ -361,7 +367,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             root,
             &chrome.palette,
             chrome.settings.top_glow,
-            chrome.palette.chrome_tint(),
+            chrome_tint,
             chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
         );
     }
@@ -2315,7 +2321,7 @@ fn draw_sidebar_peek(
             ctx.content_rect().top(),
             &chrome.palette,
             chrome.settings.top_glow,
-            chrome.palette.chrome_tint(),
+            chrome.palette.chrome_tint().clamp(0.2, 1.0),
         );
         if chrome.palette.translucency.is_translucent() {
             glass::paint(

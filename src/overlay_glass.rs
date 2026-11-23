@@ -31,25 +31,6 @@ impl Role {
             Self::Widget => 18,
         }
     }
-
-    #[cfg(target_os = "macos")]
-    pub(crate) fn tint(self, dark: bool) -> objc2::rc::Retained<objc2_app_kit::NSColor> {
-        let (white, alpha) = match (dark, self) {
-            (true, Self::Menu | Self::Status) => (0.045, 0.92),
-            (true, Self::Dialog) => (0.055, 0.88),
-            (true, Self::Panel) => (0.065, 0.80),
-            (true, Self::Sidebar) => (0.065, 0.46),
-            (true, Self::Field | Self::Tab) => (0.12, 0.62),
-            (true, Self::Widget) => (0.065, 0.58),
-            (false, Self::Menu | Self::Status) => (0.90, 0.72),
-            (false, Self::Dialog) => (0.89, 0.64),
-            (false, Self::Panel) => (0.88, 0.56),
-            (false, Self::Sidebar) => (0.92, 0.36),
-            (false, Self::Field | Self::Tab) => (0.95, 0.48),
-            (false, Self::Widget) => (0.95, 0.42),
-        };
-        objc2_app_kit::NSColor::colorWithWhite_alpha(white, alpha)
-    }
 }
 
 pub(crate) struct Surface {
@@ -246,14 +227,18 @@ mod macos {
     use egui_glow::CallbackFn;
     use glow::HasContext as _;
     use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
     use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, define_class, runtime::AnyClass};
     use objc2_app_kit::{
-        NSBitmapImageRep, NSDeviceRGBColorSpace, NSGlassEffectContainerView, NSGlassEffectView,
-        NSGlassEffectViewStyle, NSImage, NSImageScaling, NSImageView, NSView,
-        NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
-        NSVisualEffectView, NSWindowOrderingMode,
+        NSGlassEffectContainerView, NSGlassEffectView, NSView, NSVisualEffectBlendingMode,
+        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
     };
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use objc2_foundation::{NSDictionary, NSNumber, NSPoint, NSRect, NSSize};
+    use objc2_io_surface::{
+        IOSurface, IOSurfacePropertyKeyBytesPerElement, IOSurfacePropertyKeyHeight,
+        IOSurfacePropertyKeyPixelFormat, IOSurfacePropertyKeyWidth,
+    };
+    use objc2_quartz_core::CALayer;
     use winit::raw_window_handle::HasWindowHandle;
 
     define_class!(
@@ -307,9 +292,7 @@ mod macos {
                 frost.setWantsLayer(true);
                 Some(Self::Frost(frost))
             } else {
-                let glass = crate::vibrancy::new_glass_view()?;
-                glass.setStyle(NSGlassEffectViewStyle::Regular);
-                Some(Self::Glass(glass))
+                crate::vibrancy::new_glass_view().map(Self::Glass)
             }
         }
 
@@ -342,25 +325,15 @@ mod macos {
     struct Material {
         effect: Effect,
         role: Role,
-        dark: bool,
     }
 
     impl Material {
-        fn new(role: Role, dark: bool, mtm: MainThreadMarker) -> Option<Self> {
+        fn new(role: Role, mtm: MainThreadMarker) -> Option<Self> {
             let effect = Effect::new(role, mtm)?;
-            if let Effect::Glass(view) = &effect {
-                view.setTintColor(Some(&role.tint(dark)));
-            }
-            Some(Self { effect, role, dark })
+            Some(Self { effect, role })
         }
 
-        fn place(&mut self, frame: NSRect, dark: bool, zoom: f64) {
-            if dark != self.dark
-                && let Effect::Glass(view) = &self.effect
-            {
-                view.setTintColor(Some(&self.role.tint(dark)));
-            }
-            self.dark = dark;
+        fn place(&mut self, frame: NSRect, zoom: f64) {
             let radius = (f64::from(self.role.radius()) * zoom)
                 .min(frame.size.width.min(frame.size.height) / 2.0);
             self.effect.set_radius(radius);
@@ -374,10 +347,9 @@ mod macos {
         root: Retained<NSView>,
         material: Material,
         content: Retained<NSView>,
-        ink: Retained<NSImageView>,
+        ink: Retained<NSView>,
+        ink_layer: Retained<CALayer>,
         decorations: Vec<Material>,
-        image_size: Option<(NSSize, usize, usize)>,
-        pixels: Vec<u8>,
     }
 
     pub(crate) struct GlassOverlays {
@@ -410,7 +382,7 @@ mod macos {
             let surfaces = NSView::initWithFrame(NSView::alloc(mtm), host.bounds());
             container.setContentView(Some(&surfaces));
             let underlays = NSView::initWithFrame(NSView::alloc(mtm), host.bounds());
-            let sidebar = Layer::new(Role::Sidebar, false, mtm)?;
+            let sidebar = Layer::new(Role::Sidebar, mtm)?;
             sidebar.root.setHidden(true);
             // AppKit can elevate and merge glass in the popup container.
             // Keep the sidebar in its own permanent plane between content
@@ -446,7 +418,7 @@ mod macos {
         }
 
         /// Publish in the same Core Animation transaction as the page surface.
-        pub(crate) fn present(&mut self, ctx: &egui::Context, dark: bool) {
+        pub(crate) fn present(&mut self, ctx: &egui::Context) {
             let renderer = self.renderer.clone();
             let mut renderer = renderer.lock().unwrap();
             if std::mem::take(&mut renderer.repaint) {
@@ -503,7 +475,7 @@ mod macos {
                         .as_ref()
                         .is_none_or(|layer| layer.material.role != frame.role)
                     {
-                        let Some(layer) = Layer::new(frame.role, dark, mtm) else {
+                        let Some(layer) = Layer::new(frame.role, mtm) else {
                             continue;
                         };
                         let parent = if frame.role.is_content() {
@@ -525,12 +497,7 @@ mod macos {
                     }
                     slot.as_mut().unwrap()
                 };
-                if !layer.update(frame, bounds, dark, zoom, mtm) {
-                    renderer.failed_size = Some(renderer.size);
-                    self.host.setHidden(true);
-                    ctx.request_repaint();
-                    return;
-                }
+                layer.update(frame, bounds, zoom, mtm);
             }
             for layer in self.layers.iter().skip(index).flatten() {
                 if !layer.root.isHidden() {
@@ -554,37 +521,31 @@ mod macos {
     }
 
     impl Layer {
-        fn new(role: Role, dark: bool, mtm: MainThreadMarker) -> Option<Self> {
+        fn new(role: Role, mtm: MainThreadMarker) -> Option<Self> {
             let root = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
-            let material = Material::new(role, dark, mtm)?;
+            let material = Material::new(role, mtm)?;
             root.addSubview(material.effect.view());
             let content = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
             match &material.effect {
                 Effect::Glass(view) => view.setContentView(Some(&content)),
                 Effect::Frost(view) => view.addSubview(&content),
             }
-            let ink = NSImageView::initWithFrame(NSImageView::alloc(mtm), NSRect::ZERO);
-            ink.setImageScaling(NSImageScaling::ScaleAxesIndependently);
+            let ink = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
+            let ink_layer = CALayer::new();
+            ink.setLayer(Some(&ink_layer));
+            ink.setWantsLayer(true);
             content.addSubview(&ink);
             Some(Self {
                 root,
                 material,
                 content,
                 ink,
+                ink_layer,
                 decorations: Vec::new(),
-                image_size: None,
-                pixels: Vec::new(),
             })
         }
 
-        fn update(
-            &mut self,
-            frame: &mut Frame,
-            bounds: NSRect,
-            dark: bool,
-            zoom: f64,
-            mtm: MainThreadMarker,
-        ) -> bool {
+        fn update(&mut self, frame: &Frame, bounds: NSRect, zoom: f64, mtm: MainThreadMarker) {
             let rect = frame.material_rect();
             let size = NSSize::new(
                 f64::from(rect.width()) * zoom,
@@ -608,7 +569,7 @@ mod macos {
                 self.root.setFrame(local);
             }
             let material_frame = NSRect::new(NSPoint::ZERO, local.size);
-            self.material.place(material_frame, dark, zoom);
+            self.material.place(material_frame, zoom);
             if self.content.frame() != material_frame {
                 self.content.setFrame(material_frame);
             }
@@ -624,27 +585,26 @@ mod macos {
                     ),
                 )
             };
-            let ink_frame = relative_rect(frame.rect);
+            // The sidebar's backing stays full width as the host clips it
+            // against the window edge. Only its visible strip is painted.
+            let ink_frame = relative_rect(rect);
             if self.ink.frame() != ink_frame {
                 self.ink.setFrame(ink_frame);
             }
-            let image_size = Some((ink_frame.size, frame.width, frame.height));
-            // The compositor tracks the backdrop independently of the ink.
-            if self.image_size != image_size || frame.rgba != self.pixels {
-                let Some(image) = frame.image(ink_frame.size) else {
-                    return false;
-                };
-                self.ink.setImage(Some(&image));
-                self.image_size = image_size;
-                std::mem::swap(&mut frame.rgba, &mut self.pixels);
-            }
+            let contents = frame
+                .ink
+                .contents()
+                .map(|surface| -> &AnyObject { surface });
+            // SAFETY: CALayer retains the IOSurface and composites its GPU
+            // contents directly. The renderer does not reuse it while in use.
+            unsafe { self.ink_layer.setContents(contents) };
             for (index, &(rect, role)) in frame.decorations.iter().enumerate() {
                 if self
                     .decorations
                     .get(index)
                     .is_none_or(|material| material.role != role)
                 {
-                    let Some(material) = Material::new(role, dark, mtm) else {
+                    let Some(material) = Material::new(role, mtm) else {
                         break;
                     };
                     self.content.addSubview_positioned_relativeTo(
@@ -660,7 +620,7 @@ mod macos {
                     }
                 }
                 let material = &mut self.decorations[index];
-                material.place(relative_rect(rect), dark, zoom);
+                material.place(relative_rect(rect), zoom);
                 if material.effect.view().isHidden() {
                     material.effect.view().setHidden(false);
                 }
@@ -674,7 +634,6 @@ mod macos {
             if self.root.isHidden() {
                 self.root.setHidden(false);
             }
-            true
         }
     }
 
@@ -750,9 +709,7 @@ mod macos {
         role: Role,
         surface_width: f32,
         decorations: Vec<(Rect, Role)>,
-        width: usize,
-        height: usize,
-        rgba: Vec<u8>,
+        ink: Ink,
     }
 
     impl Frame {
@@ -763,42 +720,164 @@ mod macos {
                 self.rect
             }
         }
+    }
 
-        fn image(&self, size: NSSize) -> Option<Retained<NSImage>> {
-            let stride = self.width * 4;
-            // SAFETY: a null plane pointer requests AppKit-owned, interleaved
-            // RGBA storage with the declared dimensions and stride.
-            let bitmap = unsafe {
-                NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
-                    NSBitmapImageRep::alloc(),
-                    std::ptr::null_mut(),
-                    self.width as isize,
-                    self.height as isize,
-                    8,
-                    4,
-                    true,
-                    false,
-                    NSDeviceRGBColorSpace,
-                    stride as isize,
-                    32,
+    #[derive(Default)]
+    struct Ink {
+        size: [i32; 2],
+        buffers: Vec<InkBuffer>,
+        current: Option<usize>,
+    }
+
+    impl Ink {
+        fn contents(&self) -> Option<&Retained<IOSurface>> {
+            self.current.map(|index| &self.buffers[index].surface)
+        }
+
+        fn copy(
+            &mut self,
+            gl: &glow::Context,
+            source: glow::Framebuffer,
+            origin: [i32; 2],
+            size: [i32; 2],
+            full_width: i32,
+        ) -> Option<bool> {
+            let [width, height] = size;
+            let buffer_size = [full_width, height];
+            if self.size != buffer_size {
+                self.destroy(gl);
+                self.size = buffer_size;
+            }
+            let index = self.buffers.iter().enumerate().position(|(index, buffer)| {
+                Some(index) != self.current && !buffer.surface.isInUse()
+            });
+            let index = match index {
+                Some(index) => index,
+                None if self.buffers.len() < 3 => {
+                    self.buffers.push(InkBuffer::new(gl, buffer_size)?);
+                    self.buffers.len() - 1
+                },
+                // Keep the last complete image if WindowServer is still
+                // using the other two buffers. The next frame can retry.
+                None => return Some(false),
+            };
+            let [x, y] = origin;
+            let left = full_width - width;
+            // SAFETY: both FBOs are complete and belong to the current GL
+            // context. The destination is sized to the source rectangle.
+            unsafe {
+                gl.disable(glow::SCISSOR_TEST);
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(source));
+                gl.bind_framebuffer(
+                    glow::DRAW_FRAMEBUFFER,
+                    Some(self.buffers[index].framebuffer),
+                );
+                // Core Animation reads IOSurface rows from the top down.
+                gl.blit_framebuffer(
+                    x,
+                    y,
+                    x + width,
+                    y + height,
+                    left,
+                    height,
+                    full_width,
+                    0,
+                    glow::COLOR_BUFFER_BIT,
+                    glow::NEAREST,
+                );
+            }
+            self.current = Some(index);
+            Some(true)
+        }
+
+        fn destroy(&mut self, gl: &glow::Context) {
+            self.current = None;
+            for buffer in self.buffers.drain(..) {
+                // SAFETY: these names belong to the current context. A
+                // published IOSurface remains retained by its CALayer.
+                unsafe {
+                    gl.delete_framebuffer(buffer.framebuffer);
+                    gl.delete_texture(buffer.texture);
+                }
+            }
+        }
+    }
+
+    struct InkBuffer {
+        surface: Retained<IOSurface>,
+        framebuffer: glow::Framebuffer,
+        texture: glow::Texture,
+    }
+
+    impl InkBuffer {
+        fn new(gl: &glow::Context, [width, height]: [i32; 2]) -> Option<Self> {
+            let pixel_format = u32::from_be_bytes(*b"BGRA");
+            let width_value = NSNumber::new_i32(width);
+            let height_value = NSNumber::new_i32(height);
+            let bytes_per_element = NSNumber::new_i32(4);
+            let format = NSNumber::new_u32(pixel_format);
+            // SAFETY: Apple's immutable keys describe a single-plane BGRA surface.
+            let properties = unsafe {
+                NSDictionary::<_, AnyObject>::from_slices(
+                    &[
+                        IOSurfacePropertyKeyWidth,
+                        IOSurfacePropertyKeyHeight,
+                        IOSurfacePropertyKeyBytesPerElement,
+                        IOSurfacePropertyKeyPixelFormat,
+                    ],
+                    &[&width_value, &height_value, &bytes_per_element, &format],
                 )
-            }?;
-            let data = bitmap.bitmapData();
-            if data.is_null() {
-                return None;
+            };
+            let surface = IOSurface::initWithProperties(IOSurface::alloc(), &properties)?;
+            // SAFETY: the main thread has a current CGL context. IOSurface is
+            // toll-free bridged to IOSurfaceRef and retained with the texture.
+            unsafe {
+                let context = cgl::CGLGetCurrentContext();
+                if context.is_null() {
+                    return None;
+                }
+                let framebuffer = gl.create_framebuffer().ok()?;
+                let Ok(texture) = gl.create_texture() else {
+                    gl.delete_framebuffer(framebuffer);
+                    return None;
+                };
+                let previous_texture = gl.get_parameter_texture(glow::TEXTURE_BINDING_RECTANGLE);
+                gl.bind_texture(glow::TEXTURE_RECTANGLE, Some(texture));
+                let result = cgl::CGLTexImageIOSurface2D(
+                    context,
+                    glow::TEXTURE_RECTANGLE,
+                    glow::RGBA,
+                    width,
+                    height,
+                    glow::BGRA,
+                    glow::UNSIGNED_INT_8_8_8_8_REV,
+                    Retained::as_ptr(&surface) as cgl::IOSurfaceRef,
+                    0,
+                );
+                gl.bind_texture(glow::TEXTURE_RECTANGLE, previous_texture);
+                let previous_draw = gl.get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING);
+                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(framebuffer));
+                gl.framebuffer_texture_2d(
+                    glow::DRAW_FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_RECTANGLE,
+                    Some(texture),
+                    0,
+                );
+                let complete = gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER)
+                    == glow::FRAMEBUFFER_COMPLETE;
+                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous_draw);
+                if result != cgl::kCGLNoError || !complete {
+                    gl.delete_framebuffer(framebuffer);
+                    gl.delete_texture(texture);
+                    return None;
+                }
+                Some(Self {
+                    surface,
+                    framebuffer,
+                    texture,
+                })
             }
-            // SAFETY: the bitmap owns stride * height bytes exclusively here.
-            let destination = unsafe { std::slice::from_raw_parts_mut(data, self.rgba.len()) };
-            for (row, flipped) in destination
-                .chunks_exact_mut(stride)
-                .zip(self.rgba.rchunks_exact(stride))
-            {
-                row.copy_from_slice(flipped);
-            }
-            bitmap.setSize(size);
-            let image = NSImage::initWithSize(NSImage::alloc(), size);
-            image.addRepresentation(&bitmap);
-            Some(image)
         }
     }
 
@@ -810,9 +889,7 @@ mod macos {
             role: Role::Sidebar,
             surface_width: 248.0,
             decorations: Vec::new(),
-            width: 24,
-            height: 1600,
-            rgba: Vec::new(),
+            ink: Ink::default(),
         };
         assert_eq!(frame.material_rect().left(), -236.0);
         assert_eq!(frame.material_rect().right(), 12.0);
@@ -940,82 +1017,76 @@ mod macos {
                 return;
             };
             let viewport = info.viewport_in_pixels();
-            let width = viewport.width_px.max(0) as usize;
-            let height = viewport.height_px.max(0) as usize;
+            let size = [viewport.width_px, viewport.height_px];
+            let full_width = if role == Role::Sidebar {
+                ((surface_width * info.pixels_per_point).round() as i32).max(size[0])
+            } else {
+                size[0]
+            };
             let frame = if self.active == self.frames.len() {
                 self.frames.push(Frame {
                     rect: Rect::NOTHING,
                     role,
                     surface_width,
                     decorations: Vec::new(),
-                    width: 0,
-                    height: 0,
-                    rgba: Vec::new(),
+                    ink: Ink::default(),
                 });
                 self.frames.last_mut().unwrap()
             } else {
                 &mut self.frames[self.active]
             };
-            frame.rgba.resize(width * height * 4, 0);
-            // SAFETY: dimensions are clipped to the window and this buffer
-            // has four bytes for each pixel. The app's pack state is restored.
+            let copied = self.target.and_then(|(source, _)| {
+                if size.iter().any(|&dimension| dimension <= 0) {
+                    return Some(false);
+                }
+                frame.ink.copy(
+                    gl,
+                    source,
+                    [viewport.left_px, viewport.from_bottom_px],
+                    size,
+                    full_width,
+                )
+            });
+            // SAFETY: restore the window's framebuffer bindings before
+            // egui resumes painting.
             unsafe {
-                let pack = [
-                    (glow::PACK_ROW_LENGTH, 0),
-                    (glow::PACK_SKIP_ROWS, 0),
-                    (glow::PACK_SKIP_PIXELS, 0),
-                    (glow::PACK_ALIGNMENT, 4),
-                ];
-                let previous = pack.map(|(param, value)| {
-                    let old = gl.get_parameter_i32(param);
-                    gl.pixel_store_i32(param, value);
-                    (param, old)
-                });
-                let previous_pack = gl.get_parameter_buffer(glow::PIXEL_PACK_BUFFER_BINDING);
-                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
-                if !frame.rgba.is_empty() {
-                    gl.read_pixels(
-                        viewport.left_px,
-                        viewport.from_bottom_px,
-                        viewport.width_px,
-                        viewport.height_px,
-                        glow::RGBA,
-                        glow::UNSIGNED_BYTE,
-                        glow::PixelPackData::Slice(Some(&mut frame.rgba)),
-                    );
-                }
-                for (param, value) in previous {
-                    gl.pixel_store_i32(param, value);
-                }
-                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, previous_pack);
                 gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, draw);
                 gl.bind_framebuffer(glow::READ_FRAMEBUFFER, read);
             }
+            let Some(copied) = copied else {
+                self.failed_size = Some(self.size);
+                self.repaint = true;
+                self.decorations.clear();
+                return;
+            };
+            if size.iter().any(|&dimension| dimension <= 0) {
+                self.decorations.clear();
+                return;
+            }
+            self.repaint |= !copied;
             self.decorations.retain_mut(|(rect, _)| {
                 *rect = rect.intersect(info.viewport);
                 rect.is_positive()
             });
             std::mem::swap(&mut frame.decorations, &mut self.decorations);
             self.decorations.clear();
-            if frame.rgba.is_empty() {
-                return;
-            }
             let scale = info.pixels_per_point;
             frame.rect = Rect::from_min_size(
                 egui::pos2(
                     viewport.left_px as f32 / scale,
                     viewport.top_px as f32 / scale,
                 ),
-                egui::vec2(width as f32 / scale, height as f32 / scale),
+                egui::vec2(size[0] as f32 / scale, size[1] as f32 / scale),
             );
-            frame.width = width;
-            frame.height = height;
             frame.role = role;
             frame.surface_width = surface_width;
             self.active += 1;
         }
 
         fn destroy(&mut self, gl: &glow::Context) {
+            for frame in &mut self.frames {
+                frame.ink.destroy(gl);
+            }
             if let Some((fbo, color)) = self.target.take() {
                 // SAFETY: these names belong to the current OpenGL context
                 // and are no longer used by paint callbacks.
