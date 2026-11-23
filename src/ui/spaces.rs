@@ -1,52 +1,304 @@
+use crate::state::{FolderId, Tab, TabFolder};
+
 use super::*;
 
-pub(super) fn switcher(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) {
-    let browser = &chrome.browser;
-    let active = browser.active_workspace;
-    let Some(space) = browser.workspaces.get(active) else {
+fn header(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
+    let active = chrome.browser.active_workspace;
+    let browser = &mut chrome.browser;
+    let palette = &chrome.palette;
+    let (_, row) = ui.allocate_space(vec2(ui.available_width(), 34.0));
+    let dot = pos2(row.left() + 11.0, row.center().y);
+    ui.painter().circle_filled(
+        dot,
+        4.0,
+        theme::workspace_color_from(active, chrome.settings.space_colour),
+    );
+    let mut name_rect = row;
+    name_rect.min.x += 22.0;
+    let editor_id = ui.scope_id().with(("workspace_name", active));
+    if let Some((_, name)) = browser
+        .workspace_edit
+        .as_mut()
+        .filter(|(index, _)| *index == active)
+    {
+        if edit_name(ui, name_rect, editor_id, name, palette, |name| {
+            actions.push(UiAction::RenameWorkspace(active, name));
+        }) {
+            browser.workspace_edit = None;
+        }
         return;
-    };
-    let color = theme::workspace_color_from(active, chrome.settings.space_colour);
-    ui.horizontal(|ui| {
-        let button_width = (ui.available_width() - 60.0).max(1.0);
-        ui.painter().circle_filled(
-            pos2(ui.cursor().left() + 6.0, ui.cursor().top() + 16.0),
-            4.0,
-            color,
-        );
-        ui.add_space(16.0);
-        let selector = egui::ComboBox::from_id_salt("zervo_space_switcher")
-            .selected_text(&space.name)
-            .truncate()
-            .width(button_width)
-            .show_glass(ui, |ui| {
-                ui.label(RichText::new(tr("sidebar-spaces")).strong().size(12.0));
-                for (index, entry) in browser.workspaces.iter().enumerate() {
-                    if ui.selectable_label(index == active, &entry.name).clicked() {
-                        actions.push(UiAction::SelectWorkspace(index));
-                        ui.close();
-                    }
-                }
-                ui.separator();
-                if browser.can_remove_workspace(active)
-                    && ui.button(tr("sidebar-delete-space")).clicked()
-                {
-                    actions.push(UiAction::RemoveWorkspace(active));
-                    ui.close();
-                }
-                if ui.button(tr("chrome-new-workspace")).clicked() {
-                    actions.push(UiAction::NewWorkspace);
-                    ui.close();
-                }
-            });
-        selector.response.on_hover_text(tr("sidebar-spaces"));
-        if icons::icon_button(ui, Icon::Plus, 16.0, &chrome.palette, true)
-            .on_hover_text(tr("chrome-new-workspace"))
-            .clicked()
-        {
+    }
+
+    let space = &browser.workspaces[active];
+    let mut tools = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(row)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    tools.spacing_mut().item_spacing.x = 1.0;
+    let add = button(&mut tools, Icon::Plus, tr("sidebar-create"), palette);
+    crate::overlay_glass::popup(egui::Popup::menu(&add), ui.ctx(), |ui| {
+        if ui.button(tr("sidebar-new-folder")).clicked() {
+            actions.push(UiAction::NewFolder(None));
+            ui.close();
+        }
+        if ui.button(tr("chrome-new-workspace")).clicked() {
             actions.push(UiAction::NewWorkspace);
+            ui.close();
         }
     });
+    if let (Some(next), Some(previous)) = (
+        browser.adjacent_workspace(true),
+        browser.adjacent_workspace(false),
+    ) {
+        if button(
+            &mut tools,
+            Icon::Forward,
+            tr("gesture-next-workspace"),
+            palette,
+        )
+        .clicked()
+        {
+            actions.push(UiAction::SelectWorkspace(next));
+        }
+        if button(
+            &mut tools,
+            Icon::Back,
+            tr("gesture-previous-workspace"),
+            palette,
+        )
+        .clicked()
+        {
+            actions.push(UiAction::SelectWorkspace(previous));
+        }
+    }
+    name_rect.max.x = tools.min_rect().left() - 4.0;
+    let name = &space.name;
+    let response = ui.interact(name_rect, editor_id.with("heading"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let mut label_rect = name_rect;
+    if chrome.settings.show_tab_counts {
+        let count = ui.painter().text(
+            pos2(label_rect.right() - 2.0, label_rect.center().y),
+            Align2::RIGHT_CENTER,
+            space.tabs.len().to_string(),
+            FontId::proportional(11.0),
+            palette.text_muted,
+        );
+        label_rect.max.x = count.left() - 6.0;
+    }
+    crate::overlay_glass::row_label(
+        ui,
+        label_rect,
+        name,
+        FontId::proportional(14.0),
+        palette.text,
+    );
+    if response.has_focus() {
+        icons::paint_focus(ui, palette, name_rect, Tier::Control);
+    }
+    let mut rename = response.double_clicked()
+        || (response.has_focus()
+            && ui.input(|input| input.key_pressed(Key::Enter) || input.key_pressed(Key::Space)));
+    crate::overlay_glass::context_menu(&response, |ui| {
+        if ui.button(tr("common-rename")).clicked() {
+            rename = true;
+            ui.close();
+        }
+        if browser.can_remove_workspace(active) && ui.button(tr("sidebar-delete-space")).clicked() {
+            actions.push(UiAction::RemoveWorkspace(active));
+            ui.close();
+        }
+    });
+    if rename {
+        browser.folder_edit = None;
+        browser.workspace_edit = Some((active, name.clone()));
+    }
+    response.on_hover_text(name);
+}
+
+fn button(ui: &mut Ui, icon: Icon, label: &str, palette: &Palette) -> egui::Response {
+    let response = icons::icon_button(ui, icon, 13.0, palette, true);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    response.on_hover_text(label)
+}
+
+fn edit_name(
+    ui: &mut Ui,
+    row: Rect,
+    id: Id,
+    name: &mut String,
+    palette: &Palette,
+    keep: impl FnOnce(String),
+) -> bool {
+    let mut field = row.shrink2(vec2(0.0, 2.0));
+    field.max.x -= 45.0;
+    let editor = ui.put(
+        field,
+        TextEdit::singleline(name)
+            .id(id)
+            .frame(Frame::NONE)
+            .desired_width(field.width())
+            .hint_text(tr("common-rename"))
+            .font(FontId::proportional(13.0))
+            .text_color(palette.text),
+    );
+    if !editor.has_focus() && !editor.lost_focus() {
+        editor.request_focus();
+        if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(name.chars().count()),
+                )));
+            state.store(ui.ctx(), id);
+        }
+    }
+
+    let controls_area = Rect::from_min_max(pos2(field.right(), row.top()), row.max);
+    let mut controls = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(controls_area)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    controls.spacing_mut().item_spacing.x = 0.0;
+    let cancel = button(&mut controls, Icon::Close, tr("common-cancel"), palette).clicked();
+    let save = button(&mut controls, Icon::Check, tr("common-save"), palette).clicked();
+    if cancel || ui.input(|input| input.key_pressed(Key::Escape)) {
+        return true;
+    }
+    if save || ui.input(|input| input.key_pressed(Key::Enter)) {
+        keep(std::mem::take(name));
+        return true;
+    }
+    false
+}
+
+enum FolderEdit {
+    Unchanged,
+    Rename,
+    Done,
+}
+
+fn folder_row(
+    ui: &mut Ui,
+    folder: &TabFolder,
+    editing: Option<&mut (FolderId, String)>,
+    selected_inside: bool,
+    drag_at: Option<egui::Pos2>,
+    palette: &Palette,
+    actions: &mut Vec<UiAction>,
+) -> (bool, FolderEdit) {
+    let height = 32.0;
+    let (_, row) = ui.allocate_space(vec2(ui.available_width(), height));
+    let id = ui.scope_id().with(("tab_folder", folder.id));
+    let dragged_over = drag_at.is_some_and(|point| row.intersect(ui.clip_rect()).contains(point));
+    let editing = editing.filter(|(id, _)| *id == folder.id);
+    let response = ui.interact(
+        row,
+        id,
+        if editing.is_some() {
+            Sense::hover()
+        } else {
+            Sense::click()
+        },
+    );
+    if dragged_over || response.hovered() || selected_inside {
+        ui.painter()
+            .rect_filled(row, palette.corner(Tier::Row), palette.surface_hover);
+    }
+    if dragged_over {
+        ui.painter().rect_stroke(
+            row,
+            palette.corner(Tier::Row),
+            Stroke::new(1.0_f32, palette.accent),
+            StrokeKind::Inside,
+        );
+    }
+    icons::draw_icon(
+        ui.painter(),
+        Rect::from_center_size(pos2(row.left() + 18.0, row.center().y), vec2(17.0, 17.0)),
+        if folder.collapsed {
+            Icon::Folder
+        } else {
+            Icon::FolderOpen
+        },
+        palette.accent,
+    );
+    let mut text_rect = row;
+    text_rect.min.x += 33.0;
+    if let Some((_, draft)) = editing {
+        let done = edit_name(ui, text_rect, id.with("name"), draft, palette, |name| {
+            actions.push(UiAction::RenameFolder(folder.id, name));
+        });
+        return (
+            dragged_over,
+            if done {
+                FolderEdit::Done
+            } else {
+                FolderEdit::Unchanged
+            },
+        );
+    }
+
+    text_rect.max.x -= 27.0;
+    crate::overlay_glass::row_label(
+        ui,
+        text_rect,
+        &folder.name,
+        FontId::proportional(13.0),
+        palette.text,
+    );
+    icons::draw_icon(
+        ui.painter(),
+        Rect::from_center_size(pos2(row.right() - 16.0, row.center().y), vec2(12.0, 12.0)),
+        if folder.collapsed {
+            Icon::CaretRight
+        } else {
+            Icon::CaretDown
+        },
+        palette.text_muted,
+    );
+    if response.has_focus() {
+        icons::paint_focus(ui, palette, row, Tier::Row);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            crate::l10n::message(
+                if folder.collapsed {
+                    "sidebar-expand-folder"
+                } else {
+                    "sidebar-collapse-folder"
+                },
+                [("name", folder.name.as_str().into())],
+            ),
+        )
+    });
+    let mut rename = false;
+    crate::overlay_glass::context_menu(&response, |ui| {
+        if ui.button(tr("common-rename")).clicked() {
+            rename = true;
+            ui.close();
+        }
+        if ui.button(tr("sidebar-remove-folder")).clicked() {
+            actions.push(UiAction::RemoveFolder(folder.id));
+            ui.close();
+        }
+    });
+    if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+        actions.push(UiAction::ToggleFolder(folder.id));
+    }
+    (
+        dragged_over,
+        if rename {
+            FolderEdit::Rename
+        } else {
+            FolderEdit::Unchanged
+        },
+    )
 }
 
 fn heading(ui: &mut Ui, label: &str, palette: &Palette) {
@@ -164,53 +416,102 @@ pub(super) fn body(
     native_overlay: bool,
 ) {
     let active = chrome.browser.active_workspace;
-    let Some(space) = chrome.browser.workspaces.get(active) else {
-        return;
-    };
     let palette = chrome.palette;
-    let count = space.tabs.len();
-    let mut rename = None;
-    workspace_header(
-        ui,
-        active,
-        chrome.settings.space_colour,
-        &space.name,
-        count,
-        chrome.settings.show_tab_counts,
-        true,
-        chrome
-            .browser
-            .workspace_edit
-            .as_ref()
-            .filter(|(index, _)| *index == active)
-            .map(|(_, name)| name.as_str()),
-        &palette,
-        &mut rename,
-    );
-    if let Some((index, edit)) = rename {
-        match edit {
-            WorkspaceName::Typing(name) => chrome.browser.workspace_edit = Some((index, name)),
-            WorkspaceName::Keep(name) => {
-                chrome.browser.workspace_edit = None;
-                actions.push(UiAction::RenameWorkspace(index, name));
-            },
-            WorkspaceName::Discard => chrome.browser.workspace_edit = None,
-        }
-    }
-
+    header(ui, chrome, actions);
     ui.add_space(7.0);
+    let space = &chrome.browser.workspaces[active];
+    let mut folder_edit = chrome.browser.folder_edit.take();
     let ctx = ui.ctx().clone();
     let drag_id = Id::unique("zervo_tab_drag");
     let dragging = ctx.data(|data| data.get_temp::<TabId>(drag_id));
     let pointer = ctx.input(|input| input.pointer.latest_pos());
+    let drag_at = dragging.and(pointer);
+    let mut folder_tabs = HashMap::<_, Vec<_>>::new();
+    for (index, tab) in space.tabs.iter().enumerate() {
+        if let Some(folder) = tab.folder {
+            folder_tabs.entry(folder).or_default().push((index, tab));
+        }
+    }
+
+    let draw_tab = |ui: &mut Ui, index, tab: &Tab, actions: &mut Vec<UiAction>| {
+        let out = tab_row(
+            ui,
+            TabRowStyle {
+                tab_id: tab.id,
+                title: &tab.title,
+                url: &tab.url,
+                selected: chrome.browser.active_tab == Some(tab.id),
+                loading: tab.loading,
+                pinnable: tab.kind == TabKind::Web,
+                pinned: tab.pinned,
+                workspace: active,
+                folder: tab.folder,
+                spaces: &chrome.browser.workspaces,
+                glyph: internal_glyph(tab.kind),
+                always_show_close: chrome.settings.always_show_tab_close,
+                compact: chrome.settings.compact_sidebar,
+                dragging,
+                native_overlay,
+            },
+            &palette,
+            chrome.favicons.get(&tab.id),
+            actions,
+        );
+        if out.drag_started {
+            ctx.data_mut(|data| data.insert_temp(drag_id, tab.id));
+        }
+        if out.close_clicked {
+            actions.push(UiAction::CloseTab(tab.id));
+        } else if out.clicked {
+            actions.push(UiAction::SelectTab(tab.id));
+        }
+        out.drop_at.map(|drop| match drop {
+            DropAt::Before => TabDrop::Insert(index, tab.folder),
+            DropAt::After => TabDrop::Insert(index + 1, tab.folder),
+            DropAt::Onto => TabDrop::GroupWith(tab.id),
+        })
+    };
+
     egui::ScrollArea::vertical()
         .id_salt(("space_tabs", active))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
             let mut target = None;
-            let mut released = false;
-            let mut ghost = None;
+            for folder in &space.folders {
+                let tabs = folder_tabs.get(&folder.id).map_or(&[][..], Vec::as_slice);
+                let selected_inside = folder.collapsed
+                    && tabs
+                        .iter()
+                        .any(|(_, tab)| chrome.browser.active_tab == Some(tab.id));
+                let (over, edit) = folder_row(
+                    ui,
+                    folder,
+                    folder_edit.as_mut(),
+                    selected_inside,
+                    drag_at,
+                    &palette,
+                    actions,
+                );
+                match edit {
+                    FolderEdit::Unchanged => {},
+                    FolderEdit::Rename => folder_edit = Some((folder.id, folder.name.clone())),
+                    FolderEdit::Done => folder_edit = None,
+                }
+                if over {
+                    target = Some(TabDrop::Insert(space.tabs.len(), Some(folder.id)));
+                }
+                if !folder.collapsed {
+                    for &(index, tab) in tabs {
+                        target = draw_tab(ui, index, tab, actions).or(target);
+                    }
+                }
+            }
+            if !space.folders.is_empty() {
+                ui.add_space(5.0);
+                ui.separator();
+                ui.add_space(5.0);
+            }
             for section in chrome.settings.sidebar_sections {
                 use crate::settings::SidebarSection;
                 if !section.visible(chrome.settings) {
@@ -220,60 +521,21 @@ pub(super) fn body(
                     favourites(ui, chrome, actions);
                     continue;
                 }
-                let tabs = space
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, tab)| match section {
-                        SidebarSection::Pinned => tab.pinned,
-                        SidebarSection::Tabs => !tab.pinned || !chrome.settings.show_pinned_section,
-                        SidebarSection::Favourites => false,
-                    });
+                let tabs = space.tabs.iter().enumerate().filter(|(_, tab)| {
+                    tab.folder.is_none()
+                        && match section {
+                            SidebarSection::Pinned => tab.pinned,
+                            SidebarSection::Tabs => {
+                                !tab.pinned || !chrome.settings.show_pinned_section
+                            },
+                            SidebarSection::Favourites => false,
+                        }
+                });
                 if tabs.clone().next().is_some() {
                     heading(ui, section.label(), &palette);
                 }
                 for (index, tab) in tabs {
-                    if dragging == Some(tab.id) {
-                        ghost = Some(tab);
-                    }
-                    let out = tab_row(
-                        ui,
-                        TabRowStyle {
-                            tab_id: tab.id,
-                            title: &tab.title,
-                            url: &tab.url,
-                            selected: chrome.browser.active_tab == Some(tab.id),
-                            loading: tab.loading,
-                            pinnable: tab.kind == TabKind::Web,
-                            pinned: tab.pinned,
-                            workspace: active,
-                            spaces: &chrome.browser.workspaces,
-                            glyph: internal_glyph(tab.kind),
-                            always_show_close: chrome.settings.always_show_tab_close,
-                            compact: chrome.settings.compact_sidebar,
-                            dragging,
-                            native_overlay,
-                        },
-                        &palette,
-                        chrome.favicons.get(&tab.id),
-                        actions,
-                    );
-                    if out.drag_started {
-                        ctx.data_mut(|data| data.insert_temp(drag_id, tab.id));
-                    }
-                    released |= out.drag_stopped;
-                    if let Some(drop) = out.drop_at {
-                        target = Some(match drop {
-                            DropAt::Before => (index, None),
-                            DropAt::After => (index + 1, None),
-                            DropAt::Onto => (index, Some(tab.id)),
-                        });
-                    }
-                    if out.close_clicked {
-                        actions.push(UiAction::CloseTab(tab.id));
-                    } else if out.clicked {
-                        actions.push(UiAction::SelectTab(tab.id));
-                    }
+                    target = draw_tab(ui, index, tab, actions).or(target);
                 }
                 ui.add_space(8.0);
             }
@@ -321,12 +583,15 @@ pub(super) fn body(
             if new.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                 actions.push(UiAction::OpenCommand(CommandMode::NewTab));
             }
-            if dragging.is_some() && pointer.is_some_and(|pos| row.contains(pos)) {
-                target = Some((space.tabs.len(), None));
+            if drag_at.is_some_and(|pos| row.intersect(ui.clip_rect()).contains(pos)) {
+                target = Some(TabDrop::Insert(space.tabs.len(), None));
             }
-            if let (Some(tab), Some(pos)) = (ghost, pointer) {
+            if let (Some(tab), Some(pos)) = (
+                dragging.and_then(|id| space.tabs.iter().find(|tab| tab.id == id)),
+                pointer,
+            ) {
                 let viewport = ui.clip_rect();
-                if viewport.x_range().contains(pos.x) {
+                if viewport.contains(pos) {
                     if pos.y < viewport.top() + 24.0 {
                         ui.scroll_with_delta(vec2(0.0, 6.0));
                     } else if pos.y > viewport.bottom() - 24.0 {
@@ -345,19 +610,30 @@ pub(super) fn body(
                 );
                 ctx.request_repaint();
             }
-            if dragging.is_some() && (released || !ctx.input(|input| input.pointer.any_down())) {
+            if let Some(tab) = dragging
+                && !ctx.input(|input| input.pointer.primary_down())
+            {
                 ctx.data_mut(|data| data.remove::<TabId>(drag_id));
-            }
-            if released && let (Some(tab), Some((index, onto))) = (dragging, target) {
-                if let Some(onto) = onto.filter(|onto| *onto != tab) {
-                    actions.push(UiAction::GroupTabs { onto, dragged: tab });
-                } else {
-                    actions.push(UiAction::MoveTab {
-                        tab,
-                        workspace: active,
-                        index,
-                    });
+                if ctx.input(|input| input.pointer.primary_released()) {
+                    match target {
+                        Some(TabDrop::GroupWith(onto)) => {
+                            actions.push(UiAction::GroupTabs { onto, dragged: tab });
+                        },
+                        Some(TabDrop::Insert(index, folder)) => actions.push(UiAction::MoveTab {
+                            tab,
+                            workspace: active,
+                            index,
+                            folder,
+                        }),
+                        None => {},
+                    }
                 }
             }
         });
+    chrome.browser.folder_edit = folder_edit;
+}
+
+enum TabDrop {
+    Insert(usize, Option<FolderId>),
+    GroupWith(TabId),
 }

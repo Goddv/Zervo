@@ -204,6 +204,7 @@ struct RunningApp {
     /// The content rect left over after the chrome panels, in egui points.
     content_rect_points: egui::Rect,
     sidebar_overlay: Option<egui::Rect>,
+    sidebar_bounds: Option<egui::Rect>,
     /// The surface the page was painted on last frame, which is what the
     /// blurred copy every glass surface frosts against is a copy of. Not the
     /// card's own rectangle once the chrome floats over the page — see
@@ -255,7 +256,7 @@ struct RunningApp {
     /// is a slider, which would send one per frame of a drag. Restyling egui's
     /// own widgets from it is cheap, so that happens whenever any of it moves.
     applied_appearance: theme::Appearance,
-    applied_icon: settings::AppIcon,
+    applied_icon: (settings::AppIcon, bool),
     /// A theme change in flight: the palette it started from, and when.
     ///
     /// The chrome crosses over rather than snapping, because half of what the
@@ -595,7 +596,7 @@ impl ApplicationHandler<WakerEvent> for App {
         // light app under a dark system keeps a dark band across the top.
         sync_window_theme(&state.window, settings.theme);
         #[cfg(target_os = "macos")]
-        set_dock_icon(settings.app_icon);
+        set_dock_icon(settings.app_icon, resolved_dark);
 
         let (initial_tab, initial_url) = {
             let browser = state.browser.borrow();
@@ -616,7 +617,7 @@ impl ApplicationHandler<WakerEvent> for App {
             settings.appearance.translucency,
         );
         let applied_appearance = settings.appearance;
-        let applied_icon = settings.app_icon;
+        let applied_icon = (settings.app_icon, resolved_dark);
         // Whatever was cached last time, decoded on a thread so a launch never
         // waits on a photograph.
         let mut wallpaper = wallpaper::Wallpaper::default();
@@ -633,6 +634,7 @@ impl ApplicationHandler<WakerEvent> for App {
             hovered_webview: None,
             content_rect_points: egui::Rect::ZERO,
             sidebar_overlay: None,
+            sidebar_bounds: None,
             page_rect_points: egui::Rect::ZERO,
             controls_open: false,
             swipe: gestures::Recognizer::default(),
@@ -843,21 +845,32 @@ impl RunningApp {
             // Fed in points, so the thresholds mean the same thing on a
             // Retina display as anywhere else.
             let scale = self.egui_glow.egui_ctx.pixels_per_point().max(0.1);
-            if let Some(direction) =
+            let region = match cursor_points {
+                _ if self.pointer_owner != PointerOwner::Free
+                    || self.controls_open
+                    || egui::Popup::is_any_open(&self.egui_glow.egui_ctx) =>
+                {
+                    gestures::Region::Blocked
+                },
+                Some(point)
+                    if self
+                        .sidebar_bounds
+                        .is_some_and(|bounds| bounds.contains(point)) =>
+                {
+                    gestures::Region::Sidebar
+                },
+                Some(point) if point.y < self.content_rect_points.top() => {
+                    gestures::Region::TopStrip
+                },
+                Some(_) => gestures::Region::Content,
+                None => gestures::Region::Blocked,
+            };
+            if let Some((direction, origin)) =
                 self.swipe
-                    .feed(step / scale, *phase, std::time::Instant::now())
+                    .feed(step / scale, *phase, std::time::Instant::now(), region)
+                && region != gestures::Region::Blocked
             {
-                // Up and down are scrolling everywhere except the strip above
-                // the page, which has nothing to scroll.
-                let vertical_ok =
-                    cursor_points.is_some_and(|point| point.y < self.content_rect_points.min.y);
-                let horizontal = matches!(
-                    direction,
-                    gestures::Direction::Left | gestures::Direction::Right
-                );
-                if horizontal || vertical_ok {
-                    self.apply_gesture(self.settings.gestures.action(direction));
-                }
+                self.apply_gesture(self.settings.gestures.action(direction, origin));
             }
         }
 
@@ -1578,6 +1591,7 @@ impl RunningApp {
             self.content_rect_points = output.content_rect;
             self.page_rect_points = output.page_rect;
             self.sidebar_overlay = output.sidebar_overlay;
+            self.sidebar_bounds = output.sidebar_bounds;
             self.controls_open = output.controls_open;
             self.settings_open = output.settings_open;
             let scale = self.egui_glow.egui_ctx.pixels_per_point();
@@ -2322,26 +2336,77 @@ impl RunningApp {
                 tab,
                 workspace,
                 index,
+                folder,
             } => {
-                let moved = state.browser.borrow_mut().move_tab(tab, workspace, index);
+                let moved = state
+                    .browser
+                    .borrow_mut()
+                    .move_tab(tab, workspace, index, folder);
                 if moved {
                     self.apply_action(UiAction::SelectTab(tab));
                     state.browser.borrow().save_spaces();
                 }
             },
             UiAction::GroupTabs { onto, dragged } => {
-                {
+                let grouped = {
                     let mut browser = state.browser.borrow_mut();
-                    let name = Self::group_name(&browser, onto, dragged);
-                    let index = browser.group_tabs(name, onto, dragged);
-                    // Opened for editing straight away: the group is the answer
-                    // to a question the user has not been asked yet.
-                    browser.workspace_edit = Some((index, browser.workspaces[index].name.clone()));
+                    let grouped = browser.group_tabs(onto, dragged);
+                    if let Some((folder, true)) = grouped {
+                        browser.workspace_edit = None;
+                        browser.folder_edit =
+                            Some((folder, l10n::text("sidebar-new-folder").to_owned()));
+                    }
+                    grouped.is_some()
+                };
+                if grouped {
+                    self.apply_action(UiAction::SelectTab(dragged));
+                    state.browser.borrow().save_spaces();
+                    state.window.request_redraw();
                 }
-                // See MoveTab — the engine has to be told, not just the model.
-                self.apply_action(ui::UiAction::SelectTab(dragged));
-                state.browser.borrow().save_spaces();
+            },
+            UiAction::NewFolder(tab) => {
+                let mut browser = state.browser.borrow_mut();
+                let workspace = browser.active_workspace;
+                let tabs = &browser.workspaces[workspace].tabs;
+                if tab.is_some_and(|id| tabs.iter().all(|tab| tab.id != id)) {
+                    return;
+                }
+                let index = tabs.len();
+                let name = l10n::text("sidebar-new-folder").to_owned();
+                let folder = browser.add_folder(workspace, name.clone());
+                if let Some(tab) = tab {
+                    browser.move_tab(tab, workspace, index, Some(folder));
+                }
+                browser.workspace_edit = None;
+                browser.folder_edit = Some((folder, name));
+                browser.save_spaces();
                 state.window.request_redraw();
+            },
+            UiAction::RenameFolder(id, name) => {
+                let mut browser = state.browser.borrow_mut();
+                let name = name.trim();
+                if !name.is_empty()
+                    && let Some(folder) = browser.folder_mut(id)
+                {
+                    folder.name = name.to_owned();
+                    browser.save_spaces();
+                    state.window.request_redraw();
+                }
+            },
+            UiAction::ToggleFolder(id) => {
+                let mut browser = state.browser.borrow_mut();
+                if let Some(folder) = browser.folder_mut(id) {
+                    folder.collapsed = !folder.collapsed;
+                    browser.save_spaces();
+                    state.window.request_redraw();
+                }
+            },
+            UiAction::RemoveFolder(id) => {
+                let mut browser = state.browser.borrow_mut();
+                if browser.remove_folder(id) {
+                    browser.save_spaces();
+                    state.window.request_redraw();
+                }
             },
             UiAction::RenameWorkspace(index, name) => {
                 let mut browser = state.browser.borrow_mut();
@@ -2383,13 +2448,6 @@ impl RunningApp {
                     let mut browser = state.browser.borrow_mut();
                     if index >= browser.workspaces.len() {
                         return;
-                    }
-                    if browser
-                        .workspace_edit
-                        .as_ref()
-                        .is_some_and(|(editing, _)| *editing != index)
-                    {
-                        browser.workspace_edit = None;
                     }
                     browser
                         .tab_for_workspace(index)
@@ -2437,10 +2495,7 @@ impl RunningApp {
                     self.state.window.request_redraw();
                 }
                 #[cfg(target_os = "macos")]
-                if self.settings.app_icon != self.applied_icon {
-                    self.applied_icon = self.settings.app_icon;
-                    set_dock_icon(self.settings.app_icon);
-                }
+                self.sync_dock_icon(self.target_palette().dark);
                 state.window.request_redraw();
             },
         }
@@ -2464,16 +2519,10 @@ impl RunningApp {
                 self.apply_action(ui::UiAction::NewTab { workspace });
             },
             Action::NextWorkspace | Action::PreviousWorkspace => {
-                let next = {
-                    let browser = state.browser.borrow();
-                    let count = browser.workspaces.len();
-                    let step = if matches!(action, Action::NextWorkspace) {
-                        1
-                    } else {
-                        count - 1
-                    };
-                    (count > 1).then_some((browser.active_workspace + step) % count)
-                };
+                let next = state
+                    .browser
+                    .borrow()
+                    .adjacent_workspace(matches!(action, Action::NextWorkspace));
                 if let Some(index) = next {
                     self.apply_action(UiAction::SelectWorkspace(index));
                 }
@@ -2491,30 +2540,6 @@ impl RunningApp {
             },
         }
         state.window.request_redraw();
-    }
-
-    /// A provisional name for a group made from two tabs.
-    ///
-    /// Their shared host, when they have one — grouping two pages from the
-    /// same site is the common case and "github.com" is a better guess than
-    /// anything generic. Internal pages are skipped rather than parsed: the
-    /// authority of `zervo://newtab` is `newtab`, so two new tabs would
-    /// otherwise produce a workspace called "newtab". Otherwise the numbered
-    /// default, which at least says what to replace.
-    fn group_name(browser: &state::BrowserState, onto: TabId, dragged: TabId) -> String {
-        let host = |id: TabId| {
-            browser
-                .tab(id)
-                .filter(|tab| tab.url.starts_with("https://") || tab.url.starts_with("http://"))
-                .and_then(|tab| tab.url.split("://").nth(1))
-                .and_then(|rest| rest.split('/').next())
-                .map(|host| host.trim_start_matches("www.").to_owned())
-                .filter(|host| !host.is_empty())
-        };
-        match (host(onto), host(dragged)) {
-            (Some(a), Some(b)) if a == b => a,
-            _ => format!("Workspace {}", browser.workspaces.len() + 1),
-        }
     }
 
     fn palette(&self) -> Palette {
@@ -2580,6 +2605,15 @@ impl RunningApp {
         self.settings.appearance.motion > 0.0
     }
 
+    #[cfg(target_os = "macos")]
+    fn sync_dock_icon(&mut self, dark: bool) {
+        let icon = self.settings.app_icon;
+        if self.applied_icon != (icon, dark) {
+            self.applied_icon = (icon, dark);
+            set_dock_icon(icon, dark);
+        }
+    }
+
     /// Re-style the chrome and tell every webview the new prefers-color-scheme.
     fn apply_theme(&mut self) {
         theme::apply(&self.egui_glow.egui_ctx, &self.palette());
@@ -2594,6 +2628,8 @@ impl RunningApp {
         let target = self.target_palette();
         self.state.set_engine_theme(target.dark);
         sync_window_theme(&self.state.window, self.settings.theme);
+        #[cfg(target_os = "macos")]
+        self.sync_dock_icon(target.dark);
         // Every material here is appearance-adaptive on its own; what differs
         // is how much of the desktop survives it. `UnderWindowBackground` is
         // the clearest of them — it is meant for what shows *through* a window
@@ -2656,48 +2692,56 @@ impl RunningApp {
     }
 }
 
-/// Rasterize the Zervo icon and set it as the Dock icon at runtime. (An .app
-/// bundle will carry the real Icon Composer icon; this covers dev runs.)
+/// Apply the alternate Dock icon, or use the bundle's default icon.
 #[cfg(target_os = "macos")]
-fn set_dock_icon(icon: settings::AppIcon) {
-    // Both variants are composed from the layers of the Icon Composer
-    // document in assets/icon/Zervo.icon, so the Dock icon and the bundled
-    // .icns always come from the same artwork.
-    const DEFAULT_SVG: &str = include_str!("../assets/icon/zervo-icon-default.svg");
-    const TRANSPARENT_SVG: &str = include_str!("../assets/icon/zervo-icon-transparent.svg");
-    let icon_svg = match icon {
-        settings::AppIcon::Default => DEFAULT_SVG,
-        settings::AppIcon::Transparent => TRANSPARENT_SVG,
-    };
-    let options = resvg::usvg::Options::default();
-    let Ok(tree) = resvg::usvg::Tree::from_str(icon_svg, &options) else {
-        return;
-    };
-    let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(512, 512) else {
-        return;
-    };
-    resvg::render(
-        &tree,
-        resvg::tiny_skia::Transform::from_scale(0.5, 0.5),
-        &mut pixmap.as_mut(),
-    );
-    let Ok(png) = pixmap.encode_png() else {
-        return;
-    };
-
+fn set_dock_icon(icon: settings::AppIcon, dark: bool) {
     use objc2::AnyThread;
     use objc2_app_kit::{NSApplication, NSImage};
     use objc2_foundation::NSData;
+
     let Some(mtm) = objc2::MainThreadMarker::new() else {
         return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    let png = match icon {
+        settings::AppIcon::Default if dark => std::borrow::Cow::Borrowed(
+            include_bytes!("../assets/icon/zervo-macos-dark-512.png").as_slice(),
+        ),
+        settings::AppIcon::Default => {
+            let bundled = std::env::current_exe()
+                .is_ok_and(|path| path.with_file_name("../Resources/Zervo.icns").is_file());
+            if bundled {
+                // SAFETY: the main-thread marker keeps AppKit access on its thread.
+                unsafe { app.setApplicationIconImage(None) };
+                return;
+            }
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/icon/zervo-512.png").as_slice())
+        },
+        settings::AppIcon::Transparent => {
+            let svg = include_str!("../assets/icon/zervo-icon-transparent.svg");
+            let options = resvg::usvg::Options::default();
+            let Ok(tree) = resvg::usvg::Tree::from_str(svg, &options) else {
+                return;
+            };
+            let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(512, 512) else {
+                return;
+            };
+            resvg::render(
+                &tree,
+                resvg::tiny_skia::Transform::from_scale(0.5, 0.5),
+                &mut pixmap.as_mut(),
+            );
+            let Ok(png) = pixmap.encode_png() else {
+                return;
+            };
+            std::borrow::Cow::Owned(png)
+        },
     };
     let data = NSData::with_bytes(&png);
     let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
         return;
     };
-    let app = NSApplication::sharedApplication(mtm);
-    // Safety: called on the main thread (MainThreadMarker above) with a
-    // valid NSImage; matches AppKit's documented usage.
+    // SAFETY: the application and image are used on AppKit's main thread.
     unsafe {
         app.setApplicationIconImage(Some(&image));
     }

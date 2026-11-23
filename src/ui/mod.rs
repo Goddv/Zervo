@@ -59,18 +59,22 @@ pub enum UiAction {
     },
     CloseTab(TabId),
     TogglePin(TabId),
-    /// Dragged in the sidebar: put this tab at `index` in `workspace`.
+    /// Put the tab in a folder or at the root of the workspace.
     MoveTab {
         tab: TabId,
         workspace: usize,
         index: usize,
+        folder: Option<crate::state::FolderId>,
     },
-    /// Dropped one tab onto another: the two become a workspace, and the
-    /// sidebar opens its name for editing.
+    /// Dropped one tab onto another in the same workspace.
     GroupTabs {
         onto: TabId,
         dragged: TabId,
     },
+    NewFolder(Option<TabId>),
+    RenameFolder(crate::state::FolderId, String),
+    ToggleFolder(crate::state::FolderId),
+    RemoveFolder(crate::state::FolderId),
     RenameWorkspace(usize, String),
     NewWorkspace,
     RemoveWorkspace(usize),
@@ -167,6 +171,8 @@ pub struct UiOutput {
     pub settings_open: bool,
     /// Visible portion of the revealed sidebar, including its non-widget space.
     pub sidebar_overlay: Option<Rect>,
+    /// The docked or revealed sidebar, in window coordinates.
+    pub sidebar_bounds: Option<Rect>,
     /// True while a page-initiated dialog or menu is up; the chrome owns the
     /// pointer over the content area for as long as it is.
     pub controls_open: bool,
@@ -280,6 +286,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             page_rect: window,
             settings_open: true,
             sidebar_overlay: None,
+            sidebar_bounds: None,
             controls_open: false,
             ambient: false,
         };
@@ -553,6 +560,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     );
     let controls_open = !chrome.controls.is_empty() || command::draw(root, chrome, &mut actions);
 
+    let sidebar_bounds = if sidebar_docked {
+        Some(Rect::from_min_max(
+            window.min,
+            pos2(outer.left(), window.bottom()),
+        ))
+    } else {
+        sidebar_overlay
+    };
     UiOutput {
         actions,
         #[cfg(target_os = "macos")]
@@ -561,6 +576,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         page_rect,
         settings_open,
         sidebar_overlay,
+        sidebar_bounds,
         controls_open,
         ambient,
     }
@@ -771,9 +787,6 @@ fn sidebar_body(
                     }
                 });
             });
-            ui.add_space(4.0);
-            ui.separator();
-            spaces::switcher(ui, chrome, actions);
         });
 
     if chrome.settings.show_sidebar_widgets {
@@ -2741,159 +2754,6 @@ fn draw_address_pill(
     }
 }
 
-enum WorkspaceName {
-    Typing(String),
-    Keep(String),
-    Discard,
-}
-
-#[expect(clippy::too_many_arguments)]
-fn workspace_header(
-    ui: &mut Ui,
-    index: usize,
-    // Which of `WORKSPACE_COLORS` the first space took, so the ring is rotated
-    // to start where the reader put it.
-    first: usize,
-    name: &str,
-    tab_count: usize,
-    show_count: bool,
-    active: bool,
-    editing: Option<&str>,
-    palette: &Palette,
-    rename: &mut Option<(usize, WorkspaceName)>,
-) -> Rect {
-    let desired = vec2(ui.available_width(), 34.0);
-    let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
-    if response.double_clicked() && editing.is_none() {
-        *rename = Some((index, WorkspaceName::Typing(name.to_owned())));
-    }
-
-    let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-        ui.scope_id().with(("ws_header", index)),
-        response.hovered(),
-        palette.material.animation,
-    ));
-    if hover_t > 0.0 {
-        ui.painter().rect_filled(
-            rect,
-            palette.corner(Tier::Row),
-            palette.surface_hover.gamma_multiply(hover_t),
-        );
-    }
-    let colour = theme::workspace_color_from(index, first);
-    if active {
-        ui.painter().rect_filled(rect, 8, palette.surface);
-        ui.painter().rect_stroke(
-            rect,
-            8,
-            Stroke::new(1.0_f32, palette.border),
-            StrokeKind::Inside,
-        );
-    }
-    let dot = pos2(rect.min.x + 12.0, rect.center().y);
-    ui.painter().circle_filled(dot, 4.0, colour);
-
-    // Named inline rather than in a dialog. A workspace made by dropping one
-    // tab on another already exists by the time the user is asked what it is,
-    // so a modal would be asking permission for something already done — and
-    // the same tick-and-cross edit is what renaming a favourite uses.
-    if let Some(draft) = editing {
-        let mut text = draft.to_owned();
-        let field = Rect::from_min_max(
-            pos2(rect.min.x + 24.0, rect.min.y + 2.0),
-            pos2(rect.max.x - 44.0, rect.max.y - 2.0),
-        );
-        let editor = ui.put(
-            field,
-            TextEdit::singleline(&mut text)
-                .frame(Frame::NONE)
-                .font(FontId::proportional(13.0))
-                .text_color(palette.text)
-                .id(ui.scope_id().with(("ws_name", index))),
-        );
-        editor.request_focus();
-
-        let control = |ui: &mut Ui, x: f32, icon: Icon, tint: Color32| -> bool {
-            let hit = Rect::from_center_size(pos2(x, rect.center().y), vec2(18.0, 18.0));
-            let response = ui.interact(
-                hit,
-                ui.scope_id().with((icon as usize, "ws_edit", index)),
-                Sense::click(),
-            );
-            icons::draw_icon(
-                ui.painter(),
-                Rect::from_center_size(hit.center(), vec2(11.0, 11.0)),
-                icon,
-                if response.hovered() {
-                    tint
-                } else {
-                    palette.text_muted
-                },
-            );
-            response.on_hover_cursor(CursorIcon::PointingHand).clicked()
-        };
-        let keep = control(ui, rect.max.x - 32.0, Icon::Check, palette.accent);
-        let discard = control(ui, rect.max.x - 12.0, Icon::Close, palette.text);
-
-        let entered = ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let escaped = ui.input(|input| input.key_pressed(egui::Key::Escape));
-        // Only when something actually happened. Writing Typing(text) every
-        // frame would overwrite a rename the context menu asked for on any
-        // workspace drawn after this one, since there is a single slot and the
-        // last writer wins — and the menu is always drawn later.
-        if keep || entered {
-            *rename = Some((index, WorkspaceName::Keep(text)));
-        } else if discard || escaped {
-            *rename = Some((index, WorkspaceName::Discard));
-        } else if text != draft {
-            *rename = Some((index, WorkspaceName::Typing(text)));
-        }
-        return rect;
-    }
-
-    let mut right = rect.right() - 10.0;
-    if show_count {
-        let count = ui.painter().text(
-            pos2(right, rect.center().y),
-            Align2::RIGHT_CENTER,
-            tab_count.to_string(),
-            FontId::proportional(11.5),
-            palette.text_muted,
-        );
-        right = count.left() - 8.0;
-    }
-    let left = rect.left() + 26.0;
-    let ink = if active {
-        palette.text
-    } else {
-        palette.text_muted
-    };
-    let mut label =
-        egui::text::LayoutJob::simple_singleline(name.to_owned(), FontId::proportional(13.0), ink);
-    label.wrap = egui::text::TextWrapping::truncate_at_width((right - left).max(0.0));
-    let label = ui.painter().layout_job(label);
-    ui.painter().galley(
-        pos2(left, rect.center().y - label.size().y / 2.0),
-        label,
-        ink,
-    );
-    // Renaming any workspace, not only a freshly made one.
-    crate::overlay_glass::context_menu(&response, |ui| {
-        if ui.button(tr("common-rename")).clicked() {
-            *rename = Some((index, WorkspaceName::Typing(name.to_owned())));
-            ui.close();
-        }
-    });
-    if response.has_focus() {
-        icons::paint_focus(ui, palette, rect, Tier::Row);
-    }
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Tab, response.enabled(), active, name)
-    });
-    response.on_hover_cursor(CursorIcon::PointingHand);
-    rect
-}
-
 struct TabRowStyle<'a> {
     tab_id: TabId,
     title: &'a str,
@@ -2903,6 +2763,7 @@ struct TabRowStyle<'a> {
     pinnable: bool,
     pinned: bool,
     workspace: usize,
+    folder: Option<crate::state::FolderId>,
     spaces: &'a [crate::state::Workspace],
     /// What to draw in the favicon's place on an internal page, which has no
     /// favicon and never will. `None` falls back to the globe.
@@ -2931,7 +2792,6 @@ struct TabRowOut {
     clicked: bool,
     close_clicked: bool,
     drag_started: bool,
-    drag_stopped: bool,
     /// Set while a drag is in flight and the pointer is over this row.
     drop_at: Option<DropAt>,
 }
@@ -3104,7 +2964,10 @@ fn tab_row(
 ) -> TabRowOut {
     let row_height = if style.compact { 28.0 } else { 34.0 };
     let desired = vec2(ui.available_width(), row_height);
-    let (_, rect) = ui.allocate_space(desired);
+    let (_, mut rect) = ui.allocate_space(desired);
+    if style.folder.is_some() {
+        rect.min.x += 14.0;
+    }
     // Sensing drag as well as click is the whole feature. egui decides between
     // the two itself — a press only becomes a drag past 6 points of travel or
     // 0.8 seconds held — so an ordinary click still reports as a click and no
@@ -3128,7 +2991,6 @@ fn tab_row(
             clicked: false,
             close_clicked: false,
             drag_started: false,
-            drag_stopped: response.drag_stopped(),
             drop_at: None,
         };
     }
@@ -3139,7 +3001,7 @@ fn tab_row(
     let drop_at = style
         .dragging
         .and(pointer)
-        .filter(|pos| rect.contains(*pos))
+        .filter(|pos| rect.intersect(ui.clip_rect()).contains(*pos))
         .map(|pos| {
             let t = (pos.y - rect.min.y) / rect.height();
             if t < 0.25 {
@@ -3199,8 +3061,7 @@ fn tab_row(
     // read on that.
     let (ink, ink_muted) = row_ink(palette, select_t);
     let visible = rect.intersect(ui.clip_rect());
-    // Overlay rows share the sidebar's ink buffer. Docked rows get their
-    // AppKit background beneath the OpenGL view instead.
+    // Rows on native glass share the sidebar’s ink buffer.
     let frost = (style.native_overlay && visible.is_positive())
         .then(|| crate::overlay_glass::Surface::begin(ui));
     let painter = ui.painter();
@@ -3320,6 +3181,32 @@ fn tab_row(
             actions.push(UiAction::TogglePin(style.tab_id));
             ui.close();
         }
+        crate::overlay_glass::submenu(ui, tr("sidebar-move-to-folder"), |ui| {
+            for folder in &style.spaces[style.workspace].folders {
+                if Some(folder.id) != style.folder && ui.button(&folder.name).clicked() {
+                    actions.push(UiAction::MoveTab {
+                        tab: style.tab_id,
+                        workspace: style.workspace,
+                        index: style.spaces[style.workspace].tabs.len(),
+                        folder: Some(folder.id),
+                    });
+                    ui.close();
+                }
+            }
+            if ui.button(tr("sidebar-new-folder")).clicked() {
+                actions.push(UiAction::NewFolder(Some(style.tab_id)));
+                ui.close();
+            }
+        });
+        if style.folder.is_some() && ui.button(tr("sidebar-remove-from-folder")).clicked() {
+            actions.push(UiAction::MoveTab {
+                tab: style.tab_id,
+                workspace: style.workspace,
+                index: style.spaces[style.workspace].tabs.len(),
+                folder: None,
+            });
+            ui.close();
+        }
         if style.spaces.len() > 1 {
             crate::overlay_glass::submenu(ui, tr("sidebar-move-to-space"), |ui| {
                 for (index, space) in style
@@ -3333,6 +3220,7 @@ fn tab_row(
                             tab: style.tab_id,
                             workspace: index,
                             index: space.tabs.len(),
+                            folder: None,
                         });
                         ui.close();
                     }
@@ -3385,7 +3273,6 @@ fn tab_row(
     let row_clicked = response.clicked() && !close_response.clicked();
     let close_clicked = close_response.clicked();
     let drag_started = response.drag_started();
-    let drag_stopped = response.drag_stopped();
     if style.dragging.is_none() {
         response
             .on_hover_cursor(CursorIcon::PointingHand)
@@ -3398,7 +3285,6 @@ fn tab_row(
         clicked: row_clicked,
         close_clicked,
         drag_started,
-        drag_stopped,
         drop_at,
     }
 }

@@ -18,11 +18,8 @@ use crate::widgets;
 
 use super::*;
 
-/// How tall the pinned specimen is on the Appearance page.
-///
-/// Enough for a card, an input and a strip of chrome side by side at a
-/// readable size, and no more: it is a reference, not the page.
 const SPECIMEN_HEIGHT: f32 = 190.0;
+const SETTINGS_COLUMN: f32 = 610.0;
 
 pub(crate) fn draw_settings_page(
     root: &mut Ui,
@@ -31,202 +28,277 @@ pub(crate) fn draw_settings_page(
     actions: &mut Vec<UiAction>,
 ) {
     let palette = chrome.palette;
-    let painter = root.ctx().layer_painter(egui::LayerId::background());
-    let card_radius = theme::content_corners(&palette);
-    painter.rect_filled(content_rect, card_radius, palette.surface);
-
-    // The page's own contents start below the window's controls. The colour
-    // above still runs to the window's edge — it is the *heading* that has to
-    // move, not the page.
-    let laid_out = Rect::from_min_max(
-        pos2(
-            content_rect.min.x,
-            content_rect.min.y + chrome.window_controls_room(),
-        ),
-        content_rect.max,
+    let ctx = root.ctx().clone();
+    ctx.layer_painter(egui::LayerId::background()).rect_filled(
+        content_rect,
+        theme::content_corners(&palette),
+        palette.bg,
     );
 
-    // ── Left navigation column, Chrome-style: categories on the left, the
-    // selected category's panel on the right.
-    let nav_width = 188.0_f32.min(content_rect.width() * 0.34);
-    let nav_rect = Rect::from_min_size(laid_out.min, vec2(nav_width, laid_out.height()));
-    painter.rect_filled(
-        // The column's colour runs the full height of the page even where its
-        // contents start lower, or full-page mode would show a bite out of the
-        // top of it.
-        Rect::from_min_max(content_rect.min, pos2(nav_rect.max.x, content_rect.max.y)),
-        CornerRadius {
-            nw: card_radius.nw,
-            sw: card_radius.sw,
-            ne: 0,
-            se: 0,
-        },
-        theme::mix(palette.surface, palette.bg, 0.75),
+    let top = content_rect.top() + chrome.window_controls_room() + 22.0;
+    let inset = (content_rect.width() * 0.035).clamp(12.0, 36.0);
+    let page = Rect::from_min_max(
+        pos2(content_rect.left() + inset, top),
+        pos2(content_rect.right() - inset, content_rect.bottom() - 10.0),
     );
-    let mut nav_ui = root.new_child(
-        egui::UiBuilder::new()
-            .max_rect(nav_rect.shrink2(vec2(10.0, 14.0)))
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    {
-        let ui = &mut nav_ui;
-        ui.label(
-            RichText::new(tr("common-settings"))
-                .size(17.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.add_space(10.0);
-        for section in crate::state::SettingsSection::ALL {
-            let selected = chrome.browser.settings_section == section;
-            let (rect, response) =
-                ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-            let hover_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.scope_id().with(("settings_nav", section)),
-                response.hovered() && !selected,
-                0.12,
-            ));
-            let select_t = glass::ease_out(ui.ctx().animate_bool_with_time(
-                ui.scope_id().with(("settings_nav_sel", section)),
-                selected,
-                0.18,
-            ));
-            if hover_t > 0.0 {
-                ui.painter().rect_filled(
-                    rect,
-                    palette.corner(Tier::Row),
-                    palette.surface_hover.gamma_multiply(hover_t),
-                );
-            }
-            if select_t > 0.0 {
-                ui.painter().rect_filled(
-                    rect,
-                    palette.corner(Tier::Row),
-                    palette.active.gamma_multiply(select_t),
-                );
-            }
-            let ink = if selected {
-                palette.text
-            } else {
-                palette.text_muted
-            };
-            let mut label = egui::text::LayoutJob::simple_singleline(
-                section.label().to_owned(),
-                FontId::proportional(13.5),
-                ink,
-            );
-            label.wrap =
-                egui::text::TextWrapping::truncate_at_width((rect.width() - 20.0).max(0.0));
-            let label = ui.painter().layout_job(label);
-            let response = if label.elided {
-                response.on_hover_text(section.label())
-            } else {
-                response
-            };
-            ui.painter().galley(
-                pos2(rect.min.x + 12.0, rect.center().y - label.size().y / 2.0),
-                label,
-                ink,
-            );
-            if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                chrome.browser.settings_section = section;
+    let wide = page.width() >= 680.0;
+    let mut area = root.new_child(egui::UiBuilder::new().max_rect(page));
+    area.set_clip_rect(page.intersect(root.clip_rect()));
+
+    use crate::state::SettingsSection;
+    let selection = &mut chrome.browser.settings_section;
+    let query = &mut chrome.browser.settings_query;
+    let mut pane = page;
+    if wide {
+        let nav = Rect::from_min_size(page.min, vec2(166.0, page.height()));
+        let mut nav_area = area.new_child(egui::UiBuilder::new().max_rect(nav));
+        nav_area.label(RichText::new(tr("common-settings")).size(21.0).strong());
+        nav_area.add_space(12.0);
+        for section in SettingsSection::ALL {
+            if settings_nav(
+                &mut nav_area,
+                section,
+                *selection == section && query.is_empty(),
+                true,
+                &palette,
+            ) {
+                *selection = section;
+                query.clear();
             }
         }
+        pane.min.x = nav.right() + 24.0;
+    } else {
+        area.label(RichText::new(tr("common-settings")).size(20.0).strong());
+        area.add_space(5.0);
+        area.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(3.0, 4.0);
+            for section in SettingsSection::ALL {
+                if settings_nav(
+                    ui,
+                    section,
+                    *selection == section && query.is_empty(),
+                    false,
+                    &palette,
+                ) {
+                    *selection = section;
+                    query.clear();
+                }
+            }
+        });
+        pane.min.y = area.min_rect().bottom() + 10.0;
     }
 
-    // ── Content pane: a pinned header, and sections that scroll under it.
-    let pane_rect = Rect::from_min_max(pos2(nav_rect.max.x, laid_out.min.y), laid_out.max)
-        .shrink2(vec2(6.0, 10.0));
-    let column = (pane_rect.width() - 24.0).clamp(0.0, 520.0);
-    let margin = ((pane_rect.width() - column) * 0.5).max(0.0);
+    let width = pane.width().min(SETTINGS_COLUMN);
+    let left = pane.center().x - width * 0.5;
+    let column = Rect::from_min_max(pos2(left, pane.top()), pos2(left + width, pane.bottom()));
+    let mut body = area.new_child(
+        egui::UiBuilder::new()
+            .max_rect(column)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    body.set_clip_rect(body.clip_rect().intersect(column));
+    let (field, _) = body.allocate_exact_size(vec2(width, 34.0), Sense::hover());
+    let mut entry = body.new_child(
+        egui::UiBuilder::new()
+            .max_rect(field)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let surface = crate::overlay_glass::Surface::begin(&entry);
+    if !surface.is_native() {
+        entry
+            .painter()
+            .rect_filled(field, 9, settings_card_fill(&palette));
+        entry.painter().rect_stroke(
+            field,
+            9,
+            Stroke::new(1.0_f32, palette.border),
+            egui::StrokeKind::Inside,
+        );
+    }
+    entry.add_space(10.0);
+    let (glyph, _) = entry.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+    icons::draw_icon(entry.painter(), glyph, Icon::Search, palette.text_muted);
+    let search = entry.add(
+        TextEdit::singleline(query)
+            .id_salt("settings_search")
+            .hint_text(tr("settings-find"))
+            .desired_width((entry.available_width() - 34.0).max(1.0))
+            .frame(Frame::NONE),
+    );
+    if search.has_focus() && entry.input(|input| input.key_pressed(Key::Escape)) {
+        query.clear();
+    }
+    if !query.is_empty()
+        && icons::icon_button(&mut entry, Icon::Close, 12.0, &palette, true)
+            .on_hover_text(tr("settings-clear-search"))
+            .clicked()
+    {
+        query.clear();
+        search.request_focus();
+    }
+    surface.finish(&entry, field, crate::overlay_glass::Role::Field);
 
-    // The title sits outside the scroll area, and on Appearance the specimen
-    // sits under it. Blur, fill, sheen and the edge are invisible on a page
-    // made of settings rows — you need a card, a menu and something to type
-    // into, side by side, to judge any of them — and a control adjusted with
-    // nothing to look at is a control adjusted blind.
-    let specimen = !cfg!(target_os = "macos")
-        && chrome.browser.settings_section == crate::state::SettingsSection::Appearance;
-    let head_height = 14.0
-        + 26.0
-        + if specimen {
-            12.0 + SPECIMEN_HEIGHT
+    let section = *selection;
+    let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
+    let searching = !words.is_empty();
+    body.add_space(15.0);
+    body.label(
+        RichText::new(if searching {
+            tr("settings-search-results")
         } else {
-            0.0
-        };
-    {
-        let mut head = root.new_child(
-            egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(
-                    pos2(pane_rect.min.x + margin, pane_rect.min.y + 14.0),
-                    pos2(
-                        pane_rect.min.x + margin + column,
-                        pane_rect.min.y + head_height,
-                    ),
-                ))
-                .layout(egui::Layout::top_down(egui::Align::Min)),
-        );
-        head.set_width(column);
-        head.label(
-            RichText::new(chrome.browser.settings_section.label())
-                .size(21.0)
-                .strong()
-                .color(palette.text),
-        );
-        if specimen {
-            head.add_space(12.0);
-            let (rect, _) = head.allocate_exact_size(vec2(column, SPECIMEN_HEIGHT), Sense::hover());
-            appearance_specimen(&head, &palette, rect);
-        }
-    }
-
-    // A gap between the pinned header and what scrolls under it.
-    //
-    // They used to touch exactly, which is not the same as not overlapping:
-    // every section is a glass card and glass casts a shadow *outside* itself,
-    // so the first card's — and then every card's, as they scrolled past —
-    // fell across the specimen's bottom edge and smeared it. The gap is
-    // outside the scroll viewport, so it survives scrolling; a space inside it
-    // would scroll away with the first card.
-    const HEADER_GAP: f32 = 16.0;
-    let mut pane_ui = root.new_child(
-        egui::UiBuilder::new()
-            .max_rect(Rect::from_min_max(
-                pos2(pane_rect.min.x, pane_rect.min.y + head_height + HEADER_GAP),
-                pane_rect.max,
-            ))
-            .layout(egui::Layout::top_down(egui::Align::Min)),
+            section.label()
+        })
+        .size(24.0)
+        .strong()
+        .color(palette.text),
     );
-    let ui = &mut pane_ui;
-    ui.set_clip_rect(ui.clip_rect().intersect(pane_rect));
+    body.add_space(12.0);
 
     egui::ScrollArea::vertical()
+        .id_salt((
+            "settings_cards",
+            if searching { None } else { Some(section) },
+        ))
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(margin);
-                ui.vertical(|ui| {
-                    ui.set_width(column);
-                    ui.add_space(14.0);
-                    match chrome.browser.settings_section {
-                        crate::state::SettingsSection::Appearance => {
-                            settings_appearance(ui, chrome, &palette, actions);
-                        },
-                        crate::state::SettingsSection::General => {
-                            settings_general(ui, chrome, &palette, actions);
-                        },
-                        crate::state::SettingsSection::Layout => {
-                            settings_layout(ui, chrome, &palette, actions);
-                        },
-                        crate::state::SettingsSection::Passwords => {
-                            settings_passwords(ui, chrome, actions);
-                        },
-                        crate::state::SettingsSection::About => settings_about(ui, &palette),
+        .show(&mut body, |ui| {
+            if searching {
+                let id = settings_search_id();
+                let mut matches = 0_usize;
+                let words: std::sync::Arc<[String]> = words.into();
+                for section in SettingsSection::ALL {
+                    let filter = CardSearch {
+                        words: words.clone(),
+                        category: section.label().to_lowercase().into(),
+                        matches,
+                    };
+                    ctx.data_mut(|data| data.insert_temp(id, filter));
+                    draw_settings_cards(ui, section, chrome, &palette, actions);
+                    if let Some(filter) = ctx.data_mut(|data| data.remove_temp::<CardSearch>(id)) {
+                        matches = filter.matches;
                     }
-                    ui.add_space(18.0);
-                });
-            });
+                }
+                if matches == 0 {
+                    ui.label(RichText::new(tr("settings-no-results")).color(palette.text_muted));
+                }
+            } else {
+                if !cfg!(target_os = "macos") && section == SettingsSection::Appearance {
+                    let (rect, _) = ui.allocate_exact_size(
+                        vec2(ui.available_width(), SPECIMEN_HEIGHT),
+                        Sense::hover(),
+                    );
+                    appearance_specimen(ui, &palette, rect);
+                    ui.add_space(14.0);
+                }
+                draw_settings_cards(ui, section, chrome, &palette, actions);
+            }
         });
+}
+
+#[derive(Clone, Default)]
+struct CardSearch {
+    words: std::sync::Arc<[String]>,
+    category: std::sync::Arc<str>,
+    matches: usize,
+}
+
+fn settings_search_id() -> Id {
+    Id::unique("settings_card_search")
+}
+
+fn draw_settings_cards(
+    ui: &mut Ui,
+    section: crate::state::SettingsSection,
+    chrome: &mut ChromeContext,
+    palette: &Palette,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::state::SettingsSection;
+    ui.push_id(section, |ui| match section {
+        SettingsSection::Appearance => settings_appearance(ui, chrome, palette, actions),
+        SettingsSection::General => settings_general(ui, chrome, palette, actions),
+        SettingsSection::Layout => settings_layout(ui, chrome, palette, actions),
+        SettingsSection::Passwords => settings_passwords(ui, chrome, actions),
+        SettingsSection::About => settings_about(ui, palette),
+    });
+}
+
+fn settings_nav(
+    ui: &mut Ui,
+    section: crate::state::SettingsSection,
+    selected: bool,
+    wide: bool,
+    palette: &Palette,
+) -> bool {
+    use crate::state::SettingsSection;
+    let icon = match section {
+        SettingsSection::Appearance => Icon::Palette,
+        SettingsSection::General => Icon::Gear,
+        SettingsSection::Layout => Icon::Sidebar,
+        SettingsSection::Passwords => Icon::Lock,
+        SettingsSection::About => Icon::Info,
+    };
+    let font = FontId::proportional(13.5);
+    let ink = if selected {
+        palette.text
+    } else {
+        palette.text_muted
+    };
+    let label = ui
+        .painter()
+        .layout_no_wrap(section.label().to_owned(), font.clone(), ink);
+    let width = if wide {
+        ui.available_width()
+    } else {
+        label.size().x + 45.0
+    };
+    let (row, response) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
+    if selected || response.hovered() {
+        let fill = if selected {
+            palette.active
+        } else {
+            palette.surface_hover
+        };
+        ui.painter()
+            .rect_filled(row, palette.corner(Tier::Row), fill);
+    }
+    if selected {
+        ui.painter().rect_filled(
+            Rect::from_center_size(pos2(row.left() + 3.0, row.center().y), vec2(2.5, 14.0)),
+            1,
+            palette.accent,
+        );
+    }
+    icons::draw_icon(
+        ui.painter(),
+        Rect::from_center_size(pos2(row.left() + 16.0, row.center().y), vec2(15.0, 15.0)),
+        icon,
+        ink,
+    );
+    crate::overlay_glass::row_label(
+        ui,
+        Rect::from_min_max(
+            pos2(row.left() + 31.0, row.top()),
+            pos2(row.right() - 8.0, row.bottom()),
+        ),
+        section.label(),
+        font,
+        ink,
+    );
+    if response.has_focus() {
+        icons::paint_focus(ui, palette, row, Tier::Row);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Tab, true, selected, section.label())
+    });
+    response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+}
+
+fn settings_card_fill(palette: &Palette) -> Color32 {
+    if palette.dark {
+        theme::mix(palette.bg, Color32::WHITE, 0.055)
+    } else {
+        theme::mix(palette.bg, Color32::WHITE, 0.75)
+    }
 }
 
 /// "Save as a preset…", and the field it opens.
@@ -1767,12 +1839,17 @@ pub(crate) fn settings_layout(
                 .color(palette.text_muted),
         );
         if chrome.settings.gestures.enabled {
+            ui.label(
+                RichText::new(tr("settings-sidebar-space-swipes"))
+                    .size(11.5)
+                    .color(palette.text_muted),
+            );
             ui.add_space(10.0);
             let mut changed = false;
             changed |= gesture_row(
                 ui,
                 tr("settings-swipe-right"),
-                tr("settings-anywhere-in-the-window"),
+                tr("settings-outside-sidebar"),
                 &mut chrome.settings.gestures.right,
                 palette,
             );
@@ -1954,61 +2031,95 @@ pub(crate) fn settings_passwords(
 }
 
 pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
-    settings_section(ui, palette, "Zervo", |ui| {
-        ui.label(
-            RichText::new(crate::l10n::message(
-                "settings-version",
-                [("version", env!("CARGO_PKG_VERSION").into())],
-            ))
-            .size(13.0)
-            .color(palette.text),
+    settings_section(ui, palette, tr("settings-build-and-engine"), |ui| {
+        let dark_icon = cfg!(target_os = "macos") && palette.dark;
+        let icon_id = Id::unique(("about_application_icon", dark_icon));
+        let icon = ui
+            .ctx()
+            .data(|data| data.get_temp::<TextureHandle>(icon_id));
+        let icon = icon.or_else(|| {
+            let png = if dark_icon {
+                include_bytes!("../../assets/icon/zervo-macos-dark-512.png").as_slice()
+            } else {
+                include_bytes!("../../assets/icon/zervo-128.png").as_slice()
+            };
+            let pixels = image::load_from_memory(png).ok()?.into_rgba8();
+            let color = egui::ColorImage::from_rgba_unmultiplied(
+                [pixels.width() as usize, pixels.height() as usize],
+                pixels.as_raw(),
+            );
+            let texture = ui
+                .ctx()
+                .load_texture("Zervo icon", color, egui::TextureOptions::LINEAR);
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(icon_id, texture.clone()));
+            Some(texture)
+        });
+        ui.horizontal(|ui| {
+            if let Some(icon) = icon.as_ref() {
+                ui.image((icon.id(), vec2(50.0, 50.0)));
+            }
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Zervo").size(20.0).strong());
+                ui.label(
+                    RichText::new(crate::l10n::message(
+                        "settings-version",
+                        [("version", env!("CARGO_PKG_VERSION").into())],
+                    ))
+                    .color(palette.text_muted),
+                );
+            });
+        });
+        ui.add_space(8.0);
+        ui.separator();
+        about_detail(
+            ui,
+            palette,
+            tr("settings-rendering-engine"),
+            concat!("Servo ", env!("ZERVO_SERVO_VERSION"), " · WebRender"),
         );
-        ui.label(
-            RichText::new(tr(
-                "settings-rendering-engine-servo-compositing-through-webrender",
-            ))
-            .size(12.0)
-            .color(palette.text_muted),
+        ui.separator();
+        let toolkit = concat!(
+            "egui ",
+            env!("ZERVO_EGUI_VERSION"),
+            " · winit ",
+            env!("ZERVO_WINIT_VERSION")
         );
-        // Not a guess about the platform: the driver's own GL_RENDERER and
-        // GL_VERSION, read at startup from the context the page is drawn in.
+        let toolkit = if cfg!(target_os = "macos") {
+            format!("{toolkit} · AppKit")
+        } else {
+            toolkit.to_owned()
+        };
+        about_detail(ui, palette, tr("settings-ui-toolkit"), &toolkit);
+    });
+
+    settings_section(ui, palette, tr("settings-graphics"), |ui| {
         let adapter = crate::gpu::adapter();
         if !adapter.renderer.is_empty() {
-            ui.label(
-                RichText::new(format!("Graphics: {}", adapter.renderer))
-                    .size(12.0)
-                    .color(palette.text_muted),
+            about_detail(
+                ui,
+                palette,
+                tr("settings-graphics-adapter"),
+                &adapter.renderer,
             );
+            ui.separator();
             let driver = if adapter.vendor.is_empty() {
                 adapter.version.clone()
             } else {
-                format!("{} — {}", adapter.version, adapter.vendor)
+                format!("{} · {}", adapter.version, adapter.vendor)
             };
-            ui.label(
-                RichText::new(format!("Driver: {driver}"))
-                    .size(12.0)
-                    .color(palette.text_muted),
-            );
+            about_detail(ui, palette, tr("settings-graphics-driver"), &driver);
+            ui.separator();
         }
-        ui.label(
-            RichText::new(format!("WebGPU: {}", crate::gpu::webgpu_backend_name()))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        ui.label(
-            RichText::new(tr("settings-chrome-egui-on-winit-painted-against-servo"))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        ui.label(
-            RichText::new(format!(
-                "Material: {} — corner radii, fills, edges and shadows all come from it.",
-                palette.material.name
-            ))
-            .size(12.0)
-            .color(palette.text_muted),
-        );
+        about_detail(ui, palette, "WebGPU", crate::gpu::webgpu_backend_name());
     });
+}
+
+fn about_detail(ui: &mut Ui, palette: &Palette, label: &str, value: &str) {
+    ui.add_space(3.0);
+    ui.label(RichText::new(label).strong().size(12.5).color(palette.text));
+    ui.label(RichText::new(value).size(12.5).color(palette.text_muted));
+    ui.add_space(3.0);
 }
 
 pub(crate) fn settings_section(
@@ -2017,40 +2128,35 @@ pub(crate) fn settings_section(
     title: &str,
     add_contents: impl FnOnce(&mut Ui),
 ) {
-    ui.label(
-        RichText::new(title.to_uppercase())
-            .size(10.5)
-            .strong()
-            .color(palette.text_muted),
-    );
-    ui.add_space(4.0);
-    Frame::NONE.inner_margin(Margin::same(14)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        // Reserve a slot, lay out the contents, then backfill the glass
-        // card sized to what was actually laid out (max_rect here spans
-        // the whole remaining scroll viewport, not the section).
-        let placeholder = ui.painter().add(Shape::Noop);
-        // Each section its own id scope. A `Frame` does not open one, so every
-        // section on the page derived its widget ids from the same parent —
-        // and the segmented control keys its segments on (index, label), so
-        // two sections offering a choice that happens to share a word at the
-        // same position were one widget with two positions. egui paints "First
-        // use of widget ID …" across the page when that happens, which is a
-        // debug banner the reader should never be shown.
-        ui.push_id(title, add_contents);
-        let card_rect = ui.min_rect().expand(14.0);
-        let shadow = palette.material.shadow_reach
-            + f32::from(palette.corner(Tier::Card).nw) * palette.material.shadow_reach_per_radius;
-        if ui.is_rect_visible(card_rect.expand(shadow)) {
-            ui.painter().set(
-                placeholder,
-                Shape::Vec(glass::shapes(
-                    card_rect,
-                    palette,
-                    Glass::tier(Tier::Card).strength(0.8),
-                )),
-            );
+    let visible = ui.ctx().data_mut(|data| {
+        let Some(mut filter) = data.get_temp::<CardSearch>(settings_search_id()) else {
+            return true;
+        };
+        let title = title.to_lowercase();
+        let visible = filter
+            .words
+            .iter()
+            .all(|word| title.contains(word) || filter.category.contains(word));
+        if visible {
+            filter.matches += 1;
+            data.insert_temp(settings_search_id(), filter);
         }
+        visible
     });
-    ui.add_space(14.0);
+    if !visible {
+        return;
+    }
+
+    Frame::NONE
+        .fill(settings_card_fill(palette))
+        .stroke(Stroke::new(1.0_f32, palette.border.gamma_multiply(0.72)))
+        .corner_radius(13)
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(title).size(15.0).strong().color(palette.text));
+            ui.add_space(7.0);
+            ui.push_id(title, add_contents);
+        });
+    ui.add_space(13.0);
 }

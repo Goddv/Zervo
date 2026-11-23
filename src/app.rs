@@ -299,6 +299,7 @@ impl AppState {
             let Some(tab) = browser.tab_mut(tab_id) else {
                 return;
             };
+            let was_foldered = tab.folder.is_some();
             let closing = if let Some(pin) = &tab.pin_anchor {
                 tab.url.clone_from(&pin.url);
                 tab.title.clone_from(&pin.title);
@@ -316,7 +317,11 @@ impl AppState {
                 }
                 webview
             } else {
-                browser.remove_tab(tab_id)
+                let webview = browser.remove_tab(tab_id);
+                if was_foldered {
+                    browser.save_spaces();
+                }
+                webview
             };
             let next = was_active.then(|| {
                 browser.active_tab.unwrap_or_else(|| {

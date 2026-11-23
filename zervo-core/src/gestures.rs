@@ -55,6 +55,16 @@ pub enum Direction {
     Down,
 }
 
+/// Where the fingers started scrolling.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Region {
+    Sidebar,
+    TopStrip,
+    #[default]
+    Content,
+    Blocked,
+}
+
 /// What a swipe can be bound to.
 ///
 /// Nothing here destroys anything. A mis-swipe on a page that scrolls
@@ -103,7 +113,7 @@ impl GestureAction {
 #[serde(default)]
 pub struct Gestures {
     pub enabled: bool,
-    /// Two fingers moving left and right, anywhere in the window.
+    /// Two fingers moving left and right outside the sidebar.
     pub left: GestureAction,
     pub right: GestureAction,
     /// Two fingers moving up and down, over the bar above the page only —
@@ -127,12 +137,16 @@ impl Default for Gestures {
 }
 
 impl Gestures {
-    pub fn action(&self, direction: Direction) -> GestureAction {
-        match direction {
-            Direction::Left => self.left,
-            Direction::Right => self.right,
-            Direction::Up => self.up,
-            Direction::Down => self.down,
+    pub fn action(&self, direction: Direction, region: Region) -> GestureAction {
+        match (direction, region) {
+            (_, Region::Blocked) => GestureAction::None,
+            (Direction::Left, Region::Sidebar) => GestureAction::NextWorkspace,
+            (Direction::Right, Region::Sidebar) => GestureAction::PreviousWorkspace,
+            (Direction::Left, _) => self.left,
+            (Direction::Right, _) => self.right,
+            (Direction::Up, Region::TopStrip) => self.up,
+            (Direction::Down, Region::TopStrip) => self.down,
+            _ => GestureAction::None,
         }
     }
 }
@@ -141,6 +155,7 @@ impl Gestures {
 #[derive(Default)]
 pub struct Recognizer {
     travel: Vec2,
+    origin: Region,
     /// The fingers are down. Separate from `started`, which is the clock.
     open: bool,
     /// When the stroke first *moved*.
@@ -155,7 +170,13 @@ pub struct Recognizer {
 impl Recognizer {
     /// Feed one scroll event. Returns a direction only on the frame the
     /// fingers lift, and only if the whole stroke was a flick.
-    pub fn feed(&mut self, delta: Vec2, phase: TouchPhase, now: Instant) -> Option<Direction> {
+    pub fn feed(
+        &mut self,
+        delta: Vec2,
+        phase: TouchPhase,
+        now: Instant,
+        region: Region,
+    ) -> Option<(Direction, Region)> {
         match phase {
             TouchPhase::Started => {
                 // A Started while a stroke is already open is AppKit's
@@ -184,6 +205,7 @@ impl Recognizer {
                 // you hesitated first.
                 if self.started.is_none() && delta.length() > 0.5 {
                     self.started = Some(now);
+                    self.origin = region;
                 }
                 self.travel += delta;
                 None
@@ -199,11 +221,11 @@ impl Recognizer {
                 // and so would the third.
                 self.settled = (moved && !self.inertia).then_some(now);
                 let direction = started
-                    .filter(|_| !self.inertia)
+                    .filter(|_| !self.inertia && phase == TouchPhase::Ended)
                     .and_then(|start| self.recognise(now.saturating_duration_since(start)));
                 self.open = false;
                 self.travel = Vec2::ZERO;
-                direction
+                direction.map(|direction| (direction, self.origin))
             },
         }
     }
@@ -229,5 +251,73 @@ impl Recognizer {
             (false, true) => Direction::Down,
             (false, false) => Direction::Up,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routes_a_sidebar_flick_by_where_it_started() {
+        let mut swipe = Recognizer::default();
+        let now = Instant::now();
+        swipe.feed(Vec2::ZERO, TouchPhase::Started, now, Region::Sidebar);
+        swipe.feed(
+            Vec2::new(-62.0, 4.0),
+            TouchPhase::Moved,
+            now,
+            Region::Sidebar,
+        );
+        let (direction, origin) = swipe
+            .feed(
+                Vec2::ZERO,
+                TouchPhase::Ended,
+                now + Duration::from_millis(90),
+                Region::Content,
+            )
+            .unwrap();
+        let bindings = Gestures::default();
+        assert_eq!(
+            bindings.action(direction, origin),
+            GestureAction::NextWorkspace
+        );
+        assert_eq!(
+            bindings.action(direction, Region::Content),
+            GestureAction::Forward
+        );
+        assert_eq!(
+            bindings.action(Direction::Right, Region::Sidebar),
+            GestureAction::PreviousWorkspace
+        );
+        assert_eq!(
+            bindings.action(Direction::Down, Region::Sidebar),
+            GestureAction::None
+        );
+    }
+
+    #[test]
+    fn cancelled_swipes_and_momentum_do_not_switch_spaces() {
+        let mut swipe = Recognizer::default();
+        let now = Instant::now();
+        for (start, end) in [(0, TouchPhase::Cancelled), (100, TouchPhase::Ended)] {
+            let start = now + Duration::from_millis(start);
+            swipe.feed(Vec2::ZERO, TouchPhase::Started, start, Region::Sidebar);
+            swipe.feed(
+                Vec2::new(64.0, 0.0),
+                TouchPhase::Moved,
+                start,
+                Region::Sidebar,
+            );
+            assert_eq!(
+                swipe.feed(
+                    Vec2::ZERO,
+                    end,
+                    start + Duration::from_millis(90),
+                    Region::Sidebar
+                ),
+                None,
+            );
+        }
     }
 }

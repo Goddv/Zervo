@@ -50,11 +50,6 @@ impl SearchEngine {
     }
 }
 
-/// Which app icon Zervo wears in the Dock.
-///
-/// Both variants are composed from the same layered artwork authored in
-/// Apple's Icon Composer (`assets/icon/Zervo.icon`); the transparent variant
-/// is that document's translucency setting made visible.
 /// What the halo around the content card is coloured with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HaloTint {
@@ -75,6 +70,7 @@ impl HaloTint {
     }
 }
 
+/// The system bundle icon or the alternate Dock mark without a backing tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AppIcon {
     Default,
