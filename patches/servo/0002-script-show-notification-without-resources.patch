@@ -1,4 +1,4 @@
-From 7679c5d1137af93f4645e7a5d12e0cec09435872 Mon Sep 17 00:00:00 2001
+From 8ee668283b831e7a5034cc333a60656b0d0d9761 Mon Sep 17 00:00:00 2001
 From: Goddv <goddv@goddvs-macbook-pro.home>
 Date: Sat, 22 Aug 2026 18:03:52 +0200
 Subject: [PATCH] script: show a notification that has no resources to fetch
@@ -19,13 +19,13 @@ a plain title-and-body notification, which is what most pages raise.
  1 file changed, 15 insertions(+)
 
 diff --git a/components/script/dom/serviceworker/notification.rs b/components/script/dom/serviceworker/notification.rs
-index bdd4d7e51ec..fe2c36eff51 100644
+index 06470d24581..f3fdd396ebf 100644
 --- a/components/script/dom/serviceworker/notification.rs
 +++ b/components/script/dom/serviceworker/notification.rs
-@@ -881,6 +881,21 @@ impl Notification {
+@@ -864,6 +864,21 @@ impl Notification {
              }
          }
- 
+
 +        // <https://notifications.spec.whatwg.org/#notification-show-steps>
 +        // step 2: Wait for any fetches to complete and notification's resources
 +        //         to be set.

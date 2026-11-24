@@ -81,6 +81,7 @@ Zervo builds the Servo engine from source, so the first build is long
 ```bash
 git clone https://github.com/goddv/zervo
 cd zervo
+# Prepare the sibling Servo checkout as described in docs/SERVO.md.
 cargo build --profile dev-fast
 ./target/dev-fast/zervo
 ```
@@ -95,8 +96,9 @@ rustup toolchain install 1.100.0 --profile minimal --component clippy,rustfmt
 
 ### Downloads
 
-Zervo's pinned Servo fork includes support for file downloads
-([servo#40210][downloads-issue]). Enable the download prompt when building:
+Zervo's patched Servo engine includes support for file downloads. Prepare
+the engine as described in [docs/SERVO.md](docs/SERVO.md), then enable the
+download prompt when building:
 
 ```bash
 cargo build --profile dev-fast --features engine-downloads
@@ -195,4 +197,3 @@ local previewing, checks, and the pull-request checklist.
 [servo]: https://servo.org
 [zen]: https://zen-browser.app
 [phosphor]: https://phosphoricons.com
-[downloads-issue]: https://github.com/servo/servo/issues/40210

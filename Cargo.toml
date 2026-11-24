@@ -3,7 +3,7 @@ members = ["zervo-core"]
 
 [package]
 name = "zervo"
-version = "0.6.1+1"
+version = "0.6.1+2"
 edition = "2024"
 rust-version = "1.100"
 license = "MPL-2.0"
@@ -72,6 +72,7 @@ servo = { version = "=0.8.0", default-features = false, features = [
     "baked-in-resources",
     "bundled_freetype",
     "clipboard",
+    "harfrust",
     "js_jit",
     "subtlecrypto",
     "webgl",

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1.2 — 24 November 2026
+
+- Updated Servo to upstream main at `3f21bf4ee33`, including the SpiderMonkey
+  153.7.0 security update, newer layout and fullscreen fixes, and a
+  GStreamer player initialization fix.
+- Ported Zervo's engine-backed downloads and text-only web notifications to
+  the newer engine. Servo now supplies the larger HTTP/2 header limit directly.
+
+### In-app updates roadmap
+
+Starting with 0.6.1.2, work begins on in-app updates for macOS. The planned
+updater will detect new GitHub releases, verify and stage the installer, and
+atomically replace the app on restart. If the upgrade fails, the previous
+installation will remain available.
+
 ## 0.6.1.1 — 24 November 2026
 
 - Fixed a blank toolbar strip that covered the top of the browser when

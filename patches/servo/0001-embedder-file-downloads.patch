@@ -31,7 +31,7 @@ index 9912a7e9b22..b03847d0ca9 100644
 +    FetchResponseEof(WebViewId, RequestId, Result<(), NetworkError>),
  }
 diff --git a/components/net/fetch/methods.rs b/components/net/fetch/methods.rs
-index a9ba8bb52cc..f4a33b6bc0c 100644
+index 12b3b0b9fbd..95d25e970c5 100644
 --- a/components/net/fetch/methods.rs
 +++ b/components/net/fetch/methods.rs
 @@ -21,9 +21,11 @@ use mime::{self, Mime};
@@ -45,9 +45,9 @@ index a9ba8bb52cc..f4a33b6bc0c 100644
 -    BodyChunkRequest, BodyChunkResponse, CredentialsMode, Destination, Initiator,
 +    BodyChunkRequest, BodyChunkResponse, CredentialsMode, Destination, DownloadHandling, Initiator,
      InsecureRequestsPolicy, InternalRequest, Origin, ParserMetadata, RedirectMode, Referrer,
-     Request, RequestBody, RequestId, RequestMode, ResponseTainting, is_cors_safelisted_method,
-     is_cors_safelisted_request_header,
-@@ -867,6 +869,45 @@ pub async fn main_fetch(
+     Request, RequestBody, RequestId, RequestMode, ResponseTainting, UpgradeInsecureNavigations,
+     is_cors_safelisted_method, is_cors_safelisted_request_header,
+@@ -869,6 +871,45 @@ pub async fn main_fetch(
          target.process_request_body(request);
      }
 
@@ -94,10 +94,10 @@ index a9ba8bb52cc..f4a33b6bc0c 100644
      target.process_response(request, &response);
      // Send Response to Devtools
 diff --git a/components/net/http_loader.rs b/components/net/http_loader.rs
-index b3bf8cedf0a..5ed6045939f 100644
+index cd37583373b..81a59753945 100644
 --- a/components/net/http_loader.rs
 +++ b/components/net/http_loader.rs
-@@ -37,6 +37,7 @@ use ipc_channel::router::ROUTER;
+@@ -39,6 +39,7 @@ use ipc_channel::router::ROUTER;
  use log::{debug, error, info, log_enabled, warn};
  use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
  use net_traits::blob_url_store::UrlWithBlobClaim;
@@ -105,7 +105,7 @@ index b3bf8cedf0a..5ed6045939f 100644
  use net_traits::fetch::headers::get_value_from_header_list;
  use net_traits::http_status::HttpStatus;
  use net_traits::policy_container::{EmbedderPolicyValue, RequestPolicyContainer};
-@@ -93,7 +94,9 @@ use crate::embedder::NetToEmbedderMsg;
+@@ -96,7 +97,9 @@ use crate::embedder::NetToEmbedderMsg;
  use crate::fetch::cors_cache::CorsCache;
  use crate::fetch::fetch_params::FetchParams;
  use crate::fetch::headers::{SecFetchDest, SecFetchMode, SecFetchSite, SecFetchUser};
@@ -116,7 +116,7 @@ index b3bf8cedf0a..5ed6045939f 100644
  use crate::hsts::HstsList;
  use crate::http_cache::{
      CacheKey, CachedResourcesOrGuard, HttpCache, ValidationStatus, construct_response,
-@@ -181,6 +184,99 @@ impl HttpState {
+@@ -184,6 +187,99 @@ impl HttpState {
              ));
          receiver.await.ok()?
      }
@@ -217,10 +217,10 @@ index b3bf8cedf0a..5ed6045939f 100644
 
  /// Step 11 of <https://fetch.spec.whatwg.org/#concept-fetch>.
 diff --git a/components/script/dom/html/embedded_content/htmlareaelement.rs b/components/script/dom/html/embedded_content/htmlareaelement.rs
-index 146992e1d7d..6459fff70cc 100644
+index 51620c9b368..a70dd6692f7 100644
 --- a/components/script/dom/html/embedded_content/htmlareaelement.rs
 +++ b/components/script/dom/html/embedded_content/htmlareaelement.rs
-@@ -377,6 +377,12 @@ impl VirtualMethods for HTMLAreaElement {
+@@ -378,6 +378,12 @@ impl VirtualMethods for HTMLAreaElement {
  }
 
  impl HTMLAreaElementMethods<crate::DomTypeHolder> for HTMLAreaElement {
@@ -234,10 +234,10 @@ index 146992e1d7d..6459fff70cc 100644
      make_getter!(Target, "target");
 
 diff --git a/components/script/dom/html/links/relations.rs b/components/script/dom/html/links/relations.rs
-index def4a7bbd5d..8e898683aa3 100644
+index 1196cbe0e6e..f8fdca29ae5 100644
 --- a/components/script/dom/html/links/relations.rs
 +++ b/components/script/dom/html/links/relations.rs
-@@ -391,6 +391,13 @@ pub(crate) fn follow_hyperlink(
+@@ -392,6 +392,13 @@ pub(crate) fn follow_hyperlink(
      relations: LinkRelations,
      hyperlink_suffix: Option<String>,
  ) {
@@ -251,7 +251,7 @@ index def4a7bbd5d..8e898683aa3 100644
      // Step 1: If subject cannot navigate, then return.
      if subject.cannot_navigate() {
          return;
-@@ -486,8 +493,20 @@ pub(crate) fn follow_hyperlink(
+@@ -487,12 +494,24 @@ pub(crate) fn follow_hyperlink(
          // Step 13: Navigate targetNavigable to urlString using subject's node document,
          //          with referrerPolicy set to referrerPolicy, userInvolvement set to
          //          userInvolvement, and sourceElement set to subject.
@@ -268,24 +268,28 @@ index def4a7bbd5d..8e898683aa3 100644
 +        });
 +
          let secure = target_window.as_global_scope().is_secure_context();
+         let upgrade_insecure_navigations_set = window
+             .as_global_scope()
+             .upgrade_insecure_navigations_set()
+             .clone();
 -        let load_data = LoadData::new(
 +        let mut load_data = LoadData::new(
              LoadOrigin::Script(document.origin().snapshot()),
              url,
              document.about_base_url(),
-@@ -499,6 +518,7 @@ pub(crate) fn follow_hyperlink(
+@@ -505,6 +524,7 @@ pub(crate) fn follow_hyperlink(
              document.has_trustworthy_ancestor_origin(),
              document.creation_sandboxing_flag_set_considering_parent_iframe(),
          );
 +        load_data.download = download;
-         let target = Trusted::new(target_window);
-         let task = task!(navigate_follow_hyperlink: move |cx| {
-             debug!("following hyperlink to {}", load_data.url);
+         debug!("following hyperlink to {}", load_data.url);
+         navigate(cx, target_window, history_handling, false, load_data);
+     };
 diff --git a/components/script/dom/html/textual/htmlanchorelement.rs b/components/script/dom/html/textual/htmlanchorelement.rs
-index c4309dca006..eacd0b58c4a 100644
+index 4f4211bacbc..7142500ef14 100644
 --- a/components/script/dom/html/textual/htmlanchorelement.rs
 +++ b/components/script/dom/html/textual/htmlanchorelement.rs
-@@ -177,6 +177,12 @@ impl HTMLAnchorElementMethods<crate::DomTypeHolder> for HTMLAnchorElement {
+@@ -174,6 +174,12 @@ impl HTMLAnchorElementMethods<crate::DomTypeHolder> for HTMLAnchorElement {
      make_setter!(SetHreflang, "hreflang");
 
      // https://html.spec.whatwg.org/multipage/#dom-a-type
@@ -298,22 +302,11 @@ index c4309dca006..eacd0b58c4a 100644
      make_getter!(Type, "type");
 
      // https://html.spec.whatwg.org/multipage/#dom-a-type
-@@ -370,8 +376,8 @@ impl Activatable for HTMLAnchorElement {
-             ))
-         }
-
--        // Step 2.
--        // TODO: Download the link is `download` attribute is set.
-+        // Step 2: a `download` attribute makes this a download rather than a
-+        // navigation; `follow_hyperlink` handles that.
-         follow_hyperlink(cx, element, self.relations.get(), ismap_suffix);
-     }
- }
 diff --git a/components/script/event_loop/script_thread.rs b/components/script/event_loop/script_thread.rs
-index 0519cea753e..bd505847a3c 100644
+index cac0ee50072..ae904ac62f4 100644
 --- a/components/script/event_loop/script_thread.rs
 +++ b/components/script/event_loop/script_thread.rs
-@@ -3205,6 +3205,9 @@ impl ScriptThread {
+@@ -3216,6 +3216,9 @@ impl ScriptThread {
          };
 
          if is_204_205 {
@@ -324,7 +317,7 @@ index 0519cea753e..bd505847a3c 100644
              if let Some(window) = self.documents.borrow().find_window(pipeline_id) {
                  let window_proxy = window.window_proxy();
 diff --git a/components/script/navigation.rs b/components/script/navigation.rs
-index 3bf51655080..972de012ca8 100644
+index 657569cbab1..b090dd7ac8d 100644
 --- a/components/script/navigation.rs
 +++ b/components/script/navigation.rs
 @@ -18,6 +18,7 @@ use js::context::JSContext;
@@ -335,10 +328,10 @@ index 3bf51655080..972de012ca8 100644
      CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
      RequestBuilder, RequestClient, RequestMode,
  };
-@@ -261,7 +262,21 @@ impl InProgressLoad {
-         .redirect_mode(RedirectMode::Manual)
+@@ -266,7 +267,21 @@ impl InProgressLoad {
          .crash(self.load_data.crash.clone())
          .client(request_client)
+         .user_activation(self.load_data.has_transient_activation)
 -        .url_list(self.url_list.clone());
 +        .url_list(self.url_list.clone())
 +        // A navigation renders what it can and hands anything else — an
@@ -389,10 +382,10 @@ index 5e322024382..4e857328dff 100644
    //         attribute USVString ping;
    [CEReactions]
 diff --git a/components/servo/Cargo.toml b/components/servo/Cargo.toml
-index 5492a0e6f96..f59e4101cb2 100644
+index fcf5b7c2ea3..d2a83607a73 100644
 --- a/components/servo/Cargo.toml
 +++ b/components/servo/Cargo.toml
-@@ -144,6 +144,7 @@ layout = { workspace = true }
+@@ -161,6 +161,7 @@ layout = { workspace = true }
  layout_api = { workspace = true }
  log = { workspace = true }
  media = { workspace = true }
@@ -422,7 +415,7 @@ index 02a9d4cc5e7..0d736f024b5 100644
 
  #[cfg(feature = "webxr")]
 diff --git a/components/servo/servo.rs b/components/servo/servo.rs
-index bb4fb926e02..17bd2760d4b 100644
+index 76229ea376e..a244144b3e7 100644
 --- a/components/servo/servo.rs
 +++ b/components/servo/servo.rs
 @@ -527,6 +527,44 @@ impl ServoInner {
@@ -471,10 +464,10 @@ index bb4fb926e02..17bd2760d4b 100644
      }
 
 diff --git a/components/servo/webview_delegate.rs b/components/servo/webview_delegate.rs
-index 36fdea49313..72f2b661d89 100644
+index a97d36a74fe..107b63fa52a 100644
 --- a/components/servo/webview_delegate.rs
 +++ b/components/servo/webview_delegate.rs
-@@ -1085,6 +1085,54 @@ pub trait WebViewDelegate {
+@@ -1090,6 +1090,54 @@ pub trait WebViewDelegate {
          _tree_update: accesskit::TreeUpdate,
      ) {
      }
@@ -530,13 +523,13 @@ index 36fdea49313..72f2b661d89 100644
 
  pub(crate) struct DefaultWebViewDelegate;
 diff --git a/components/shared/constellation/from_script_message.rs b/components/shared/constellation/from_script_message.rs
-index 66bac3a6c99..eac5b98a4bf 100644
+index 174d8dd476b..0eb70a79f9e 100644
 --- a/components/shared/constellation/from_script_message.rs
 +++ b/components/shared/constellation/from_script_message.rs
-@@ -179,6 +179,13 @@ pub struct LoadData {
-
-     /// If this request is for the initial about:blank document.
+@@ -185,6 +185,13 @@ pub struct LoadData {
      pub is_initial_about_blank: bool,
+     /// <https://html.spec.whatwg.org/multipage/#source-snapshot-params-activation>
+     pub has_transient_activation: bool,
 +
 +    /// Set when this navigation came from a hyperlink with a `download`
 +    /// attribute (or an explicit "Save Link As"): the response is handed to
@@ -547,16 +540,16 @@ index 66bac3a6c99..eac5b98a4bf 100644
  }
 
  impl LoadData {
-@@ -219,6 +226,7 @@ impl LoadData {
-             creation_sandboxing_flag_set,
+@@ -228,6 +235,7 @@ impl LoadData {
              container_document_encoding: None,
              is_initial_about_blank: false,
+             has_transient_activation: false,
 +            download: None,
          }
      }
 
 diff --git a/components/shared/net/lib.rs b/components/shared/net/lib.rs
-index 89df987da64..4a202d0bbfb 100644
+index 237ad4eb766..eaea3bdff81 100644
 --- a/components/shared/net/lib.rs
 +++ b/components/shared/net/lib.rs
 @@ -15,6 +15,7 @@ use cookie::Cookie;
@@ -567,7 +560,7 @@ index 89df987da64..4a202d0bbfb 100644
  use hyper_serde::Serde;
  use hyper_util::client::legacy::Error as HyperError;
  use malloc_size_of::malloc_size_of_is_0;
-@@ -1450,3 +1451,42 @@ pub fn set_default_accept_language(headers: &mut HeaderMap) {
+@@ -1463,3 +1464,42 @@ pub fn set_default_accept_language(headers: &mut HeaderMap) {
  }
 
  pub static PRIVILEGED_SECRET: LazyLock<u32> = LazyLock::new(|| rng().next_u32());
@@ -611,10 +604,10 @@ index 89df987da64..4a202d0bbfb 100644
 +    None
 +}
 diff --git a/components/shared/net/request.rs b/components/shared/net/request.rs
-index e58558555ca..fa65eb6e62d 100644
+index 904273c07f3..dbd4f35a485 100644
 --- a/components/shared/net/request.rs
 +++ b/components/shared/net/request.rs
-@@ -431,6 +431,18 @@ impl RequestHeadersSize for HeaderMap {
+@@ -439,6 +439,18 @@ impl RequestHeadersSize for HeaderMap {
      }
  }
 
@@ -633,7 +626,7 @@ index e58558555ca..fa65eb6e62d 100644
  #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
  pub struct RequestBuilder {
      pub id: RequestId,
-@@ -523,6 +535,13 @@ pub struct RequestBuilder {
+@@ -534,6 +546,13 @@ pub struct RequestBuilder {
      pub crash: Option<String>,
      /// Servo internal: whether this request originates from Servo internal implementation
      pub is_internal_request: InternalRequest,
@@ -647,7 +640,7 @@ index e58558555ca..fa65eb6e62d 100644
  }
 
  impl RequestBuilder {
-@@ -566,9 +585,21 @@ impl RequestBuilder {
+@@ -578,9 +597,21 @@ impl RequestBuilder {
              response_tainting: ResponseTainting::Basic,
              is_internal_request: Default::default(),
              crash: None,
@@ -669,8 +662,8 @@ index e58558555ca..fa65eb6e62d 100644
      pub fn preload_id(mut self, preload_id: PreloadId) -> RequestBuilder {
          self.preload_id = Some(preload_id);
          self
-@@ -774,6 +805,8 @@ impl RequestBuilder {
-         request.client = self.client;
+@@ -793,6 +824,8 @@ impl RequestBuilder {
+         request.user_activation = self.user_activation;
          request.policy_container = self.policy_container;
          request.is_internal_request = self.is_internal_request;
 +        request.download_handling = self.download_handling;
@@ -678,7 +671,7 @@ index e58558555ca..fa65eb6e62d 100644
          request
      }
 
-@@ -862,6 +895,13 @@ pub struct Request {
+@@ -883,6 +916,13 @@ pub struct Request {
      pub crash: Option<String>,
      /// Servo internal: whether this request originates from Servo internal implementation
      pub is_internal_request: InternalRequest,
@@ -692,7 +685,7 @@ index e58558555ca..fa65eb6e62d 100644
  }
 
  impl Request {
-@@ -910,6 +950,8 @@ impl Request {
+@@ -932,6 +972,8 @@ impl Request {
              policy_container: RequestPolicyContainer::Client,
              is_internal_request: Default::default(),
              crash: None,

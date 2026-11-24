@@ -1,6 +1,6 @@
-# Servo v0.8.0 with Zervo's patches and the upstream HTTP/2 fix. See docs/SERVO.md.
+# Patched Servo source for the local 0.6.1.2 build. See docs/SERVO.md.
 [patch.crates-io]
-servo = { git = "https://github.com/Goddv/servo", rev = "3ccbee8c341f3e92d5139a1526b59f19868b05cd" }
+servo = { path = "../servo/components/servo" }
 # egui 0.37 glyph rasterization panics when Servo enables Vello's threading
 # feature. Use the upstream fix from egui#8641 until the next stable release.
 ecolor = { git = "https://github.com/emilk/egui", rev = "56c4cbe5f755e87f5e0643b1e7a2c0fda5640f27" }

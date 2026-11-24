@@ -1084,6 +1084,7 @@ impl RunningApp {
                             mode: WheelMode::DeltaPixel,
                         },
                         self.webview_point(position, scale).into(),
+                        keyboard::keyboard_modifiers_from_winit_modifiers(self.modifiers),
                     )));
                 }
             },
