@@ -7,10 +7,50 @@
 //! of `ui.rs` worth lifting out of it.
 
 use egui::epaint::Mesh;
-use egui::{Color32, CornerRadius, Rect, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Color32, CornerRadius, Frame, Margin, Rect, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::glass::{self};
 use crate::theme::{self, Palette};
+
+pub(crate) const BUILTIN_COLUMN: f32 = 680.0;
+pub(crate) const BUILTIN_HEADING: f32 = 23.0;
+
+pub(crate) fn paint_builtin_page(root: &Ui, rect: Rect, palette: &Palette) {
+    let colour = if palette.dark {
+        palette.bg
+    } else {
+        theme::mix(Color32::WHITE, palette.bg, 0.28)
+    };
+    root.ctx()
+        .layer_painter(egui::LayerId::background())
+        .rect_filled(rect, theme::content_corners(palette), colour);
+}
+
+pub(crate) fn builtin_card(palette: &Palette) -> Frame {
+    let colour = if palette.dark {
+        theme::mix(palette.bg, Color32::WHITE, 0.055)
+    } else {
+        Color32::WHITE
+    };
+    Frame::NONE
+        .fill(colour)
+        .stroke(Stroke::new(1.0, palette.border.gamma_multiply(0.72)))
+        .corner_radius(13)
+        .inner_margin(Margin::same(18))
+}
+
+pub(crate) fn builtin_page_rect(content: Rect, controls_room: f32) -> Rect {
+    let inset = (content.width() * 0.035).clamp(12.0, 36.0);
+    Rect::from_min_max(
+        pos2(content.left() + inset, content.top() + controls_room + 22.0),
+        pos2(content.right() - inset, content.bottom() - 10.0),
+    )
+}
+
+pub(crate) fn centre_builtin_column(rect: Rect) -> Rect {
+    let inset = ((rect.width() - BUILTIN_COLUMN) * 0.5).max(0.0);
+    rect.shrink2(vec2(inset, 0.0))
+}
 
 pub(crate) fn snap_rect(rect: Rect, pixels_per_point: f32) -> Rect {
     let snap = |value: f32| (value * pixels_per_point).round() / pixels_per_point;

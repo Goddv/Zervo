@@ -1315,6 +1315,21 @@ pub fn lerp(a: &Palette, b: &Palette, t: f32) -> Palette {
 }
 
 impl Palette {
+    /// Neutral fill for buttons with a permanent background.
+    pub fn button_fill(&self) -> Color32 {
+        mix(self.surface, self.surface_hover, 0.62)
+    }
+
+    /// Accent fill for pressed or selected buttons with a permanent background.
+    pub fn button_pressed_fill(&self) -> Color32 {
+        let accent = mix(self.surface, self.accent, 0.88);
+        if self.dark {
+            readable_over(accent, Color32::WHITE, MIN_INK_CONTRAST)
+        } else {
+            accent
+        }
+    }
+
     /// Stamp the reader's translucency setting on.
     ///
     /// Both copies of it, so they cannot come apart: the palette's own field
@@ -2160,6 +2175,11 @@ pub fn resolve(
 
 pub fn apply(ctx: &Context, palette: &Palette) {
     let mut style = (*ctx.global_style()).clone();
+    for role in [egui::TextStyle::Body, egui::TextStyle::Button] {
+        style
+            .text_styles
+            .insert(role, egui::FontId::proportional(13.0));
+    }
 
     // egui's own widgets — buttons, combo boxes, tooltips, the scrollbars —
     // are styled from the material too, so a theme that changes what a control
@@ -2223,7 +2243,7 @@ pub fn apply(ctx: &Context, palette: &Palette) {
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.text_muted);
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
     visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.border);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text_muted);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text);
     // Every hint in the application, and the only way to set one.
     //
     // `TextEdit::hint_text` takes a `RichText` and then throws its colour away:

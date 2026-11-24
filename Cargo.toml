@@ -3,7 +3,7 @@ members = ["zervo-core"]
 
 [package]
 name = "zervo"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.100"
 license = "MPL-2.0"
@@ -80,7 +80,7 @@ servo = { version = "=0.8.0", default-features = false, features = [
 
 # The version is here as well as the path so this is not a wildcard
 # dependency, which `cargo deny check bans` rejects and rightly so.
-zervo-core = { path = "zervo-core", version = "0.6.0" }
+zervo-core = { path = "zervo-core", version = "0.6.1" }
 
 # ── Chrome ────────────────────────────────────────────────────────────────
 egui = "0.37.0"
@@ -139,6 +139,7 @@ objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSAccessibility",
     "NSAnimationContext",
+    "NSAppearance",
     "NSApplication",
     "NSCell",
     "NSButton",
@@ -163,6 +164,7 @@ objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "NSData",
     "NSDictionary",
     "NSGeometry",
+    "NSKeyValueObserving",
     "NSRunLoop",
     "NSString",
     "NSURL",

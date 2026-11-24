@@ -17,7 +17,8 @@ the one genuinely surprising thing in the codebase.
 
 [The translation guide](docs/TRANSLATING.md) explains how to edit a catalogue,
 preview it in a built copy of Zervo, and open a pull request. Partial
-translations work because missing messages fall back to English.
+translations work because missing messages fall back to English. Translation
+pull requests do not need to include Rust changes.
 
 ## Ground rules
 
@@ -53,9 +54,8 @@ translations work because missing messages fall back to English.
 [docs/TODO.md](docs/TODO.md) is the working queue and the better place to pick
 from. The easiest starts on it:
 
-- **Try one of the Linux packages, the AppImage, or the Windows build and say
-  what happened.** None of them has ever been run. No Rust required — install
-  the artefact from a release and report whether it starts.
+- **Translate one part of the interface.** A partial Fluent catalogue is a
+  valid contribution, and untranslated messages remain in English.
 - Session restore (workspaces and tabs across launches).
 - Clearing cookies and site data from Settings — the engine calls exist.
 - A favicon cache on disk, so history and favourites show icons.

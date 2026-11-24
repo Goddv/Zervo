@@ -50,6 +50,8 @@ mod gpu;
 mod icons;
 mod keyboard;
 mod library;
+#[cfg(target_os = "macos")]
+mod macos_appearance;
 mod morphicons;
 mod newtab;
 mod notifications;
@@ -184,6 +186,8 @@ struct RunningApp {
     settings: Settings,
     /// Current OS appearance, driving ThemeMode::Auto.
     system_dark: bool,
+    #[cfg(target_os = "macos")]
+    _appearance_observer: Option<macos_appearance::AppearanceObserver>,
     /// A picture of the window, when one was asked for. Debug builds only.
     shot: Option<shot::Shot>,
     /// Which workspace the chrome is currently in.
@@ -438,7 +442,7 @@ impl ApplicationHandler<WakerEvent> for App {
 
         let settings = settings::load();
         l10n::select(&settings.language);
-        let system_dark = matches!(window.theme(), Some(winit::window::Theme::Dark));
+        let system_dark = system_is_dark(&window);
         theme::apply(
             &egui_glow.egui_ctx,
             &theme::resolve(
@@ -625,6 +629,8 @@ impl ApplicationHandler<WakerEvent> for App {
             egui_glow,
             settings,
             system_dark,
+            #[cfg(target_os = "macos")]
+            _appearance_observer: macos_appearance::AppearanceObserver::install(waker.0.clone()),
             favicons: HashMap::new(),
             settings_open: false,
             modifiers: ModifiersState::default(),
@@ -700,6 +706,11 @@ impl ApplicationHandler<WakerEvent> for App {
         };
         match event {
             WakerEvent::Engine => app.state.servo.spin_event_loop(),
+            #[cfg(target_os = "macos")]
+            WakerEvent::SystemAppearanceChanged => {
+                app.update_system_theme(system_is_dark(&app.state.window));
+                app.state.servo.spin_event_loop();
+            },
             WakerEvent::AnimationFrame => {
                 app.animation_pending = false;
                 app.state.window.request_redraw();
@@ -773,15 +784,12 @@ impl RunningApp {
                 return;
             },
             WindowEvent::ThemeChanged(new_theme) => {
-                self.system_dark = matches!(new_theme, winit::window::Theme::Dark);
-                self.applied_theme = (
-                    self.settings.theme,
-                    self.accent(),
-                    self.system_dark,
-                    self.settings.appearance.translucency,
-                );
-                self.apply_theme();
-                state.window.request_redraw();
+                #[cfg(target_os = "macos")]
+                let dark = macos_appearance::system_is_dark()
+                    .unwrap_or(new_theme == winit::window::Theme::Dark);
+                #[cfg(not(target_os = "macos"))]
+                let dark = matches!(new_theme, winit::window::Theme::Dark);
+                self.update_system_theme(dark);
                 return;
             },
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -1060,6 +1068,9 @@ impl RunningApp {
         self.content_rect_points.contains(point)
             && !self.settings_open
             && !self.controls_open
+            // Popup presses and outside dismissal belong to the chrome, even
+            // when a menu opens beyond the sidebar over a live webpage.
+            && !egui::Popup::is_any_open(&self.egui_glow.egui_ctx)
             && !self
                 .sidebar_overlay
                 .is_some_and(|rect| rect.contains(point))
@@ -1435,6 +1446,7 @@ impl RunningApp {
                 settings,
                 palette,
                 window_controls,
+                sidebar_presence: 0.0,
                 device_pixels_per_css_pixel,
                 native_glass: ui::NativeGlass {
                     vibrancy_available: native_available,
@@ -2383,6 +2395,7 @@ impl RunningApp {
                     let mut browser = state.browser.borrow_mut();
                     let grouped = browser.group_tabs(onto, dragged);
                     if let Some((folder, true)) = grouped {
+                        ui::animate_folder_creation(&self.egui_glow.egui_ctx, folder);
                         browser.workspace_edit = None;
                         browser.folder_edit =
                             Some((folder, l10n::text("sidebar-new-folder").to_owned()));
@@ -2405,6 +2418,7 @@ impl RunningApp {
                 let index = tabs.len();
                 let name = l10n::text("sidebar-new-folder").to_owned();
                 let folder = browser.add_folder(workspace, name.clone());
+                ui::animate_folder_creation(&self.egui_glow.egui_ctx, folder);
                 if let Some(tab) = tab {
                     browser.move_tab(tab, workspace, index, Some(folder));
                 }
@@ -2474,18 +2488,12 @@ impl RunningApp {
                     self.apply_action(UiAction::SelectWorkspace(index));
                 }
             },
-            UiAction::SelectWorkspace(index) => {
-                let tab = {
-                    let mut browser = state.browser.borrow_mut();
-                    if index >= browser.workspaces.len() {
-                        return;
-                    }
-                    browser
-                        .tab_for_workspace(index)
-                        .unwrap_or_else(|| browser.add_zervo_page(index))
-                };
-                self.apply_action(UiAction::SelectTab(tab));
-                state.browser.borrow().save_spaces();
+            UiAction::SelectWorkspace(index) => self.select_workspace(index, None),
+            UiAction::CycleWorkspace { forward } => {
+                let target = state.browser.borrow().adjacent_workspace(forward);
+                if let Some(target) = target {
+                    self.select_workspace(target, Some(forward));
+                }
             },
             UiAction::DragWindow => {
                 let _ = state.window.drag_window();
@@ -2503,6 +2511,13 @@ impl RunningApp {
                 self.settings.save();
                 // Only redo the parts whose input actually changed — see the
                 // note on `applied_theme`.
+                let window_theme_changed = self.settings.theme != self.applied_theme.0;
+                if window_theme_changed {
+                    sync_window_theme(&state.window, self.settings.theme);
+                    if self.settings.theme == theme::ThemeMode::Auto {
+                        self.system_dark = system_is_dark(&state.window);
+                    }
+                }
                 let look = (
                     self.settings.theme,
                     self.accent(),
@@ -2530,8 +2545,29 @@ impl RunningApp {
         }
     }
 
-    /// The palette to paint with — the target one, or a point on the way to it
-    /// while a theme change is crossing over.
+    fn select_workspace(&mut self, index: usize, forward: Option<bool>) {
+        let state = self.state.clone();
+        let (tab, previous) = {
+            let mut browser = state.browser.borrow_mut();
+            if index >= browser.workspaces.len() {
+                return;
+            }
+            let previous = browser.active_workspace;
+            let tab = browser
+                .tab_for_workspace(index)
+                .unwrap_or_else(|| browser.add_zervo_page(index));
+            (tab, previous)
+        };
+        if index != previous {
+            ui::animate_workspace_switch(
+                &self.egui_glow.egui_ctx,
+                forward.unwrap_or(index > previous),
+            );
+        }
+        self.apply_action(UiAction::SelectTab(tab));
+        state.browser.borrow().save_spaces();
+    }
+
     /// Run a bound swipe. Dispatched from the event handler rather than from a
     /// frame, so unlike every other caller of these actions it has to ask for
     /// the repaint itself.
@@ -2548,13 +2584,9 @@ impl RunningApp {
                 self.apply_action(ui::UiAction::NewTab { workspace });
             },
             Action::NextWorkspace | Action::PreviousWorkspace => {
-                let next = state
-                    .browser
-                    .borrow()
-                    .adjacent_workspace(matches!(action, Action::NextWorkspace));
-                if let Some(index) = next {
-                    self.apply_action(UiAction::SelectWorkspace(index));
-                }
+                self.apply_action(UiAction::CycleWorkspace {
+                    forward: matches!(action, Action::NextWorkspace),
+                });
             },
             Action::ToggleShelf => {
                 if !self.settings.show_sidebar_widgets {
@@ -2611,12 +2643,29 @@ impl RunningApp {
         .filling_window(self.settings.layout == crate::settings::Layout::FullPage)
     }
 
+    fn update_system_theme(&mut self, dark: bool) {
+        if self.settings.theme != theme::ThemeMode::Auto || self.system_dark == dark {
+            return;
+        }
+        let from = self.palette();
+        self.system_dark = dark;
+        self.applied_theme.2 = dark;
+        self.start_theme_fade_from(from);
+    }
+
     /// Begin crossing to whatever the settings now say, from wherever the
     /// chrome currently is — so changing the theme twice in quick succession
     /// carries on from the middle rather than snapping back.
     fn start_theme_fade(&mut self) {
+        self.start_theme_fade_from(self.palette());
+    }
+
+    /// Begin a theme crossfade from the palette that was visible before an
+    /// external event changed the target. System appearance notifications need
+    /// this separate form because `system_dark` has already changed by the
+    /// time they reach the event loop.
+    fn start_theme_fade_from(&mut self, from: Palette) {
         if self.animations_allowed() {
-            let from = self.palette();
             self.theme_fade = Some((from, std::time::Instant::now()));
             self.apply_platform_theme();
         } else {
@@ -2647,7 +2696,6 @@ impl RunningApp {
     fn apply_platform_theme(&mut self) {
         let target = self.target_palette();
         self.state.set_engine_theme(target.dark);
-        sync_window_theme(&self.state.window, self.settings.theme);
         // Every material here is appearance-adaptive on its own; what differs
         // is how much of the desktop survives it. `UnderWindowBackground` is
         // the clearest of them — it is meant for what shows *through* a window
@@ -2711,8 +2759,7 @@ impl RunningApp {
 }
 
 /// Keep the OS window appearance (titlebar material, traffic lights) in sync
-/// with the app theme. Auto releases the override so the window follows the
-/// system again (and keeps delivering ThemeChanged events).
+/// with the app theme. Auto releases the override so AppKit takes over.
 fn sync_window_theme(window: &Window, mode: theme::ThemeMode) {
     let override_theme = match mode {
         theme::ThemeMode::Auto => None,
@@ -2720,6 +2767,14 @@ fn sync_window_theme(window: &Window, mode: theme::ThemeMode) {
         theme::ThemeMode::Dark => Some(winit::window::Theme::Dark),
     };
     window.set_theme(override_theme);
+}
+
+fn system_is_dark(window: &Window) -> bool {
+    #[cfg(target_os = "macos")]
+    if let Some(dark) = macos_appearance::system_is_dark() {
+        return dark;
+    }
+    window.theme() == Some(winit::window::Theme::Dark)
 }
 
 /// Use the macOS system font (SF Pro) for all proportional text, falling back
@@ -2797,6 +2852,9 @@ enum WakerEvent {
     Engine,
     /// The window's display is ready for the next animation frame.
     AnimationFrame,
+    /// AppKit's application appearance changed.
+    #[cfg(target_os = "macos")]
+    SystemAppearanceChanged,
     /// The platform's accessibility client is asking for the tree, or asking
     /// for something in it to be activated. `accesskit_winit` delivers these
     /// through the same proxy, which is why this is an enum now.

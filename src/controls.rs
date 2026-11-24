@@ -239,9 +239,9 @@ impl Controls {
                 // Staying is the primary action: it is the one that cannot lose
                 // anything, and the page only asked because there is something to
                 // lose.
-                stay |= button(&mut child, tr("dialog-stay"), palette, true);
+                stay |= button(&mut child, tr("dialog-stay"), palette);
                 child.add_space(8.0);
-                leave = button(&mut child, tr("dialog-leave"), palette, false);
+                leave = button(&mut child, tr("dialog-leave"), palette);
             },
         );
         if !(stay || leave) {
@@ -305,9 +305,9 @@ impl Controls {
                         .max_rect(row)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                allow = button(&mut child, tr("dialog-allow"), palette, true);
+                allow = button(&mut child, tr("dialog-allow"), palette);
                 child.add_space(8.0);
-                deny |= button(&mut child, tr("dialog-block"), palette, false);
+                deny |= button(&mut child, tr("dialog-block"), palette);
             },
         );
         if !(allow || deny) {
@@ -388,9 +388,9 @@ impl Controls {
                         .max_rect(row)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                allow = button(&mut child, tr("common-save"), palette, true);
+                allow = button(&mut child, tr("common-save"), palette);
                 child.add_space(8.0);
-                deny |= button(&mut child, tr("common-cancel"), palette, false);
+                deny |= button(&mut child, tr("common-cancel"), palette);
             },
         );
 
@@ -489,9 +489,9 @@ impl Controls {
                 // No Enter shortcut on the primary button here, unlike the page
                 // dialogs: a stray Return meant for the page should not be able
                 // to hand a password over.
-                allow = button(&mut child, tr("dialog-sign-in"), palette, true);
+                allow = button(&mut child, tr("dialog-sign-in"), palette);
                 child.add_space(8.0);
-                deny |= button(&mut child, tr("dialog-not-now"), palette, false);
+                deny |= button(&mut child, tr("dialog-not-now"), palette);
             },
         );
 
@@ -750,44 +750,8 @@ fn dim(palette: &Palette) -> Color32 {
 }
 
 /// A button. Returns true when clicked.
-fn button(ui: &mut Ui, label: &str, palette: &Palette, primary: bool) -> bool {
-    let width = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), FontId::proportional(13.0), palette.text)
-        .size()
-        .x
-        + 26.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
-    let hovered = response.hovered();
-    let fill = match (primary, hovered) {
-        (true, true) => palette.accent,
-        (true, false) => palette.accent.gamma_multiply(0.85),
-        (false, true) => palette.surface_hover,
-        (false, false) => palette.surface,
-    };
-    ui.painter()
-        .rect_filled(rect, palette.corner(Tier::Control), fill);
-    if !primary {
-        ui.painter().rect_stroke(
-            rect,
-            palette.corner(Tier::Control),
-            Stroke::new(1.0_f32, palette.border),
-            StrokeKind::Inside,
-        );
-    }
-    let text = if primary {
-        Color32::WHITE
-    } else {
-        palette.text
-    };
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(13.0),
-        text,
-    );
-    response.on_hover_cursor(CursorIcon::PointingHand).clicked()
+fn button(ui: &mut Ui, label: &str, palette: &Palette) -> bool {
+    crate::widgets::label_button(ui, palette, label, 28.0, 26.0, false).clicked()
 }
 
 /// The two keys a dialog answers to.
@@ -895,13 +859,13 @@ fn draw_dialog(
                     .max_rect(row)
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
             );
-            if button(&mut child, "OK", palette, true) || confirmed {
+            if button(&mut child, tr("common-ok"), palette) || confirmed {
                 resolution = Some(Resolution::Accept);
             }
             let cancellable = !matches!(dialog, SimpleDialog::Alert(_));
             if cancellable {
                 child.add_space(8.0);
-                if button(&mut child, tr("common-cancel"), palette, false) || escape {
+                if button(&mut child, tr("common-cancel"), palette) || escape {
                     resolution = Some(Resolution::Cancel);
                 }
             } else if escape {
@@ -1008,7 +972,7 @@ fn draw_select(
                     .max_rect(row)
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
             );
-            if button(&mut child, tr("common-done"), palette, true) {
+            if button(&mut child, tr("common-done"), palette) {
                 picked = Some(Picked::Done);
             }
         }
@@ -1035,21 +999,10 @@ fn select_row(
             Sense::click()
         },
     );
-    if selected {
-        ui.painter().rect_filled(
-            rect,
-            palette.corner(Tier::Control),
-            palette.accent.gamma_multiply(0.28),
-        );
-    } else if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, palette.corner(Tier::Control), palette.surface_hover);
-    }
-    let colour = if disabled {
-        palette.text_muted.gamma_multiply(0.6)
-    } else {
-        palette.text
-    };
+    let colour = crate::widgets::button_ink(ui, &response, rect, palette, selected);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::ListBoxOption, !disabled, selected, label)
+    });
     crate::overlay_glass::row_label(
         ui,
         rect.with_min_x(rect.left() + 8.0 + indent)

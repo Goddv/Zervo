@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.6.1 — 24 November 2026
+
+Zervo 0.6.1 fixes live macOS appearance switching, polishes the sidebar and
+Spaces, and brings the browser’s built-in pages into line with Settings.
+
+### Sidebar, Spaces, and tabs
+
+- Swipe across the sidebar to switch Spaces with a directional transition.
+  The Space header, its folders, and its tabs move together.
+- Pinned tabs use a compact grid of rounded squares below the Space header
+  and above folders. Layout changes update the sidebar immediately, including
+  section visibility and website icons.
+- Added folder creation and Space-switch animations. Docking, hover reveal,
+  and sidebar-width changes settle without the old black resize line.
+- Restored the original low-chrome sidebar treatment for controls and section
+  labels while retaining improved light and dark contrast.
+- Fixed popup layering so menus opened from the sidebar render above the
+  overlay rather than behind it.
+
+### Native macOS appearance
+
+- The docked sidebar is now part of the window's native Liquid Glass material,
+  while the hover-revealed sidebar preserves the same live backdrop behavior.
+- Fixed Auto appearance so the chrome and webpages keep following macOS when
+  you switch between light and dark several times without restarting.
+- Corrected page-frame seams and corner clipping in light and dark themes.
+  Built-in pages now share the settings page’s background, typography,
+  controls, and empty-state treatment.
+- Kept the floating sidebar’s glass at a stable material width during reveal
+  to reduce flicker as the visible portion slides in.
+- Reworked hover tooltips as small glass surfaces anchored to their controls.
+
+### Preferences and interaction design
+
+- Rebuilt Settings with clearer navigation, larger content sections, higher
+  contrast search text, neutral page and card surfaces, and consistent copy.
+- Matched buttons and segmented controls across New Tab, setup, and built-in
+  pages. Command bar rows show a fill on hover or selection.
+- The address command field has a stable default height and a conventional
+  outline. The settings search field has balanced vertical text alignment.
+- Renaming a Space no longer jumps as its editor opens, and the active editor
+  uses the same visual state as the active tab.
+- New macOS installs start with the maintained Zervo profile: Auto appearance,
+  classic Apple blue, a 0.10 chrome tint, Google search, automatic downloads,
+  site icons, the Liquid Glass material, and the current sidebar arrangement.
+  First-run setup remains available for new profiles.
+
+### Distribution and translation
+
+- Apple Silicon and Intel macOS disk images ship alongside the source archive
+  and checksums.
+- Added a contributor-ready translation path in the README and expanded the
+  Fluent translation guide with safe partial-catalogue behavior, a preview
+  command, validation, and a pull-request checklist.
+
 ## 0.6.0 — 23 November 2026
 
 Zervo 0.6.0 focuses on macOS. Downloads are available for Apple Silicon and

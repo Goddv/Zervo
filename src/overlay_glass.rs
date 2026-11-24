@@ -12,8 +12,10 @@ pub(crate) enum Role {
     Menu,
     Panel,
     Sidebar,
+    DockedSidebar,
     Dialog,
     Status,
+    Tooltip,
     Field,
     Tab,
     Widget,
@@ -24,12 +26,18 @@ impl Role {
         match self {
             Self::Menu => 14,
             Self::Panel | Self::Sidebar => 18,
+            Self::DockedSidebar => 0,
             Self::Dialog => 20,
-            Self::Status => 10,
+            Self::Status | Self::Tooltip => 10,
             Self::Field => 12,
             Self::Tab => 10,
             Self::Widget => 18,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn is_sidebar(self) -> bool {
+        matches!(self, Self::Sidebar | Self::DockedSidebar)
     }
 }
 
@@ -124,6 +132,74 @@ fn menu_style(style: &mut egui::Style) {
     style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
     style.visuals.menu_corner_radius = egui::CornerRadius::same(Role::Menu.radius());
     style.wrap_mode = Some(egui::TextWrapMode::Truncate);
+}
+
+pub(crate) fn tooltip(
+    response: egui::Response,
+    palette: &crate::theme::Palette,
+    label: impl Into<String>,
+) -> egui::Response {
+    use egui::{Align2, FontId, Frame, RectAlign, Shape, Stroke, StrokeKind, Tooltip, vec2};
+
+    let mut tip = Tooltip::for_enabled(&response).gap(7.0);
+    let id = response.id.with("glass-tooltip-start");
+    let ctx = &response.ctx;
+    if !tip.popup.is_open() {
+        ctx.data_mut(|data| data.remove_temp::<f64>(id));
+        return response;
+    }
+    let now = ctx.input(|input| input.time);
+    let started = ctx.data_mut(|data| *data.get_temp_mut_or_insert_with(id, || now));
+    let duration = f64::from(palette.material.animation.min(0.18));
+    let progress = if duration > 0.0 {
+        crate::glass::ease_out(((now - started) / duration).clamp(0.0, 1.0) as f32)
+    } else {
+        1.0
+    };
+    if progress < 1.0 {
+        ctx.request_repaint();
+    }
+
+    let label = label.into();
+    let galley = ctx.fonts_mut(|fonts| {
+        fonts.layout(
+            label.clone(),
+            FontId::proportional(12.5),
+            palette.text,
+            220.0,
+        )
+    });
+    let size = galley.size() + vec2(20.0, 10.0);
+    tip = tip.width(size.x).accessible_name(label);
+    tip.popup = tip.popup.align(RectAlign::TOP).frame(Frame::NONE);
+    tip.show(|ui| {
+        let (_, end) = ui.allocate_space(size);
+        let start = response.rect.shrink(2.0);
+        let rect = Rect::from_min_max(
+            start.min.lerp(end.min, progress),
+            start.max.lerp(end.max, progress),
+        );
+        let surface = Surface::begin(ui);
+        let radius = Role::Tooltip.radius();
+        let painter = ui.painter();
+        if !surface.is_native() {
+            painter.add(Shape::rect_filled(rect, radius, palette.surface));
+            painter.rect_stroke(
+                rect,
+                radius,
+                Stroke::new(1.0, palette.border),
+                StrokeKind::Inside,
+            );
+        }
+        let origin = Align2::CENTER_CENTER
+            .align_size_within_rect(galley.size(), rect)
+            .min;
+        painter
+            .with_clip_rect(rect)
+            .galley_with_override_text_color(origin, galley, palette.text.gamma_multiply(progress));
+        surface.finish(ui, rect, Role::Tooltip);
+    });
+    response
 }
 
 fn enabled(ctx: &Context) -> bool {
@@ -388,8 +464,16 @@ mod macos {
             // Keep the sidebar in its own permanent plane between content
             // controls and popups so changes to either cannot reorder it.
             host.addSubview(&underlays);
-            host.addSubview(&sidebar.root);
-            host.addSubview(&container);
+            host.addSubview_positioned_relativeTo(
+                &sidebar.root,
+                NSWindowOrderingMode::Above,
+                Some(&underlays),
+            );
+            host.addSubview_positioned_relativeTo(
+                &container,
+                NSWindowOrderingMode::Above,
+                Some(&sidebar.root),
+            );
             Some(Self {
                 content,
                 host,
@@ -456,13 +540,14 @@ mod macos {
             let mut index = 0;
             let mut sidebar_visible = false;
             for frame in &mut renderer.frames[..count] {
-                let layer = if frame.role == Role::Sidebar {
+                let layer = if frame.role.is_sidebar() {
                     sidebar_visible = true;
                     log::trace!(
                         target: "zervo::sidebar",
-                        "presenting sidebar at {:.2}..{:.2}",
+                        "presenting sidebar at {:.2}..{:.2} ({:?})",
                         frame.material_rect().left(),
-                        frame.material_rect().right()
+                        frame.material_rect().right(),
+                        frame.role,
                     );
                     &mut self.sidebar
                 } else {
@@ -526,9 +611,15 @@ mod macos {
             let material = Material::new(role, mtm)?;
             root.addSubview(material.effect.view());
             let content = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
-            match &material.effect {
-                Effect::Glass(view) => view.setContentView(Some(&content)),
-                Effect::Frost(view) => view.addSubview(&content),
+            if role.is_sidebar() {
+                // Keep the ink and its frosted controls in the same plane
+                // while the backdrop switches between docked and floating.
+                root.addSubview(&content);
+            } else {
+                match &material.effect {
+                    Effect::Glass(view) => view.setContentView(Some(&content)),
+                    Effect::Frost(view) => view.addSubview(&content),
+                }
             }
             let ink = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
             let ink_layer = CALayer::new();
@@ -569,7 +660,14 @@ mod macos {
                 self.root.setFrame(local);
             }
             let material_frame = NSRect::new(NSPoint::ZERO, local.size);
-            self.material.place(material_frame, zoom);
+            let effect = self.material.effect.view();
+            let show_material = frame.role != Role::DockedSidebar;
+            if effect.isHidden() == show_material {
+                effect.setHidden(!show_material);
+            }
+            if show_material {
+                self.material.place(material_frame, zoom);
+            }
             if self.content.frame() != material_frame {
                 self.content.setFrame(material_frame);
             }

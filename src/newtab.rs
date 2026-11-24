@@ -883,39 +883,9 @@ fn header_button(
         Id::unique("zervo_newtab_header").with(label),
         Sense::click(),
     );
-    let hover = glass::ease_out(root.ctx().animate_bool_with_time(
-        response.id.with("hover"),
-        response.hovered(),
-        0.12,
-    ));
-    let on = glass::ease_out(
-        root.ctx()
-            .animate_bool_with_time(response.id.with("on"), lit, 0.18),
-    );
-
-    // No shadow: four of these sit shoulder to shoulder, and a drop shadow
-    // each would bleed onto the neighbour.
-    // No `fades()`: these pills exist for one reason, which is that the four
-    // controls have to be readable on somebody else's photograph. Letting the
-    // card-opacity setting thin them away puts back the exact bug they were
-    // added to fix, and they are buttons rather than cards besides.
-    let mut material = Glass::tier(Tier::Control)
-        .strength(0.7 + 0.3 * hover.max(on))
-        .no_shadow()
-        // `0 0 0 1px accent(.2)` on 5a's chips.
-        .ring(palette.accent_ring(0.2 + 0.3 * hover.max(on)))
-        .opaque(palette.bg);
-    if on > 0.0 {
-        material = material.tint(theme::mix(palette.surface, palette.accent, 0.45 * on));
-    }
+    let color = crate::widgets::button_ink(root, &response, rect, palette, lit);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let painter = root.painter();
-    painter.extend(glass::shapes(rect, palette, material));
-
-    let color = if on > 0.5 {
-        theme::mix(palette.text, palette.accent, 0.85)
-    } else {
-        theme::mix(palette.text_muted, palette.text, hover)
-    };
     icons::draw_icon(
         painter,
         Rect::from_center_size(pos2(rect.min.x + 15.0, rect.center().y), vec2(14.0, 14.0)),
@@ -1375,27 +1345,13 @@ fn draw_handles(
 ) {
     let close =
         Rect::from_center_size(pos2(rect.max.x - 12.0, rect.min.y + 12.0), vec2(18.0, 18.0));
-    area.painter().rect_filled(
+    let remove = area.interact(
         close,
-        CornerRadius::same(palette.radius(Tier::Control)),
-        palette.surface_hover,
+        Id::unique("zervo_newtab_remove").with(index),
+        Sense::click(),
     );
-    icons::draw_icon(
-        area.painter(),
-        close.shrink(4.0),
-        Icon::Close,
-        palette.text_muted,
-    );
-    if area
-        .interact(
-            close,
-            Id::unique("zervo_newtab_remove").with(index),
-            Sense::click(),
-        )
-        .on_hover_cursor(CursorIcon::PointingHand)
-        .on_hover_text(tr("newtab-take-this-card-off"))
-        .clicked()
-    {
+    icons::paint_icon_button(area, &remove, Icon::Close, 10.0, palette);
+    if crate::overlay_glass::tooltip(remove, palette, tr("newtab-take-this-card-off")).clicked() {
         changes.push(Change::Remove(index));
     }
     icons::draw_icon(
@@ -2050,24 +2006,7 @@ fn draw_site_chip(
         Id::unique("zervo_newtab_chip").with(label),
         Sense::click(),
     );
-    let hover = glass::ease_out(root.ctx().animate_bool_with_time(
-        response.id.with("hover"),
-        response.hovered(),
-        0.12,
-    ));
-    glass::paint(
-        root.painter(),
-        rect,
-        palette,
-        Glass::tier(Tier::Control)
-            .radius_exact((CHIP_HEIGHT * 0.5) as u8)
-            .strength(if quiet { 0.5 } else { 0.72 } + 0.28 * hover)
-            .ring(palette.accent_ring(0.14 * hover))
-            .no_shadow()
-            .opaque(palette.bg),
-    );
-    let ink = Ink::new(palette, false).over(palette, rect, true);
-    let tint = if quiet { ink.muted } else { ink.text };
+    let tint = crate::widgets::button_ink(root, &response, rect, palette, false);
     if quiet {
         icons::draw_icon(
             root.painter(),
@@ -2090,7 +2029,7 @@ fn draw_site_chip(
             Align2::CENTER_CENTER,
             crate::ui::initial(label, label),
             FontId::proportional(8.0),
-            ink.text,
+            palette.text,
         );
     }
     root.painter().text(
@@ -2937,19 +2876,7 @@ fn draw_now_playing(
             id.with(("transport", index)),
             if live { Sense::click() } else { Sense::hover() },
         );
-        if live && response.hovered() {
-            area.painter().rect_filled(
-                hit,
-                CornerRadius::same(palette.radius(Tier::Row)),
-                palette.surface_hover,
-            );
-        }
-        icons::draw_icon(
-            area.painter(),
-            Rect::from_center_size(centre, vec2(15.0, 15.0)),
-            icon,
-            palette.text,
-        );
+        icons::paint_icon_button(area, &response, icon, 15.0, &palette);
         if live && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
             actions.push(UiAction::MediaAction(action));
         }
@@ -3192,22 +3119,7 @@ fn draw_workspaces(
             id.with(("workspace", index)),
             if live { Sense::click() } else { Sense::hover() },
         );
-        let hover = glass::ease_out(area.ctx().animate_bool_with_time(
-            response.id.with("hover"),
-            live && response.hovered(),
-            0.12,
-        ));
-        if hover > 0.0 || index == active {
-            area.painter().rect_filled(
-                row,
-                CornerRadius::same(palette.radius(Tier::Control)),
-                if index == active {
-                    palette.active
-                } else {
-                    palette.surface_hover.gamma_multiply(hover)
-                },
-            );
-        }
+        let ink = crate::widgets::button_ink(area, &response, row, &palette, index == active);
         area.painter().circle_filled(
             pos2(row.min.x + 10.0, row.center().y),
             4.0,
@@ -3223,14 +3135,14 @@ fn draw_workspaces(
                 row.width() - 52.0,
             ),
             FontId::proportional(12.5),
-            palette.text,
+            ink,
         );
         area.painter().text(
             pos2(row.max.x - 8.0, row.center().y),
             Align2::RIGHT_CENTER,
             count.to_string(),
             FontId::proportional(11.0),
-            palette.text_muted,
+            ink,
         );
         if live && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
             actions.push(UiAction::SelectWorkspace(index));
@@ -3266,18 +3178,7 @@ fn list_row(
         id.with(("row", index)),
         if live { Sense::click() } else { Sense::hover() },
     );
-    let hover = glass::ease_out(area.ctx().animate_bool_with_time(
-        response.id.with("hover"),
-        live && response.hovered(),
-        0.12,
-    ));
-    if hover > 0.0 {
-        area.painter().rect_filled(
-            row,
-            CornerRadius::same(palette.radius(Tier::Row)),
-            palette.surface_hover.gamma_multiply(hover),
-        );
-    }
+    let ink = crate::widgets::button_ink(area, &response, row, palette, false);
     let badge = Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(20.0, 20.0));
     area.painter().rect_filled(
         badge,
@@ -3301,7 +3202,7 @@ fn list_row(
             row.width() - 66.0,
         ),
         FontId::proportional(12.5),
-        theme::mix(palette.text_muted, palette.text, hover.max(0.55)),
+        ink,
     );
     if live {
         return response

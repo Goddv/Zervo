@@ -287,18 +287,7 @@ pub fn draw(
     actions: &mut Vec<UiAction>,
 ) {
     let palette = chrome.palette;
-    // The same ground the new tab page lays down, for the same reason: at the
-    // first seam it is an opaque base of the page's own, and past that it is a
-    // veil over the window's light. An error page that painted itself a flat
-    // grey would be the one surface in the browser that had opted out of the
-    // seam.
-    root.ctx()
-        .layer_painter(egui::LayerId::background())
-        .rect_filled(
-            content_rect,
-            theme::content_corners(&palette),
-            theme::page_ground(&palette),
-        );
+    crate::ui::paint_builtin_page(root, content_rect, &palette);
 
     let (tab, address) = chrome
         .browser
@@ -328,11 +317,7 @@ pub fn draw(
     // Measured before anything is drawn, so the whole column can be centred on
     // the page rather than the message being centred and the game hanging off
     // the bottom of it.
-    // One ink decision for the page. `Palette::over` asks what is behind a
-    // rect, and the whole card sits on one patch of the page's own ground, so
-    // asking twice — once to measure and once to draw — could only produce two
-    // answers that had to agree.
-    let ink = palette.over(content_rect);
+    let ink = palette;
     let plan = Plan::of(
         root,
         trouble,
@@ -368,9 +353,6 @@ pub fn draw(
 struct Press {
     icon: Icon,
     label: String,
-    /// The one filled button, if there is one. 7b gives the accent to the
-    /// action that actually works, and nothing else on the page competes.
-    lead: bool,
     action: Deed,
 }
 
@@ -409,20 +391,20 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
                 out.push(Press {
                     icon: Icon::ExternalLink,
                     label: format!("Open in {name}"),
-                    lead: true,
+
                     action: Deed::Elsewhere(url.clone()),
                 });
                 out.push(Press {
                     icon: Icon::Reload,
                     label: tr("error-try-again").to_owned(),
-                    lead: false,
+
                     action: Deed::Go(url.clone()),
                 });
             }
             out.push(Press {
                 icon: Icon::Info,
                 label: tr("error-what-s-missing").to_owned(),
-                lead: site.is_none(),
+
                 action: Deed::Read(
                     "https://github.com/Goddv/Zervo/blob/main/docs/PARITY.md".to_owned(),
                 ),
@@ -437,7 +419,7 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
         Trouble::Certificate => vec![Press {
             icon: Icon::Close,
             label: tr("error-back-to-safety").to_owned(),
-            lead: true,
+
             action: Deed::Leave,
         }],
         Trouble::Crashed => {
@@ -446,14 +428,14 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
                 out.push(Press {
                     icon: Icon::Reload,
                     label: tr("error-load-it-again").to_owned(),
-                    lead: true,
+
                     action: Deed::Go(url.clone()),
                 });
             }
             out.push(Press {
                 icon: Icon::Info,
                 label: tr("error-report-it").to_owned(),
-                lead: site.is_none(),
+
                 action: Deed::Read("https://github.com/servo/servo/issues".to_owned()),
             });
             out
@@ -467,7 +449,7 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
                 out.push(Press {
                     icon: Icon::Forward,
                     label: format!("Go to {host}"),
-                    lead: true,
+
                     action: Deed::Go(format!("https://{host}")),
                 });
             }
@@ -475,7 +457,7 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
                 out.push(Press {
                     icon: Icon::Reload,
                     label: tr("error-try-again").to_owned(),
-                    lead: out.is_empty(),
+
                     action: Deed::Go(url),
                 });
             }
@@ -975,24 +957,14 @@ fn draw_message(
 ) {
     let palette = chrome.palette;
     let tint = trouble.tint(&palette);
-    // 7b: "the one error page that must not be candy. Same material, no glow."
-    // The ring goes too — an accent ring is the material saying "look how nice
-    // this is" on the one page that must not.
-    let plain = trouble == Trouble::Certificate;
     let card = Rect::from_min_size(rect.min, vec2(rect.width(), plan.card_height()));
-    glass::paint(
-        root.painter(),
+    let surface = crate::ui::builtin_card(&palette);
+    root.painter().rect(
         card,
-        &palette,
-        Glass::tier(Tier::Window)
-            .strength(1.0)
-            .ring(if plain {
-                None
-            } else {
-                palette.accent_ring(0.18)
-            })
-            .glow(if plain { 0.0 } else { 0.35 })
-            .opaque(palette.bg),
+        surface.corner_radius,
+        surface.fill,
+        surface.stroke,
+        StrokeKind::Inside,
     );
     let inner_left = card.min.x + CARD_PAD;
 
@@ -1039,51 +1011,8 @@ fn draw_message(
             Id::unique("zervo_trouble_button").with(index),
             Sense::click(),
         );
-        let hover = glass::ease_out(root.ctx().animate_bool_with_time(
-            response.id.with("hover"),
-            response.hovered(),
-            0.12,
-        ));
-        if press.lead {
-            glass::paint(
-                root.painter(),
-                button,
-                &palette,
-                Glass::tier(Tier::Control)
-                    .tint(palette.active)
-                    .strength(1.0)
-                    // `rgba(accent,.34)` with `0 0 20px accent(.3)` behind it
-                    // on 7b's own primary — except on the certificate, where
-                    // nothing may glow.
-                    .ring(if plain {
-                        None
-                    } else {
-                        palette.accent_ring(0.3 + 0.2 * hover)
-                    })
-                    .glow(if plain { 0.0 } else { 0.55 + 0.3 * hover })
-                    .opaque(palette.bg)
-                    .no_shadow(),
-            );
-        } else {
-            if hover > 0.0 {
-                root.painter().rect_filled(
-                    button,
-                    palette.corner(Tier::Control),
-                    palette.surface_hover.gamma_multiply(hover),
-                );
-            }
-            root.painter().rect_stroke(
-                button,
-                palette.corner(Tier::Control),
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
-        }
-        let colour = if press.lead {
-            palette.ink_on(palette.active).0
-        } else {
-            theme::mix(ink.text_muted, ink.text, hover)
-        };
+        let colour = crate::widgets::button_ink(root, &response, button, &palette, false);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &press.label));
         icons::draw_icon(
             root.painter(),
             Rect::from_center_size(

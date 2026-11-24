@@ -1,0 +1,137 @@
+{
+  "language": "",
+  "theme": "Auto",
+  "accent": {
+    "Custom": [
+      0,
+      122,
+      255
+    ]
+  },
+  "homepage": "https://servo.org",
+  "search_engine": "Google",
+  "new_tab_page": "ZervoPage",
+  "new_tab_background": "Grid",
+  "newtab_home": "Composed",
+  "always_show_tab_close": false,
+  "show_forward_button": true,
+  "show_reload_button": true,
+  "show_essentials": true,
+  "sidebar_sections": [
+    "Pinned",
+    "Favourites",
+    "Tabs"
+  ],
+  "show_pinned_section": false,
+  "show_tab_favicons": true,
+  "show_open_tabs": true,
+  "show_sidebar_tools": true,
+  "show_sidebar_widgets": true,
+  "show_tab_counts": true,
+  "compact_sidebar": false,
+  "layout": "Sidebar",
+  "seen_setup": false,
+  "first_space": "",
+  "space_colour": 0,
+  "saved": [],
+  "sidebar_width": 248.0,
+  "favourites_grid": false,
+  "sidebar_widgets": [
+    {
+      "kind": "Transport",
+      "size": {
+        "h": {
+          "Cells": 1
+        }
+      },
+      "row": 2
+    }
+  ],
+  "sidebar_shelf_height": 0.0,
+  "user_agent_compat": false,
+  "downloads_auto": true,
+  "content_border": true,
+  "content_shadow": false,
+  "content_shadow_amount": 1.0143387,
+  "appearance": {
+    "preset": "LiquidGlass",
+    "seam": "Card",
+    "gap": 4.0167685,
+    "translucency": "LiquidGlass",
+    "blur": 14.0,
+    "fill": 0.72,
+    "sheen": 7.0,
+    "edge": "Hairline",
+    "corners": 1.2,
+    "glow": 0.0,
+    "motion": 0.19634147,
+    "sweep": true,
+    "pill_progress": true,
+    "candy": 0.1,
+    "workspace_accent": false,
+    "spine": "Favicons",
+    "align_nav": true
+  },
+  "gestures": {
+    "enabled": true,
+    "left": "Forward",
+    "right": "Back",
+    "up": "None",
+    "down": "ToggleShelf"
+  },
+  "newtab_tiles": [
+    {
+      "card": "Clock",
+      "at": {
+        "col": 0,
+        "row": 0
+      },
+      "span": {
+        "w": 3,
+        "h": 2
+      }
+    },
+    {
+      "card": "WorldClocks",
+      "at": {
+        "col": 6,
+        "row": 0
+      },
+      "span": {
+        "w": 6,
+        "h": 2
+      }
+    },
+    {
+      "card": "Search",
+      "at": {
+        "col": 0,
+        "row": 4
+      },
+      "span": {
+        "w": 12,
+        "h": 1
+      }
+    }
+  ],
+  "newtab_world_clocks": [
+    {
+      "label": "London",
+      "name": "Europe/London"
+    },
+    {
+      "label": "New York",
+      "name": "America/New_York"
+    },
+    {
+      "label": "Tokyo",
+      "name": "Asia/Tokyo"
+    }
+  ],
+  "newtab_message": "",
+  "wallpaper_source": {
+    "Openverse": "City"
+  },
+  "wallpaper_cadence": "Launch",
+  "wallpaper_dim": 0.55
+}

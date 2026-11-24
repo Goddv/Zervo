@@ -1,5 +1,9 @@
 use super::*;
 
+const MAX_ROWS: usize = 7;
+const ROW_HEIGHT: f32 = 36.0;
+const ROW_GAP: f32 = 5.0;
+
 #[derive(Debug, Clone, Copy)]
 pub enum CommandMode {
     NewTab,
@@ -74,7 +78,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
             }
             let card = frame.show(ui, |ui| {
                 ui.set_width(width);
-                ui.spacing_mut().item_spacing.y = 5.0;
+                ui.spacing_mut().item_spacing.y = ROW_GAP;
                 let down =
                     ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
                 let up =
@@ -107,6 +111,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                     .text_color(palette.text)
                     .hint_text(tr("command-search-placeholder"))
                     .desired_width(width)
+                    .min_size(vec2(0.0, 44.0))
                     .margin(Margin::symmetric(12, 11))
                     .background_color(palette.surface);
                 let mut editor = crate::overlay_glass::text_field(ui, edit);
@@ -134,23 +139,26 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
 
                 let rows = results(bar.query.trim(), bar.mode, chrome);
                 ui.add_space(5.0);
-                if rows.is_empty() {
-                    ui.label(RichText::new(tr("command-no-matches")).color(palette.text_muted));
-                    return None;
-                }
                 let max = rows.len();
                 bar.selection = match (down, up) {
+                    _ if max == 0 => 0,
                     (true, _) => (bar.selection + 1) % max,
                     (_, true) => (bar.selection + max - 1) % max,
                     _ => bar.selection.min(max - 1),
                 };
                 let used = ui.cursor().top() - ui.min_rect().top();
-                let results_height = (max_height - used - 28.0).max(36.0);
+                let full_list = MAX_ROWS as f32 * (ROW_HEIGHT + ROW_GAP) - ROW_GAP;
+                let results_height = (max_height - used - 28.0).clamp(ROW_HEIGHT, full_list);
                 let mut chosen = None;
                 egui::ScrollArea::vertical()
                     .max_height(results_height)
-                    .auto_shrink([false, true])
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        if rows.is_empty() {
+                            ui.label(
+                                RichText::new(tr("command-no-matches")).color(palette.text_muted),
+                            );
+                        }
                         for (index, row) in rows.into_iter().enumerate() {
                             let selected = index == bar.selection;
                             let response = result_row(ui, &row, selected, &palette);
@@ -182,7 +190,6 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
 }
 
 fn results<'a>(query: &'a str, mode: CommandMode, chrome: &'a ChromeContext) -> Vec<ResultRow<'a>> {
-    const MAX_ROWS: usize = 7;
     let workspace = chrome.browser.active_workspace;
     let mut results = Vec::with_capacity(MAX_ROWS);
     let command_only = query.starts_with('>');
@@ -298,7 +305,8 @@ fn results<'a>(query: &'a str, mode: CommandMode, chrome: &'a ChromeContext) -> 
 }
 
 fn result_row(ui: &mut Ui, row: &ResultRow, selected: bool, palette: &Palette) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
     if selected || response.hovered() {
         ui.painter().rect_filled(rect, 8, palette.surface_hover);
     }

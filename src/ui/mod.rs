@@ -27,6 +27,7 @@ mod layout_editor;
 mod settings_page;
 mod setup;
 mod spaces;
+pub(crate) use spaces::{animate_folder_creation, animate_workspace_switch};
 mod text;
 
 // The chrome stays one namespace, to itself and to everything outside it:
@@ -43,6 +44,7 @@ pub use command::{CommandBar, CommandMode};
 pub use frame::{
     CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient, window_chrome_tint,
 };
+pub(crate) use frame::{builtin_card, paint_builtin_page};
 pub use text::{
     anchored_popup, clamp_into, display_name, ellipsize, host_of, initial, normalize_url,
 };
@@ -118,6 +120,9 @@ pub enum UiAction {
     NewWorkspace,
     RemoveWorkspace(usize),
     SelectWorkspace(usize),
+    CycleWorkspace {
+        forward: bool,
+    },
     OpenSettings,
     #[cfg(target_os = "macos")]
     OpenSystemAppearance,
@@ -236,6 +241,7 @@ pub struct ChromeContext<'a> {
     pub settings: &'a mut Settings,
     pub palette: Palette,
     pub window_controls: Option<Rect>,
+    pub sidebar_presence: f32,
     pub device_pixels_per_css_pixel: f32,
     pub native_glass: NativeGlass,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
@@ -264,12 +270,9 @@ impl ChromeContext<'_> {
     }
 
     pub(crate) fn window_controls_room(&self) -> f32 {
-        if self.settings.layout.is_sidebar() {
-            0.0
-        } else {
-            self.window_controls
-                .map_or(0.0, |controls| controls.bottom() + 8.0)
-        }
+        self.window_controls.map_or(0.0, |controls| {
+            (controls.bottom() + 8.0) * (1.0 - self.sidebar_presence)
+        })
     }
 }
 
@@ -350,16 +353,20 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     // as a floating overlay. The collapsed handle stays allocated underneath
     // either way, so revealing never reflows the content card — and so never
     // resizes the webview, which would relayout the page.
-    let peek = sidebar_peek(root, chrome);
     // Where the window begins, before the sidebar has taken its share of it.
     // The page reaches back to here once the chrome is floating over it.
     let window = root.available_rect_before_wrap();
     let layout = chrome.settings.layout;
-    let present = glass::ease_out(root.ctx().animate_bool_with_time(
+    let motion = chrome.palette.material.animation;
+    let present = root.ctx().animate_bool_with_time_and_easing(
         Id::unique("zervo_chrome_present"),
         layout.is_sidebar(),
-        chrome.palette.material.animation,
-    ));
+        motion * 1.45,
+        |t| t * t * (3.0 - 2.0 * t),
+    );
+    chrome.sidebar_presence = present;
+    let peek = sidebar_peek(root, chrome, present);
+    let docking_from_peek = layout.is_sidebar() && peek.is_some_and(|(_, open)| open);
     let active_kind = chrome.browser.active_tab().map(|tab| tab.kind);
     let will_float = layout.is_sidebar()
         && !chrome.uses_native_sidebar()
@@ -373,7 +380,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     // The docked and revealed sidebar share widget IDs. Draw only one per frame.
     let sidebar_docked = present > 0.0;
     let floating_sidebar = if sidebar_docked {
-        draw_sidebar(root, chrome, &mut actions, present, will_float)
+        draw_sidebar(
+            root,
+            chrome,
+            &mut actions,
+            present,
+            will_float || docking_from_peek,
+        )
+        .filter(|_| will_float)
     } else {
         None
     };
@@ -401,11 +415,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
         );
     }
-    let top_margin = if layout.is_sidebar() {
-        theme::content_margin(&chrome.palette)
-    } else {
-        0.0
-    };
+    let top_margin = theme::content_margin(&chrome.palette) * present;
     let content_rect = paint_content_backdrop(root, outer, &chrome.palette, top_margin);
 
     // The last step of the seam: the chrome stops being a panel beside the
@@ -552,10 +562,15 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             });
     }
 
-    let sidebar_overlay = if sidebar_docked {
-        None
-    } else {
+    let sidebar_overlay = if !sidebar_docked || docking_from_peek {
         draw_sidebar_peek(root, chrome, &mut actions, peek)
+    } else {
+        if layout.is_sidebar() {
+            root.ctx().data_mut(|data| {
+                data.remove::<PeekMotion>(Id::unique("zervo_sidebar_peek_slide"));
+            });
+        }
+        None
     };
     if sidebar_overlay.is_none_or(|rect| rect.width() < spine_width(&chrome.palette.appearance)) {
         draw_spine(root, chrome);
@@ -596,14 +611,9 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     );
     let controls_open = !chrome.controls.is_empty() || command::draw(root, chrome, &mut actions);
 
-    let sidebar_bounds = if sidebar_docked {
-        Some(Rect::from_min_max(
-            window.min,
-            pos2(outer.left(), window.bottom()),
-        ))
-    } else {
-        sidebar_overlay
-    };
+    let sidebar_bounds = sidebar_overlay.or_else(|| {
+        sidebar_docked.then(|| Rect::from_min_max(window.min, pos2(outer.left(), window.bottom())))
+    });
     UiOutput {
         actions,
         #[cfg(target_os = "macos")]
@@ -672,11 +682,20 @@ fn draw_sidebar(
             .resizable(false)
             .exact_size(stored * reveal.max(0.0))
     };
+    // egui paints its hover/drag stroke even with the idle separator off.
+    // Mask only that parent style. The panel keeps its cursor, drag and AX handle.
+    let style = root.style().clone();
+    if settled {
+        let widgets = &mut root.style_mut().visuals.widgets;
+        widgets.hovered.fg_stroke = Stroke::NONE;
+        widgets.active.fg_stroke = Stroke::NONE;
+    }
     panel
         // The window chrome or AppKit paints the background beneath the panel.
         .frame(Frame::NONE.inner_margin(SIDEBAR_MARGIN))
         .show_separator_line(false)
         .show(root, |ui| {
+            ui.set_style(style.clone());
             // Fill the width the panel was given.
             //
             // egui stores a panel's remembered width from the rect its
@@ -720,19 +739,21 @@ fn draw_sidebar(
                     let glass = crate::overlay_glass::Surface::begin(ui);
                     chrome.native_glass.sidebar_captured = glass.is_native();
                     sidebar_body(ui, chrome, actions, glass.is_native());
-                    glass.finish(ui, rect, crate::overlay_glass::Role::Sidebar);
+                    let role = if chrome.native_glass.window_backdrop {
+                        crate::overlay_glass::Role::DockedSidebar
+                    } else {
+                        crate::overlay_glass::Role::Sidebar
+                    };
+                    glass.finish(ui, rect, role);
                 } else {
                     sidebar_body(ui, chrome, actions, false);
                 }
                 return;
             }
-            // Laid out at the width it will have when it arrives, and clipped
-            // to the width it has now — the panel's own clip rect does the
-            // cutting. Reflowing the body into a narrowing column instead
-            // would move every row in it, and moving is the one thing this is
-            // not allowed to do.
+            // Slide the full-width body inside the panel's visible slice.
+            // Keeping the width fixed preserves the alignment of every row.
             let full = Rect::from_min_size(
-                ui.max_rect().min,
+                ui.max_rect().min - vec2(stored * (1.0 - reveal), 0.0),
                 vec2(
                     stored - f32::from(SIDEBAR_MARGIN.left + SIDEBAR_MARGIN.right),
                     ui.max_rect().height(),
@@ -740,7 +761,7 @@ fn draw_sidebar(
             );
             let layout = *ui.layout();
             let mut body = ui.new_child(egui::UiBuilder::new().max_rect(full).layout(layout));
-            body.multiply_opacity(reveal);
+            body.multiply_opacity(0.6 + 0.4 * reveal);
             // Halfway through leaving is not something to click on.
             body.disable();
             sidebar_body(&mut body, chrome, actions, false);
@@ -749,6 +770,7 @@ fn draw_sidebar(
             // morph rather than on a clock of its own.
             paint_specular(ui.painter(), ui.max_rect(), &chrome.palette, 1.0 - reveal);
         });
+    root.set_style(style);
 
     // Remember a manual resize, so the width outlives the session — and so an
     // autohide reveal comes back the width the user left it. Written once the
@@ -789,6 +811,11 @@ fn sidebar_body(
     actions: &mut Vec<UiAction>,
     native_overlay: bool,
 ) {
+    let original_palette = chrome.palette;
+    if chrome.palette.dark {
+        chrome.palette.text = Color32::WHITE;
+        chrome.palette.text_muted = Color32::WHITE;
+    }
     let palette = chrome.palette;
     let drag = ui.interact(
         ui.max_rect(),
@@ -815,9 +842,15 @@ fn sidebar_body(
                     draw_sidebar_tools(ui, chrome, actions);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::icon_button(ui, Icon::Sliders, 16.0, &palette, true)
-                        .on_hover_text(tr("layout-customize"))
-                        .clicked()
+                    if icons::labelled_button(
+                        ui,
+                        Icon::Sliders,
+                        16.0,
+                        &palette,
+                        true,
+                        tr("layout-customize"),
+                    )
+                    .clicked()
                     {
                         actions.push(UiAction::CustomizeChrome);
                     }
@@ -918,25 +951,54 @@ fn sidebar_body(
             } else {
                 tr("chrome-show-sidebar")
             };
-            if icons::icon_button(ui, Icon::Sidebar, SIDEBAR_ICON, &palette, true)
-                .on_hover_text(sidebar_label)
-                .clicked()
+            if icons::labelled_button(
+                ui,
+                Icon::Sidebar,
+                SIDEBAR_ICON,
+                &palette,
+                true,
+                sidebar_label,
+            )
+            .clicked()
             {
                 actions.push(UiAction::ToggleSidebar);
             }
 
-            if icons::icon_button(ui, Icon::Back, 18.0, &palette, can_go_back).clicked() {
+            if icons::labelled_button(
+                ui,
+                Icon::Back,
+                18.0,
+                &palette,
+                can_go_back,
+                tr("common-back"),
+            )
+            .clicked()
+            {
                 actions.push(UiAction::Back);
             }
             if chrome.settings.show_forward_button
-                && icons::icon_button(ui, Icon::Forward, 18.0, &palette, can_go_forward).clicked()
+                && icons::labelled_button(
+                    ui,
+                    Icon::Forward,
+                    18.0,
+                    &palette,
+                    can_go_forward,
+                    tr("common-forward"),
+                )
+                .clicked()
             {
                 actions.push(UiAction::Forward);
             }
             if chrome.settings.show_reload_button
-                && icons::icon_button(ui, Icon::Reload, 17.0, &palette, !is_settings)
-                    .on_hover_text(tr("chrome-reload-r"))
-                    .clicked()
+                && icons::labelled_button(
+                    ui,
+                    Icon::Reload,
+                    17.0,
+                    &palette,
+                    !is_settings,
+                    tr("chrome-reload-r"),
+                )
+                .clicked()
             {
                 actions.push(UiAction::Reload);
             }
@@ -950,6 +1012,7 @@ fn sidebar_body(
     }
 
     spaces::body(ui, chrome, actions, native_overlay);
+    chrome.palette = original_palette;
 }
 
 /// zervo://history — everything visited, newest first, grouped by how long ago
@@ -963,31 +1026,36 @@ fn draw_history_page(
     const ROW: f32 = 34.0;
 
     let palette = chrome.palette;
-    root.ctx()
-        .layer_painter(egui::LayerId::background())
-        .rect_filled(content_rect, theme::content_corners(&palette), palette.bg);
-
+    paint_builtin_page(root, content_rect, &palette);
+    let page = centre_builtin_column(builtin_page_rect(
+        content_rect,
+        chrome.window_controls_room(),
+    ));
     let mut ui = root.new_child(
         egui::UiBuilder::new()
-            .max_rect(
-                content_rect
-                    .shrink(28.0)
-                    .with_min_y(content_rect.min.y + 28.0 + chrome.window_controls_room()),
-            )
+            .max_rect(page)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
+    ui.shrink_clip_rect(page);
 
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(tr("common-history"))
-                .size(24.0)
+                .size(BUILTIN_HEADING)
+                .strong()
                 .color(palette.text),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if !chrome.library.history.is_empty()
-                && icons::icon_button(ui, Icon::Trash, 15.0, &palette, true)
-                    .on_hover_text(tr("chrome-clear-all-history"))
-                    .clicked()
+                && icons::labelled_button(
+                    ui,
+                    Icon::Trash,
+                    15.0,
+                    &palette,
+                    true,
+                    tr("chrome-clear-all-history"),
+                )
+                .clicked()
             {
                 actions.push(UiAction::ClearHistory);
             }
@@ -995,36 +1063,13 @@ fn draw_history_page(
     });
     ui.add_space(12.0);
 
-    // ── Search.
-    let field = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(420.0), 32.0));
-    let material = crate::overlay_glass::Surface::begin(&ui);
-    if !material.is_native() {
-        glass::paint(ui.painter(), field, &palette, Glass::tier(Tier::Card));
-    }
-    icons::draw_icon(
-        ui.painter(),
-        Rect::from_center_size(pos2(field.min.x + 16.0, field.center().y), vec2(14.0, 14.0)),
-        Icon::Search,
-        palette.text_muted,
+    builtin_search(
+        &mut ui,
+        &palette,
+        "history_search",
+        &mut chrome.browser.history_query,
+        tr("chrome-search-history"),
     );
-    let mut editor = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(Rect::from_min_max(
-                pos2(field.min.x + 30.0, field.min.y),
-                field.max - vec2(10.0, 0.0),
-            ))
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    editor.add(
-        TextEdit::singleline(&mut chrome.browser.history_query)
-            .frame(Frame::NONE)
-            .font(FontId::proportional(13.5))
-            .text_color(palette.text)
-            .hint_text(RichText::new(tr("chrome-search-history")).color(palette.text_muted))
-            .desired_width(editor.available_width()),
-    );
-    material.finish(&ui, field, crate::overlay_glass::Role::Field);
-    ui.advance_cursor_after_rect(field);
     ui.add_space(14.0);
 
     let now = crate::app::now();
@@ -1046,83 +1091,77 @@ fn draw_history_page(
         .auto_shrink([false, false])
         .show(&mut ui, |ui| {
             for (bucket, rows) in groups {
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(bucket.label())
-                        .size(11.5)
-                        .color(palette.text_muted),
-                );
-                ui.add_space(4.0);
-                for (index, visit) in rows {
-                    let (row, response) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
-                    if response.hovered() {
-                        ui.painter().rect_filled(
-                            row,
-                            palette.corner(Tier::Row),
-                            palette.surface_hover,
-                        );
-                    }
-                    icons::draw_icon(
-                        ui.painter(),
-                        Rect::from_center_size(
-                            pos2(row.min.x + 16.0, row.center().y),
-                            vec2(14.0, 14.0),
-                        ),
-                        Icon::Globe,
-                        palette.text_muted,
+                builtin_card(&palette).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        RichText::new(bucket.label())
+                            .size(15.0)
+                            .strong()
+                            .color(palette.text),
                     );
-                    let title = if visit.title.is_empty() {
-                        visit.url.as_str()
-                    } else {
-                        visit.title.as_str()
-                    };
-                    ui.painter().text(
-                        pos2(row.min.x + 34.0, row.center().y - 7.0),
-                        Align2::LEFT_CENTER,
-                        ellipsize(title, 64),
-                        FontId::proportional(13.5),
-                        palette.text,
-                    );
-                    ui.painter().text(
-                        pos2(row.min.x + 34.0, row.center().y + 8.0),
-                        Align2::LEFT_CENTER,
-                        ellipsize(&visit.url, 74),
-                        FontId::proportional(11.5),
-                        palette.text_muted,
-                    );
-                    ui.painter().text(
-                        pos2(row.max.x - 34.0, row.center().y),
-                        Align2::RIGHT_CENTER,
-                        visit.local_time().strftime("%H:%M").to_string(),
-                        FontId::proportional(11.5),
-                        palette.text_muted,
-                    );
-                    let forget = Rect::from_center_size(
-                        pos2(row.max.x - 14.0, row.center().y),
-                        vec2(18.0, 18.0),
-                    );
-                    if response.hovered() {
+                    ui.add_space(6.0);
+                    for (index, visit) in rows {
+                        let (row, response) =
+                            ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                        let ink = crate::widgets::button_ink(ui, &response, row, &palette, false);
                         icons::draw_icon(
                             ui.painter(),
-                            forget.shrink(4.0),
-                            Icon::Close,
-                            palette.text_muted,
+                            Rect::from_center_size(
+                                pos2(row.min.x + 16.0, row.center().y),
+                                vec2(14.0, 14.0),
+                            ),
+                            Icon::Globe,
+                            ink,
                         );
-                    }
-                    if ui
-                        .interact(
+                        let title = if visit.title.is_empty() {
+                            visit.url.as_str()
+                        } else {
+                            visit.title.as_str()
+                        };
+                        let labels = row
+                            .with_min_x(row.left() + 34.0)
+                            .with_max_x(row.right() - 84.0);
+                        crate::overlay_glass::row_label(
+                            ui,
+                            labels.translate(vec2(0.0, -7.0)),
+                            title,
+                            FontId::proportional(13.5),
+                            ink,
+                        );
+                        crate::overlay_glass::row_label(
+                            ui,
+                            labels.translate(vec2(0.0, 8.0)),
+                            &visit.url,
+                            FontId::proportional(11.5),
+                            ink,
+                        );
+                        ui.painter().text(
+                            pos2(row.max.x - 34.0, row.center().y),
+                            Align2::RIGHT_CENTER,
+                            visit.local_time().strftime("%H:%M").to_string(),
+                            FontId::proportional(11.5),
+                            ink,
+                        );
+                        let forget = Rect::from_center_size(
+                            pos2(row.max.x - 14.0, row.center().y),
+                            vec2(18.0, 18.0),
+                        );
+                        let remove = ui.interact(
                             forget,
                             Id::unique("zervo_forget").with(index),
                             Sense::click(),
-                        )
-                        .clicked()
-                    {
-                        actions.push(UiAction::ForgetVisit(index));
-                    } else if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                        actions.push(UiAction::Navigate(visit.url.clone()));
+                        );
+                        if response.hovered() || remove.hovered() || remove.has_focus() {
+                            icons::paint_icon_button(ui, &remove, Icon::Close, 11.0, &palette);
+                        }
+                        if remove.clicked() {
+                            actions.push(UiAction::ForgetVisit(index));
+                        } else if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                            actions.push(UiAction::Navigate(visit.url.clone()));
+                        }
                     }
-                }
+                });
+                ui.add_space(12.0);
             }
         });
 }
@@ -1183,7 +1222,7 @@ fn draw_favourite_star(
             palette.accent.gamma_multiply(lit),
         );
     }
-    if response.on_hover_text(label).clicked() {
+    if crate::overlay_glass::tooltip(response, &palette, label).clicked() {
         actions.push(UiAction::ToggleFavourite);
     }
     rect
@@ -1233,15 +1272,14 @@ fn hover_card(
         palette.material.animation.min(0.13),
     ));
     if grow <= 0.0 {
+        ctx.data_mut(|data| data.remove::<Rect>(id.with("visible_rect")));
         return None;
     }
-    let height = (card.height() * grow).max(1.0).min(card.height());
-    let top = if card.bottom() <= anchor.top() {
-        card.bottom() - height
-    } else {
-        card.top()
-    };
-    let drawn = Rect::from_min_size(pos2(card.left(), top), vec2(card.width(), height));
+    let drawn = Rect::from_min_max(
+        anchor.min.lerp(card.min, grow),
+        anchor.max.lerp(card.max, grow),
+    );
+    ctx.data_mut(|data| data.insert_temp(id.with("visible_rect"), drawn));
 
     egui::Area::new(id.with("area"))
         .order(egui::Order::Foreground)
@@ -1331,19 +1369,13 @@ fn popup_menu<T: Clone>(
                 for (label, value) in rows {
                     let (row, response) =
                         ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
-                    if response.hovered() {
-                        ui.painter().rect_filled(
-                            row,
-                            palette.corner(Tier::Control),
-                            palette.surface_hover,
-                        );
-                    }
+                    let ink = crate::widgets::button_ink(ui, &response, row, palette, false);
                     crate::overlay_glass::row_label(
                         ui,
                         row.shrink2(vec2(8.0, 0.0)),
                         label,
                         FontId::proportional(13.0),
-                        palette.text,
+                        ink,
                     );
                     if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                         chosen = Some(value.clone());
@@ -1891,25 +1923,18 @@ fn draw_downloads_card(
                             let hit =
                                 Rect::from_center_size(pos2(x, row.center().y), vec2(24.0, 24.0));
                             x -= 26.0;
-                            let response = ui.interact(hit, id.with((key, index)), Sense::click());
-                            if enabled && response.hovered() {
-                                ui.painter().rect_filled(
-                                    hit,
-                                    palette.corner(Tier::Control),
-                                    palette.surface,
-                                );
-                            }
-                            icons::draw_icon(
-                                ui.painter(),
-                                hit.shrink(6.0),
-                                icon,
+                            let response = ui.interact(
+                                hit,
+                                id.with((key, index)),
                                 if enabled {
-                                    palette.text
+                                    Sense::click()
                                 } else {
-                                    palette.text_muted.gamma_multiply(0.35)
+                                    Sense::hover()
                                 },
                             );
-                            enabled && response.on_hover_text(tip).clicked()
+                            icons::paint_icon_button(ui, &response, icon, 12.0, &palette);
+                            enabled
+                                && crate::overlay_glass::tooltip(response, &palette, tip).clicked()
                         };
 
                         if running {
@@ -2003,9 +2028,15 @@ const SIDEBAR_ICON: f32 = 17.0;
 
 fn draw_sidebar_tools(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>) {
     let palette = &chrome.palette;
-    if icons::icon_button(ui, Icon::History, SIDEBAR_ICON, palette, true)
-        .on_hover_text(tr("common-history"))
-        .clicked()
+    if icons::labelled_button(
+        ui,
+        Icon::History,
+        SIDEBAR_ICON,
+        palette,
+        true,
+        tr("common-history"),
+    )
+    .clicked()
     {
         actions.push(UiAction::OpenHistory);
     }
@@ -2024,12 +2055,19 @@ fn draw_sidebar_tools(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
     } else {
         tr("common-downloads").to_owned()
     };
-    if download.on_hover_text(hint).clicked() {
+    download.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &hint));
+    if crate::overlay_glass::tooltip(download, palette, hint).clicked() {
         actions.push(UiAction::OpenDownloads);
     }
-    if icons::icon_button(ui, Icon::Gear, SIDEBAR_ICON, palette, true)
-        .on_hover_text(tr("common-settings"))
-        .clicked()
+    if icons::labelled_button(
+        ui,
+        Icon::Gear,
+        SIDEBAR_ICON,
+        palette,
+        true,
+        tr("common-settings"),
+    )
+    .clicked()
     {
         actions.push(UiAction::OpenSettings);
     }
@@ -2242,14 +2280,9 @@ fn sidebar_width(ctx: &egui::Context, settings: &Settings) -> f32 {
 /// which is what this used to do — meant moving towards a button in the
 /// sidebar dismissed the very thing being reached for, so nothing in a
 /// revealed sidebar could ever be clicked.
-fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
+fn sidebar_peek(root: &Ui, chrome: &ChromeContext, docked: f32) -> Option<(Rect, bool)> {
     let ctx = root.ctx();
     let id = Id::unique("zervo_sidebar_peek");
-    if chrome.settings.layout.is_sidebar() {
-        ctx.data_mut(|data| data.remove::<PeekState>(id));
-        return None;
-    }
-
     let window = ctx.content_rect();
     let rect = Rect::from_min_size(
         window.min,
@@ -2258,6 +2291,18 @@ fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
     let mut state = ctx
         .data(|data| data.get_temp::<PeekState>(id))
         .unwrap_or_default();
+    if chrome.settings.layout.is_sidebar() {
+        if docked < 1.0 && state.open {
+            // Keep the revealed sidebar in place while the page moves aside.
+            return Some((rect, true));
+        }
+        ctx.data_mut(|data| data.remove::<PeekState>(id));
+        return None;
+    }
+    if docked > 0.0 {
+        // Release the docked sidebar before the edge can trigger a new reveal.
+        return None;
+    }
     // `latest_pos` goes None when the pointer leaves the window, which is
     // exactly when a reveal should start closing.
     let pointer = ctx.input(|input| input.pointer.latest_pos());
@@ -2270,7 +2315,18 @@ fn sidebar_peek(root: &Ui, chrome: &ChromeContext) -> Option<(Rect, bool)> {
     let motion =
         ctx.data(|data| data.get_temp::<PeekMotion>(Id::unique("zervo_sidebar_peek_slide")));
     let visible = state.open || motion.is_some_and(|motion| motion.progress > 0.0);
-    let in_panel = visible && pointer.is_some_and(|pos| hot.contains(pos));
+    let in_panel = visible
+        && pointer.is_some_and(|pos| {
+            hot.contains(pos)
+                || ctx.data(|data| {
+                    ["zervo_downloads_card", "zervo_favourites_card"]
+                        .into_iter()
+                        .any(|key| {
+                            data.get_temp::<Rect>(Id::unique(key).with("visible_rect"))
+                                .is_some_and(|card| card.expand(8.0).contains(pos))
+                        })
+                })
+        });
     let busy = state.open && (ctx.egui_is_using_pointer() || egui::Popup::is_any_open(ctx));
     let wanted =
         crate::shot::peek_forced(ctx.cumulative_pass_nr()) || in_trigger || in_panel || busy;
@@ -2321,7 +2377,9 @@ fn draw_sidebar_peek(
         return None;
     }
     let id = Id::unique("zervo_sidebar_peek_area");
-    let layer = egui::LayerId::new(egui::Order::Foreground, id);
+    // The reveal covers the page. Foreground areas, including the sidebar's
+    // menus and hover cards, still own hit testing above it.
+    let layer = egui::LayerId::new(egui::Order::Middle, id);
     // The exact bounds are known even on the first frame. Register them
     // directly so there is no invisible `Area` sizing frame during the slide.
     ctx.memory_mut(|memory| {
@@ -2344,7 +2402,15 @@ fn draw_sidebar_peek(
     let ui = &mut overlay;
     ui.set_clip_rect(ctx.content_rect());
     let surface = crate::overlay_glass::Surface::begin(ui);
-    if !surface.is_native() {
+    if surface.is_native() && chrome.palette.dark {
+        // AppKit can sample a nearly white page, even in dark appearance.
+        // A dark wash behind the ink keeps the white controls readable.
+        ui.painter().rect_filled(
+            drawn.with_min_x(drawn.left() - 18.0),
+            crate::overlay_glass::Role::Sidebar.radius(),
+            Color32::from_black_alpha(88),
+        );
+    } else if !surface.is_native() {
         ui.painter().rect_filled(
             drawn,
             CornerRadius::ZERO,
@@ -2898,6 +2964,16 @@ fn selection_shapes(rect: Rect, palette: &Palette, strength: f32) -> Vec<Shape> 
     )
 }
 
+fn paint_tab_selection(ui: &Ui, rect: Rect, palette: &Palette, strength: f32) {
+    ui.painter()
+        .extend(selection_shapes(rect, palette, strength));
+    ui.painter().rect_filled(
+        Rect::from_center_size(pos2(rect.left() + 2.0, rect.center().y), vec2(3.0, 16.0)),
+        1,
+        palette.accent.gamma_multiply(strength),
+    );
+}
+
 /// What stands in for the favicon a page with no webview will never have.
 ///
 /// One answer, because two grew apart: the tab row learned this and the
@@ -3102,20 +3178,13 @@ fn tab_row(
         .then(|| crate::overlay_glass::Surface::begin(ui));
     let painter = ui.painter();
 
-    // Animated fill: transparent -> hover surface -> accent-tinted glass.
-    if hover_t > 0.0 {
+    if select_t > 0.0 {
+        paint_tab_selection(ui, rect, palette, select_t);
+    } else if hover_t > 0.0 {
         painter.rect_filled(
             rect,
             palette.corner(Tier::Row),
             palette.surface_hover.gamma_multiply(hover_t),
-        );
-    }
-    if select_t > 0.0 {
-        painter.extend(selection_shapes(rect, palette, select_t));
-        painter.rect_filled(
-            Rect::from_center_size(pos2(rect.left() + 2.0, rect.center().y), vec2(3.0, 16.0)),
-            1,
-            palette.accent.gamma_multiply(select_t),
         );
     }
     if response.has_focus() {
@@ -3181,98 +3250,10 @@ fn tab_row(
     );
 
     if hovered || style.selected || style.always_show_close || close_response.has_focus() {
-        if close_response.hovered() {
-            painter.rect_filled(
-                close_rect,
-                palette.corner(Tier::Control),
-                palette.surface_hover,
-            );
-        }
-        let glyph_rect = Rect::from_center_size(close_rect.center(), vec2(11.0, 11.0));
-        icons::draw_icon(
-            painter,
-            glyph_rect,
-            Icon::Close,
-            if close_response.hovered() {
-                ink
-            } else {
-                ink_muted
-            },
-        );
-        if close_response.has_focus() {
-            icons::paint_focus(ui, palette, close_rect, Tier::Control);
-        }
+        icons::paint_icon_button(ui, &close_response, Icon::Close, 11.0, palette);
     }
 
-    crate::overlay_glass::context_menu(&response, |ui| {
-        if style.pinnable
-            && ui
-                .button(if style.pinned {
-                    tr("chrome-unpin")
-                } else {
-                    tr("sidebar-pin-tab")
-                })
-                .clicked()
-        {
-            actions.push(UiAction::TogglePin(style.tab_id));
-            ui.close();
-        }
-        crate::overlay_glass::submenu(ui, tr("sidebar-move-to-folder"), |ui| {
-            for folder in &style.spaces[style.workspace].folders {
-                if Some(folder.id) != style.folder && ui.button(&folder.name).clicked() {
-                    actions.push(UiAction::MoveTab {
-                        tab: style.tab_id,
-                        workspace: style.workspace,
-                        index: style.spaces[style.workspace].tabs.len(),
-                        folder: Some(folder.id),
-                    });
-                    ui.close();
-                }
-            }
-            if ui.button(tr("sidebar-new-folder")).clicked() {
-                actions.push(UiAction::NewFolder(Some(style.tab_id)));
-                ui.close();
-            }
-        });
-        if style.folder.is_some() && ui.button(tr("sidebar-remove-from-folder")).clicked() {
-            actions.push(UiAction::MoveTab {
-                tab: style.tab_id,
-                workspace: style.workspace,
-                index: style.spaces[style.workspace].tabs.len(),
-                folder: None,
-            });
-            ui.close();
-        }
-        if style.spaces.len() > 1 {
-            crate::overlay_glass::submenu(ui, tr("sidebar-move-to-space"), |ui| {
-                for (index, space) in style
-                    .spaces
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| *index != style.workspace)
-                {
-                    if ui.button(&space.name).clicked() {
-                        actions.push(UiAction::MoveTab {
-                            tab: style.tab_id,
-                            workspace: index,
-                            index: space.tabs.len(),
-                            folder: None,
-                        });
-                        ui.close();
-                    }
-                }
-            });
-        }
-        let close_label = if style.pinned {
-            tr("sidebar-unload-pin")
-        } else {
-            tr("common-close")
-        };
-        if ui.button(close_label).clicked() {
-            actions.push(UiAction::CloseTab(style.tab_id));
-            ui.close();
-        }
-    });
+    tab_context_menu(&response, &style, actions);
 
     // The drop affordance, over everything else the row drew.
     match drop_at {
@@ -3325,6 +3306,84 @@ fn tab_row(
     }
 }
 
+fn tab_context_menu(
+    response: &egui::Response,
+    style: &TabRowStyle<'_>,
+    actions: &mut Vec<UiAction>,
+) {
+    crate::overlay_glass::context_menu(response, |ui| {
+        if style.pinnable
+            && ui
+                .button(if style.pinned {
+                    tr("chrome-unpin")
+                } else {
+                    tr("sidebar-pin-tab")
+                })
+                .clicked()
+        {
+            actions.push(UiAction::TogglePin(style.tab_id));
+            ui.close();
+        }
+        if !style.pinned {
+            crate::overlay_glass::submenu(ui, tr("sidebar-move-to-folder"), |ui| {
+                for folder in &style.spaces[style.workspace].folders {
+                    if Some(folder.id) != style.folder && ui.button(&folder.name).clicked() {
+                        actions.push(UiAction::MoveTab {
+                            tab: style.tab_id,
+                            workspace: style.workspace,
+                            index: style.spaces[style.workspace].tabs.len(),
+                            folder: Some(folder.id),
+                        });
+                        ui.close();
+                    }
+                }
+                if ui.button(tr("sidebar-new-folder")).clicked() {
+                    actions.push(UiAction::NewFolder(Some(style.tab_id)));
+                    ui.close();
+                }
+            });
+            if style.folder.is_some() && ui.button(tr("sidebar-remove-from-folder")).clicked() {
+                actions.push(UiAction::MoveTab {
+                    tab: style.tab_id,
+                    workspace: style.workspace,
+                    index: style.spaces[style.workspace].tabs.len(),
+                    folder: None,
+                });
+                ui.close();
+            }
+        }
+        if style.spaces.len() > 1 {
+            crate::overlay_glass::submenu(ui, tr("sidebar-move-to-space"), |ui| {
+                for (index, space) in style
+                    .spaces
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != style.workspace)
+                {
+                    if ui.button(&space.name).clicked() {
+                        actions.push(UiAction::MoveTab {
+                            tab: style.tab_id,
+                            workspace: index,
+                            index: space.tabs.len(),
+                            folder: None,
+                        });
+                        ui.close();
+                    }
+                }
+            });
+        }
+        let close_label = if style.pinned {
+            tr("sidebar-unload-pin")
+        } else {
+            tr("common-close")
+        };
+        if ui.button(close_label).clicked() {
+            actions.push(UiAction::CloseTab(style.tab_id));
+            ui.close();
+        }
+    });
+}
+
 /// A soft radial light blob: a triangle-fan mesh fading from `color` at the
 /// center to transparent at the edge — the ambient light of the aurora page.
 /// zervo://downloads — the download manager.
@@ -3337,263 +3396,251 @@ fn draw_downloads_page(
     use crate::downloads::{DownloadState, format_bytes};
 
     let palette = chrome.palette;
-    root.ctx()
-        .layer_painter(egui::LayerId::background())
-        .rect_filled(
-            content_rect,
-            theme::content_corners(&palette),
-            palette.surface,
-        );
-
+    paint_builtin_page(root, content_rect, &palette);
+    let page = centre_builtin_column(builtin_page_rect(
+        content_rect,
+        chrome.window_controls_room(),
+    ));
     let mut pane = root.new_child(
         egui::UiBuilder::new()
-            .max_rect(
-                content_rect
-                    .shrink2(vec2(6.0, 10.0))
-                    .with_min_y(content_rect.min.y + 10.0 + chrome.window_controls_room()),
-            )
+            .max_rect(page)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
+    pane.shrink_clip_rect(page);
     let ui = &mut pane;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let column = (ui.available_width() - 60.0).clamp(280.0, 640.0);
-            let margin = ((ui.available_width() - column) * 0.5).max(0.0);
             ui.horizontal(|ui| {
-                ui.add_space(margin);
-                ui.vertical(|ui| {
-                    ui.set_width(column);
-                    ui.add_space(16.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(tr("common-downloads"))
-                                .size(21.0)
-                                .strong()
-                                .color(palette.text),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if !chrome.downloads.items.is_empty()
-                                && icons::icon_button(ui, Icon::Trash, 15.0, &palette, true)
-                                    .on_hover_text(tr("chrome-clear-finished"))
-                                    .clicked()
-                            {
-                                actions.push(UiAction::ClearDownloads);
-                            }
-                        });
-                    });
-                    ui.label(
-                        RichText::new(
-                            crate::downloads::downloads_dir()
-                                .to_string_lossy()
-                                .to_string(),
-                        )
-                        .size(11.5)
-                        .color(palette.text_muted),
-                    );
-                    ui.add_space(14.0);
-
-                    if !cfg!(feature = "engine-downloads") {
-                        limitation(
+                ui.label(
+                    RichText::new(tr("common-downloads"))
+                        .size(BUILTIN_HEADING)
+                        .strong()
+                        .color(palette.text),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !chrome.downloads.items.is_empty()
+                        && icons::labelled_button(
                             ui,
+                            Icon::Trash,
+                            15.0,
                             &palette,
-                            Icon::Info,
-                            tr("chrome-built-without-engine-downloads-responses-the-engine"),
-                        );
-                        ui.add_space(14.0);
-                    }
-
-                    if chrome.downloads.items.is_empty() {
-                        ui.add_space(40.0);
-                        ui.vertical_centered(|ui| {
-                            let (rect, _) =
-                                ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
-                            icons::draw_icon(
-                                ui.painter(),
-                                rect,
-                                Icon::FileArrowDown,
-                                palette.text_muted.gamma_multiply(0.6),
-                            );
-                            ui.label(
-                                RichText::new(tr("chrome-no-downloads-yet"))
-                                    .size(14.0)
-                                    .color(palette.text_muted),
-                            );
-                            ui.label(
-                                RichText::new(tr("chrome-files-you-download-will-appear-here"))
-                                    .size(11.5)
-                                    .color(palette.text_muted),
-                            );
-                        });
-                        return;
-                    }
-
-                    for item in chrome.downloads.items.iter().rev() {
-                        let height = 62.0;
-                        let (rect, _) = ui.allocate_exact_size(
-                            vec2(ui.available_width(), height),
-                            Sense::hover(),
-                        );
-                        glass::paint(
-                            ui.painter(),
-                            rect,
-                            &palette,
-                            Glass::tier(Tier::Card).strength(0.7).no_shadow(),
-                        );
-
-                        let icon_rect = Rect::from_center_size(
-                            pos2(rect.min.x + 26.0, rect.center().y),
-                            vec2(20.0, 20.0),
-                        );
-                        let (icon, tint) = match &item.state {
-                            DownloadState::Running => (Icon::Download, palette.accent),
-                            DownloadState::Complete => (Icon::CheckCircle, palette.success),
-                            DownloadState::Cancelled => (Icon::XCircle, palette.text_muted),
-                            DownloadState::Failed(_) => (Icon::Warning, palette.warning),
-                        };
-                        icons::draw_icon(ui.painter(), icon_rect, icon, tint);
-
-                        ui.painter().text(
-                            pos2(rect.min.x + 48.0, rect.min.y + 20.0),
-                            Align2::LEFT_CENTER,
-                            truncate(&item.filename, 42),
-                            FontId::proportional(13.5),
-                            palette.text,
-                        );
-                        let status = match &item.state {
-                            DownloadState::Running => match item.total {
-                                Some(total) => format!(
-                                    "{} of {}",
-                                    format_bytes(item.received),
-                                    format_bytes(total)
-                                ),
-                                None => format_bytes(item.received),
-                            },
-                            DownloadState::Complete => format_bytes(item.received),
-                            DownloadState::Cancelled => tr("chrome-cancelled").to_owned(),
-                            DownloadState::Failed(error) => crate::l10n::message(
-                                "chrome-download-failed",
-                                [("error", error.as_str().into())],
-                            ),
-                        };
-                        ui.painter().text(
-                            pos2(rect.min.x + 48.0, rect.min.y + 40.0),
-                            Align2::LEFT_CENTER,
-                            truncate(&status, 52),
-                            FontId::proportional(11.5),
-                            palette.text_muted,
-                        );
-                        ui.painter().text(
-                            pos2(rect.max.x - 86.0, rect.min.y + 20.0),
-                            Align2::RIGHT_CENTER,
-                            truncate(
-                                url::Url::parse(&item.url)
-                                    .ok()
-                                    .and_then(|parsed| parsed.host_str().map(str::to_owned))
-                                    .unwrap_or_default()
-                                    .as_str(),
-                                24,
-                            ),
-                            FontId::proportional(11.0),
-                            palette.text_muted,
-                        );
-
-                        // Progress bar for running transfers.
-                        if item.state == DownloadState::Running {
-                            let track = Rect::from_min_size(
-                                pos2(rect.min.x + 48.0, rect.max.y - 12.0),
-                                vec2(rect.width() - 110.0, 4.0),
-                            );
-                            ui.painter().rect_filled(
-                                track,
-                                palette.corner(Tier::Hairline),
-                                palette.surface_hover,
-                            );
-                            if let Some(fraction) = item.fraction() {
-                                let filled = Rect::from_min_size(
-                                    track.min,
-                                    vec2(track.width() * fraction, track.height()),
-                                );
-                                ui.painter().rect_filled(
-                                    filled,
-                                    palette.corner(Tier::Hairline),
-                                    palette.accent,
-                                );
-                            }
-                            ui.ctx()
-                                .request_repaint_after(std::time::Duration::from_millis(33));
-                        }
-
-                        // Row actions.
-                        let mut controls = ui.new_child(
-                            egui::UiBuilder::new()
-                                .max_rect(Rect::from_min_size(
-                                    pos2(rect.max.x - 78.0, rect.center().y - 14.0),
-                                    vec2(70.0, 28.0),
-                                ))
-                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                        );
-                        match item.state {
-                            DownloadState::Running => {
-                                if icons::icon_button(
-                                    &mut controls,
-                                    Icon::XCircle,
-                                    15.0,
-                                    &palette,
-                                    true,
-                                )
-                                .on_hover_text(tr("common-cancel"))
-                                .clicked()
-                                {
-                                    actions.push(UiAction::CancelDownload(item.id));
-                                }
-                            },
-                            DownloadState::Complete => {
-                                if icons::icon_button(
-                                    &mut controls,
-                                    Icon::FolderOpen,
-                                    15.0,
-                                    &palette,
-                                    true,
-                                )
-                                .on_hover_text(tr("chrome-reveal-in-finder"))
-                                .clicked()
-                                {
-                                    actions.push(UiAction::RevealDownload(item.id));
-                                }
-                                if icons::icon_button(
-                                    &mut controls,
-                                    Icon::ExternalLink,
-                                    15.0,
-                                    &palette,
-                                    true,
-                                )
-                                .on_hover_text(tr("common-open"))
-                                .clicked()
-                                {
-                                    actions.push(UiAction::OpenDownload(item.id));
-                                }
-                            },
-                            _ => {
-                                if icons::icon_button(
-                                    &mut controls,
-                                    Icon::Trash,
-                                    15.0,
-                                    &palette,
-                                    true,
-                                )
-                                .on_hover_text(tr("common-remove"))
-                                .clicked()
-                                {
-                                    actions.push(UiAction::RemoveDownload(item.id));
-                                }
-                            },
-                        }
-                        ui.add_space(8.0);
+                            true,
+                            tr("chrome-clear-finished"),
+                        )
+                        .clicked()
+                    {
+                        actions.push(UiAction::ClearDownloads);
                     }
                 });
             });
+            ui.label(
+                RichText::new(
+                    crate::downloads::downloads_dir()
+                        .to_string_lossy()
+                        .to_string(),
+                )
+                .size(11.5)
+                .color(palette.text_muted),
+            );
+            ui.add_space(14.0);
+
+            if !cfg!(feature = "engine-downloads") {
+                limitation(
+                    ui,
+                    &palette,
+                    Icon::Info,
+                    tr("chrome-built-without-engine-downloads-responses-the-engine"),
+                );
+                ui.add_space(14.0);
+            }
+
+            if chrome.downloads.items.is_empty() {
+                ui.add_space(40.0);
+                ui.vertical_centered(|ui| {
+                    let (rect, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+                    icons::draw_icon(
+                        ui.painter(),
+                        rect,
+                        Icon::FileArrowDown,
+                        palette.text_muted.gamma_multiply(0.6),
+                    );
+                    ui.label(
+                        RichText::new(tr("chrome-no-downloads-yet"))
+                            .size(14.0)
+                            .color(palette.text_muted),
+                    );
+                    ui.label(
+                        RichText::new(tr("chrome-files-you-download-will-appear-here"))
+                            .size(11.5)
+                            .color(palette.text_muted),
+                    );
+                });
+                return;
+            }
+
+            for item in chrome.downloads.items.iter().rev() {
+                let height = 62.0;
+                let (rect, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+                let card = builtin_card(&palette);
+                ui.painter().rect(
+                    rect,
+                    card.corner_radius,
+                    card.fill,
+                    card.stroke,
+                    StrokeKind::Inside,
+                );
+
+                let icon_rect = Rect::from_center_size(
+                    pos2(rect.min.x + 26.0, rect.center().y),
+                    vec2(20.0, 20.0),
+                );
+                let (icon, tint) = match &item.state {
+                    DownloadState::Running => (Icon::Download, palette.accent),
+                    DownloadState::Complete => (Icon::CheckCircle, palette.success),
+                    DownloadState::Cancelled => (Icon::XCircle, palette.text_muted),
+                    DownloadState::Failed(_) => (Icon::Warning, palette.warning),
+                };
+                icons::draw_icon(ui.painter(), icon_rect, icon, tint);
+
+                ui.painter().text(
+                    pos2(rect.min.x + 48.0, rect.min.y + 20.0),
+                    Align2::LEFT_CENTER,
+                    truncate(&item.filename, 42),
+                    FontId::proportional(13.5),
+                    palette.text,
+                );
+                let status = match &item.state {
+                    DownloadState::Running => match item.total {
+                        Some(total) => {
+                            format!("{} of {}", format_bytes(item.received), format_bytes(total))
+                        },
+                        None => format_bytes(item.received),
+                    },
+                    DownloadState::Complete => format_bytes(item.received),
+                    DownloadState::Cancelled => tr("chrome-cancelled").to_owned(),
+                    DownloadState::Failed(error) => crate::l10n::message(
+                        "chrome-download-failed",
+                        [("error", error.as_str().into())],
+                    ),
+                };
+                ui.painter().text(
+                    pos2(rect.min.x + 48.0, rect.min.y + 40.0),
+                    Align2::LEFT_CENTER,
+                    truncate(&status, 52),
+                    FontId::proportional(11.5),
+                    palette.text_muted,
+                );
+                ui.painter().text(
+                    pos2(rect.max.x - 86.0, rect.min.y + 20.0),
+                    Align2::RIGHT_CENTER,
+                    truncate(
+                        url::Url::parse(&item.url)
+                            .ok()
+                            .and_then(|parsed| parsed.host_str().map(str::to_owned))
+                            .unwrap_or_default()
+                            .as_str(),
+                        24,
+                    ),
+                    FontId::proportional(11.0),
+                    palette.text_muted,
+                );
+
+                // Progress bar for running transfers.
+                if item.state == DownloadState::Running {
+                    let track = Rect::from_min_size(
+                        pos2(rect.min.x + 48.0, rect.max.y - 12.0),
+                        vec2(rect.width() - 110.0, 4.0),
+                    );
+                    ui.painter().rect_filled(
+                        track,
+                        palette.corner(Tier::Hairline),
+                        palette.surface_hover,
+                    );
+                    if let Some(fraction) = item.fraction() {
+                        let filled = Rect::from_min_size(
+                            track.min,
+                            vec2(track.width() * fraction, track.height()),
+                        );
+                        ui.painter().rect_filled(
+                            filled,
+                            palette.corner(Tier::Hairline),
+                            palette.accent,
+                        );
+                    }
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(33));
+                }
+
+                // Row actions.
+                let mut controls = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(Rect::from_min_size(
+                            pos2(rect.max.x - 78.0, rect.center().y - 14.0),
+                            vec2(70.0, 28.0),
+                        ))
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                match item.state {
+                    DownloadState::Running => {
+                        if icons::labelled_button(
+                            &mut controls,
+                            Icon::XCircle,
+                            15.0,
+                            &palette,
+                            true,
+                            tr("common-cancel"),
+                        )
+                        .clicked()
+                        {
+                            actions.push(UiAction::CancelDownload(item.id));
+                        }
+                    },
+                    DownloadState::Complete => {
+                        if icons::labelled_button(
+                            &mut controls,
+                            Icon::FolderOpen,
+                            15.0,
+                            &palette,
+                            true,
+                            tr("chrome-reveal-in-finder"),
+                        )
+                        .clicked()
+                        {
+                            actions.push(UiAction::RevealDownload(item.id));
+                        }
+                        if icons::labelled_button(
+                            &mut controls,
+                            Icon::ExternalLink,
+                            15.0,
+                            &palette,
+                            true,
+                            tr("common-open"),
+                        )
+                        .clicked()
+                        {
+                            actions.push(UiAction::OpenDownload(item.id));
+                        }
+                    },
+                    _ => {
+                        if icons::labelled_button(
+                            &mut controls,
+                            Icon::Trash,
+                            15.0,
+                            &palette,
+                            true,
+                            tr("common-remove"),
+                        )
+                        .clicked()
+                        {
+                            actions.push(UiAction::RemoveDownload(item.id));
+                        }
+                    },
+                }
+                ui.add_space(8.0);
+            }
         });
 }
 

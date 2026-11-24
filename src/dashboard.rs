@@ -864,23 +864,17 @@ fn draw_widget(
                     rect.center().y,
                 );
                 let hit = Rect::from_center_size(centre, vec2(30.0, 30.0));
+                let enabled = !media.is_idle();
                 let response = root.interact(
                     hit,
                     Id::unique("zervo_transport").with((slot_index, index)),
-                    Sense::click(),
+                    if enabled {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    },
                 );
-                if response.hovered() {
-                    root.painter().rect_filled(
-                        hit,
-                        palette.corner(Tier::Row),
-                        palette.surface_hover,
-                    );
-                }
-                let tint = if media.is_idle() {
-                    palette.text_muted.gamma_multiply(0.4)
-                } else {
-                    palette.text
-                };
+                let tint = crate::widgets::button_ink(root, &response, hit, palette, false);
                 let glyph = Rect::from_center_size(centre, vec2(16.0, 16.0));
                 match icon {
                     Some(icon) => icons::draw_icon(root.painter(), glyph, icon, tint),

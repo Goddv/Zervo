@@ -12,6 +12,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.100-orange)
 
 [macOS downloads](https://github.com/Goddv/Zervo/releases) · [Latest preview builds](https://github.com/Goddv/Zervo/actions/workflows/release.yml)
+· [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -66,7 +67,7 @@ in Full Page mode with the sidebar available on hover.
   whole application without a call site knowing a number. Surfaces have a class
   — card, menu, input — the way an element has one in CSS.
 - **Appearance.** Choose a theme and accent, or let the active Space provide the
-  accent. New profiles start with classic Apple blue at 0.20 tint strength.
+  accent. New profiles start with classic Apple blue at 0.10 tint strength.
 - **Page frame.** In Sidebar mode, inset the page in a rounded card or place it
   flush against the window edges. Outline and shadow are configurable.
 
@@ -170,6 +171,14 @@ in the code each one lives. Most of it is embedder work, not engine work.
 
 If you want to improve the *engine*, contribute to [Servo][servo] directly.
 Note that Servo does not accept AI-generated contributions.
+
+### Help translate Zervo
+
+The interface uses Fluent catalogues. Copy the English catalogue, translate as
+much as you can, and open a pull request — incomplete catalogues fall back to
+English, so a few corrected messages are useful too. The
+[translation guide](docs/TRANSLATING.md) covers language tags, placeholders,
+local previewing, checks, and the pull-request checklist.
 
 ## Credits
 

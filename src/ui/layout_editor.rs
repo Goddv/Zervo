@@ -9,23 +9,30 @@ pub(super) fn draw(
 ) {
     settings_section(ui, palette, tr("layout-customize"), |ui| {
         let mut changed = false;
-        ui.horizontal_wrapped(|ui| {
-            for layout in Layout::ALL {
-                if ui
-                    .selectable_label(settings.layout == layout, layout.label())
-                    .clicked()
-                {
-                    settings.layout = layout;
-                    changed = true;
-                }
-            }
-        });
+        let modes = Layout::ALL.map(Layout::label);
+        let selected = usize::from(settings.layout == Layout::FullPage);
+        if let Some(mode) = crate::widgets::segmented(ui, selected, &modes, palette) {
+            settings.layout = Layout::ALL[mode];
+            changed = true;
+        }
         ui.add_space(14.0);
         ui.label(RichText::new(tr("layout-sidebar-sections")).strong());
         ui.small(tr("layout-reorder-sections"));
         ui.add_space(6.0);
+        changed |= crate::widgets::toggle(
+            ui,
+            &mut settings.show_pinned_section,
+            tr("sidebar-pinned-tabs"),
+            palette,
+        );
         let mut reorder = None;
-        for (index, section) in settings.sidebar_sections.into_iter().enumerate() {
+        let sections = settings
+            .sidebar_sections
+            .into_iter()
+            .enumerate()
+            .filter(|(_, section)| *section != SidebarSection::Pinned)
+            .collect::<Vec<_>>();
+        for (position, &(index, section)) in sections.iter().enumerate() {
             let (row, dropped) = ui.dnd_drop_zone::<SidebarSection, _>(
                 Frame::NONE
                     .inner_margin(Margin::symmetric(6, 3))
@@ -49,11 +56,19 @@ pub(super) fn draw(
                             section.set_visible(settings, shown);
                             changed = true;
                         }
-                        if move_button(ui, true, index > 0, section.label()).clicked() {
-                            reorder = Some((index, index.saturating_sub(1)));
+                        if move_button(ui, palette, true, position > 0, section.label()).clicked() {
+                            reorder = Some((index, sections[position - 1].0));
                         }
-                        if move_button(ui, false, index < 2, section.label()).clicked() {
-                            reorder = Some((index, index + 1));
+                        if move_button(
+                            ui,
+                            palette,
+                            false,
+                            position + 1 < sections.len(),
+                            section.label(),
+                        )
+                        .clicked()
+                        {
+                            reorder = Some((index, sections[position + 1].0));
                         }
                     });
                 },
@@ -78,12 +93,7 @@ pub(super) fn draw(
             }
         }
         if let Some((from, to)) = reorder {
-            let sections = &mut settings.sidebar_sections;
-            if from < to {
-                sections[from..=to].rotate_left(1);
-            } else {
-                sections[to..=from].rotate_right(1);
-            }
+            settings.sidebar_sections.swap(from, to);
             changed = true;
         }
         ui.add_space(8.0);
@@ -101,12 +111,18 @@ pub(super) fn draw(
             changed = true;
         }
         if changed {
-            actions.push(UiAction::PersistSettings);
+            actions.push(UiAction::SettingsChanged);
         }
     });
 }
 
-fn move_button(ui: &mut Ui, earlier: bool, enabled: bool, name: &str) -> egui::Response {
+fn move_button(
+    ui: &mut Ui,
+    palette: &Palette,
+    earlier: bool,
+    enabled: bool,
+    name: &str,
+) -> egui::Response {
     let label = crate::l10n::message(
         if earlier {
             "layout-move-up"
@@ -120,5 +136,5 @@ fn move_button(ui: &mut Ui, earlier: bool, enabled: bool, name: &str) -> egui::R
         egui::Button::new(if earlier { "↑" } else { "↓" }).min_size(vec2(28.0, 27.0)),
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &label));
-    response.on_hover_text(label)
+    crate::overlay_glass::tooltip(response, palette, label)
 }

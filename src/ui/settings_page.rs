@@ -19,7 +19,6 @@ use crate::widgets;
 use super::*;
 
 const SPECIMEN_HEIGHT: f32 = 190.0;
-const SETTINGS_COLUMN: f32 = 610.0;
 
 pub(crate) fn draw_settings_page(
     root: &mut Ui,
@@ -29,18 +28,8 @@ pub(crate) fn draw_settings_page(
 ) {
     let palette = chrome.palette;
     let ctx = root.ctx().clone();
-    ctx.layer_painter(egui::LayerId::background()).rect_filled(
-        content_rect,
-        theme::content_corners(&palette),
-        palette.bg,
-    );
-
-    let top = content_rect.top() + chrome.window_controls_room() + 22.0;
-    let inset = (content_rect.width() * 0.035).clamp(12.0, 36.0);
-    let page = Rect::from_min_max(
-        pos2(content_rect.left() + inset, top),
-        pos2(content_rect.right() - inset, content_rect.bottom() - 10.0),
-    );
+    paint_builtin_page(root, content_rect, &palette);
+    let page = builtin_page_rect(content_rect, chrome.window_controls_room());
     let wide = page.width() >= 680.0;
     let mut area = root.new_child(egui::UiBuilder::new().max_rect(page));
     area.set_clip_rect(page.intersect(root.clip_rect()));
@@ -50,7 +39,7 @@ pub(crate) fn draw_settings_page(
     let query = &mut chrome.browser.settings_query;
     let mut pane = page;
     if wide {
-        let nav = Rect::from_min_size(page.min, vec2(166.0, page.height()));
+        let nav = Rect::from_min_size(page.min, vec2(174.0, page.height()));
         let mut nav_area = area.new_child(egui::UiBuilder::new().max_rect(nav));
         nav_area.label(
             RichText::new(tr("common-settings"))
@@ -98,57 +87,20 @@ pub(crate) fn draw_settings_page(
         pane.min.y = area.min_rect().bottom() + 10.0;
     }
 
-    let width = pane.width().min(SETTINGS_COLUMN);
-    let left = pane.center().x - width * 0.5;
-    let column = Rect::from_min_max(pos2(left, pane.top()), pos2(left + width, pane.bottom()));
+    let column = centre_builtin_column(pane);
     let mut body = area.new_child(
         egui::UiBuilder::new()
             .max_rect(column)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     body.set_clip_rect(body.clip_rect().intersect(column));
-    let (field, _) = body.allocate_exact_size(vec2(width, 34.0), Sense::hover());
-    let mut entry = body.new_child(
-        egui::UiBuilder::new()
-            .max_rect(field)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    builtin_search(
+        &mut body,
+        &palette,
+        "settings_search",
+        query,
+        tr("settings-find"),
     );
-    let surface = crate::overlay_glass::Surface::begin(&entry);
-    if !surface.is_native() {
-        entry
-            .painter()
-            .rect_filled(field, 9, settings_card_fill(&palette));
-        entry.painter().rect_stroke(
-            field,
-            9,
-            Stroke::new(1.0_f32, palette.border),
-            egui::StrokeKind::Inside,
-        );
-    }
-    entry.add_space(10.0);
-    let (glyph, _) = entry.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-    icons::draw_icon(entry.painter(), glyph, Icon::Search, palette.text_muted);
-    let search = entry.add(
-        TextEdit::singleline(query)
-            .id_salt("settings_search")
-            .text_color(palette.text)
-            .hint_text(RichText::new(tr("settings-find")).color(palette.text_muted))
-            .desired_width((entry.available_width() - 34.0).max(1.0))
-            .frame(Frame::NONE),
-    );
-    if search.has_focus() && entry.input(|input| input.key_pressed(Key::Escape)) {
-        query.clear();
-    }
-    if !query.is_empty()
-        && icons::icon_button(&mut entry, Icon::Close, 12.0, &palette, true)
-            .on_hover_text(tr("settings-clear-search"))
-            .clicked()
-    {
-        query.clear();
-        search.request_focus();
-    }
-    surface.finish(&entry, field, crate::overlay_glass::Role::Field);
-
     let section = *selection;
     let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
     let searching = !words.is_empty();
@@ -159,7 +111,7 @@ pub(crate) fn draw_settings_page(
         } else {
             section.label()
         })
-        .size(24.0)
+        .size(BUILTIN_HEADING)
         .strong()
         .color(palette.text),
     );
@@ -304,12 +256,75 @@ fn settings_nav(
     response.on_hover_cursor(CursorIcon::PointingHand).clicked()
 }
 
-fn settings_card_fill(palette: &Palette) -> Color32 {
-    if palette.dark {
-        theme::mix(palette.bg, Color32::WHITE, 0.055)
-    } else {
-        theme::mix(palette.bg, Color32::WHITE, 0.75)
+pub(super) fn builtin_search(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    query: &mut String,
+    label: &str,
+) {
+    let (field, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
+    let surface = crate::overlay_glass::Surface::begin(ui);
+    let role = crate::overlay_glass::Role::Field;
+    let fill = builtin_card(palette).fill;
+    ui.painter().rect_filled(
+        field,
+        role.radius(),
+        fill.gamma_multiply(if surface.is_native() { 0.60 } else { 1.0 }),
+    );
+    icons::draw_icon(
+        ui.painter(),
+        Rect::from_center_size(
+            pos2(field.left() + 18.0, field.center().y),
+            vec2(15.0, 15.0),
+        ),
+        Icon::Search,
+        palette.text_muted,
+    );
+    let area = field
+        .with_min_x(field.left() + 34.0)
+        .with_max_x(field.right() - 34.0);
+    let mut entry = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(area));
+    entry.style_mut().visuals.weak_text_color = Some(palette.text_muted);
+    let search = entry.put(
+        area,
+        TextEdit::singleline(query)
+            .font(FontId::proportional(13.5))
+            .text_color(palette.text)
+            .hint_text(label)
+            .frame(Frame::NONE)
+            .margin(Margin::ZERO)
+            .min_size(area.size())
+            .align(Align2::LEFT_CENTER)
+            .desired_width(area.width()),
+    );
+    search.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
+    let focused = search.has_focus();
+    if focused && entry.input(|input| input.key_pressed(Key::Escape)) {
+        query.clear();
     }
+    if focused || !surface.is_native() {
+        let stroke = if focused {
+            ui.visuals().selection.stroke
+        } else {
+            Stroke::new(1.0, palette.border)
+        };
+        ui.painter()
+            .rect_stroke(field, role.radius(), stroke, StrokeKind::Inside);
+    }
+    if !query.is_empty() {
+        let rect = Rect::from_center_size(
+            pos2(field.right() - 17.0, field.center().y),
+            vec2(24.0, 24.0),
+        );
+        let clear = ui.interact(rect, entry.scope_id().with("clear"), Sense::click());
+        icons::paint_icon_button(ui, &clear, Icon::Close, 12.0, palette);
+        if crate::overlay_glass::tooltip(clear, palette, tr("settings-clear-search")).clicked() {
+            query.clear();
+            search.request_focus();
+        }
+    }
+    surface.finish(ui, field, role);
 }
 
 /// "Save as a preset…", and the field it opens.
@@ -381,49 +396,7 @@ fn save_as_preset(
 /// to wrap on a narrow window.
 #[cfg(not(target_os = "macos"))]
 fn preset_button(ui: &mut Ui, palette: &Palette, label: &str, selected: bool) -> egui::Response {
-    let text =
-        ui.painter()
-            .layout_no_wrap(label.to_owned(), FontId::proportional(12.0), palette.text);
-    let (rect, response) = ui.allocate_exact_size(vec2(text.size().x + 26.0, 30.0), Sense::click());
-    let lit = glass::ease_out(ui.ctx().animate_bool_with_time(
-        response.id,
-        selected,
-        palette.material.animation,
-    ));
-    let hover = glass::ease_out(ui.ctx().animate_bool_with_time(
-        response.id.with("hover"),
-        response.hovered() && !selected,
-        0.12,
-    ));
-    if lit > 0.0 || hover > 0.0 {
-        glass::paint(
-            ui.painter(),
-            rect,
-            palette,
-            Glass::tier(Tier::Row)
-                .strength(0.55 + 0.45 * lit.max(hover))
-                .tint(if lit > 0.5 {
-                    palette.active
-                } else {
-                    palette.surface
-                })
-                .glow(palette.appearance.glow * lit)
-                .no_shadow(),
-        );
-    }
-    ui.painter().galley(
-        pos2(
-            rect.center().x - text.size().x * 0.5,
-            rect.center().y - text.size().y * 0.5,
-        ),
-        text,
-        if selected {
-            palette.text
-        } else {
-            palette.text_muted
-        },
-    );
-    response.on_hover_cursor(CursorIcon::PointingHand)
+    widgets::label_button(ui, palette, label, 30.0, 26.0, selected)
 }
 
 /// The muted line that goes under a control and says what it does.
@@ -434,12 +407,6 @@ fn note(ui: &mut Ui, palette: &Palette, text: impl Into<String>) {
             .size(11.5)
             .color(palette.text_muted),
     );
-}
-
-/// A heading inside a section, for the sections that hold more than one thing.
-fn subhead(ui: &mut Ui, palette: &Palette, text: &str) {
-    ui.label(RichText::new(text).size(12.0).color(palette.text));
-    ui.add_space(6.0);
 }
 
 /// A segmented control over a fixed set of variants. True when it moved.
@@ -841,10 +808,7 @@ pub(crate) fn settings_appearance(
     settings_section(ui, palette, tr("common-liquid-glass"), |ui| {
         note(ui, palette, tr("settings-liquid-glass-native"));
         ui.add_space(6.0);
-        if ui
-            .button(RichText::new(tr("settings-open-macos-appearance")).color(palette.text))
-            .clicked()
-        {
+        if ui.button(tr("settings-open-macos-appearance")).clicked() {
             actions.push(UiAction::OpenSystemAppearance);
         }
     });
@@ -1109,24 +1073,7 @@ pub(crate) fn settings_appearance(
     });
 
     settings_section(ui, palette, tr("settings-chrome"), |ui| {
-        subhead(
-            ui,
-            palette,
-            tr("settings-what-a-hidden-sidebar-leaves-at-the"),
-        );
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.appearance.spine,
-            &theme::Spine::ALL,
-            zervo_core::theme::Spine::label,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(ui, palette, chrome.settings.appearance.spine.note());
-
         if cfg!(target_os = "macos") {
-            ui.add_space(12.0);
             if widgets::toggle(
                 ui,
                 &mut chrome.settings.appearance.align_nav,
@@ -1507,6 +1454,10 @@ pub(crate) fn settings_layout(
                 tr("settings-show-workspace-tab-counts"),
             ),
             (
+                &mut chrome.settings.show_tab_favicons,
+                tr("layout-show-site-icons"),
+            ),
+            (
                 &mut chrome.settings.always_show_tab_close,
                 tr("settings-always-show-tab-close-buttons"),
             ),
@@ -1520,6 +1471,23 @@ pub(crate) fn settings_layout(
             }
         }
     });
+    settings_section(
+        ui,
+        palette,
+        tr("settings-what-a-hidden-sidebar-leaves-at-the"),
+        |ui| {
+            if choose(
+                ui,
+                palette,
+                &mut chrome.settings.appearance.spine,
+                &theme::Spine::ALL,
+                theme::Spine::label,
+            ) {
+                actions.push(UiAction::SettingsChanged);
+            }
+            note(ui, palette, chrome.settings.appearance.spine.note());
+        },
+    );
     settings_section(ui, palette, tr("settings-new-tab-page"), |ui| {
         if choose(
             ui,
@@ -2043,16 +2011,11 @@ pub(crate) fn settings_section(
         return;
     }
 
-    Frame::NONE
-        .fill(settings_card_fill(palette))
-        .stroke(Stroke::new(1.0_f32, palette.border.gamma_multiply(0.72)))
-        .corner_radius(13)
-        .inner_margin(Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).size(15.0).strong().color(palette.text));
-            ui.add_space(7.0);
-            ui.push_id(title, add_contents);
-        });
+    Frame::NONE.inner_margin(Margin::same(18)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(title).size(16.0).strong().color(palette.text));
+        ui.add_space(7.0);
+        ui.push_id(title, add_contents);
+    });
     ui.add_space(13.0);
 }

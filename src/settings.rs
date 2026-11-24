@@ -255,6 +255,7 @@ pub struct Settings {
     pub show_essentials: bool,
     pub sidebar_sections: [SidebarSection; 3],
     pub show_pinned_section: bool,
+    pub show_tab_favicons: bool,
     pub show_open_tabs: bool,
     pub show_sidebar_tools: bool,
     pub show_sidebar_widgets: bool,
@@ -356,7 +357,7 @@ pub struct Settings {
 }
 
 pub const MAX_ACCENT_STRENGTH: f32 = 0.4;
-const DEFAULT_ACCENT_STRENGTH: f32 = 0.2;
+const DEFAULT_ACCENT_STRENGTH: f32 = 0.1;
 
 fn sidebar_default_appearance() -> crate::theme::Appearance {
     use crate::theme::{Appearance, Preset, Seam, Spine};
@@ -422,6 +423,7 @@ impl Default for Settings {
             show_essentials: true,
             sidebar_sections: SidebarSection::ALL,
             show_pinned_section: true,
+            show_tab_favicons: true,
             show_open_tabs: true,
             show_sidebar_tools: true,
             show_sidebar_widgets: true,
@@ -455,6 +457,21 @@ impl Default for Settings {
 }
 
 impl Settings {
+    fn new_install() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            serde_json::from_str(include_str!("../assets/default-settings.json"))
+                .expect("the bundled macOS defaults must be valid")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                seen_setup: false,
+                ..Self::default()
+            }
+        }
+    }
+
     pub fn reset_sidebar_sections(&mut self) {
         self.sidebar_sections = SidebarSection::ALL;
         for section in SidebarSection::ALL {
@@ -485,16 +502,15 @@ fn settings_path() -> Option<PathBuf> {
 // nameable from here any more.
 
 pub fn load() -> Settings {
-    let fresh = settings_path().is_none_or(|path| !path.exists());
-    let mut settings: Settings = crate::store::load_or_default(settings_path());
+    let path = settings_path();
+    let mut settings: Settings = if path.as_ref().is_some_and(|file| file.exists()) {
+        crate::store::load_or_default(path)
+    } else {
+        Settings::new_install()
+    };
     migrate(&mut settings);
     #[cfg(target_os = "macos")]
     use_native_material(&mut settings.appearance);
-    if fresh {
-        // No settings file, so nobody has been here before. The only honest
-        // signal for it: there is no account, and nothing to ask.
-        settings.seen_setup = false;
-    }
     settings
 }
 
@@ -626,10 +642,10 @@ mod tests {
     }
 
     #[test]
-    fn default_accent_is_blue_at_medium_strength() {
+    fn default_accent_is_blue_at_low_strength() {
         let settings = Settings::default();
         assert_eq!(settings.accent, AccentColor::Blue);
-        assert_eq!(settings.appearance.candy, 0.2);
+        assert_eq!(settings.appearance.candy, 0.1);
         assert!(!settings.appearance.workspace_accent);
     }
 
@@ -722,6 +738,25 @@ mod tests {
 #[cfg(test)]
 mod first_run_tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_install_starts_with_the_bundled_preferences() {
+        let mut settings = Settings::new_install();
+        migrate(&mut settings);
+        use_native_material(&mut settings.appearance);
+        // The setup is deliberately the one piece of state not copied from
+        // the maintainer's profile. A new person still gets the first-run
+        // tour, while every choice they make starts from this same profile.
+        assert!(!settings.seen_setup);
+        assert!(settings.downloads_auto);
+        assert_eq!(settings.search_engine, SearchEngine::Google);
+        assert_eq!(settings.appearance.spine, crate::theme::Spine::Favicons);
+        assert_eq!(settings.appearance.candy, 0.10);
+        assert_eq!(settings.sidebar_sections[0], SidebarSection::Pinned);
+        assert!(!settings.show_pinned_section);
+        assert!(settings.show_tab_favicons);
+    }
 
     /// An update that adds a field must not turn into an interrogation.
     ///

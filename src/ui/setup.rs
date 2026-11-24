@@ -4,8 +4,8 @@
 //!
 use crate::l10n::text as tr;
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Rect, RichText, Sense, Stroke,
-    TextEdit, Ui, pos2, vec2,
+    Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Rect, RichText, Sense, TextEdit,
+    Ui, pos2, vec2,
 };
 
 use crate::glass::{self, Glass};
@@ -609,63 +609,18 @@ fn ready(
     ui.add_space(28.0);
     ui.horizontal(|ui| {
         ui.add_space(((ui.available_width() - 300.0) * 0.5).max(0.0));
-        if pill(ui, &palette, tr("setup-start-over"), false).clicked() {
+        if pill(ui, &palette, tr("setup-start-over")).clicked() {
             go(ui.ctx(), 0);
         }
         ui.add_space(10.0);
-        if pill(ui, &palette, tr("setup-start-browsing"), true).clicked() {
+        if pill(ui, &palette, tr("setup-start-browsing")).clicked() {
             finish(chrome, actions);
         }
     });
 }
 
-/// The setup's own button. Not `widgets::` — nothing else in the application
-/// has a button this size, and giving it one would be inventing a control for
-/// a screen that is seen once.
-fn pill(ui: &mut Ui, palette: &Palette, label: &str, filled: bool) -> egui::Response {
-    let text =
-        ui.painter()
-            .layout_no_wrap(label.to_owned(), FontId::proportional(14.0), palette.text);
-    let (rect, response) = ui.allocate_exact_size(vec2(text.size().x + 46.0, 42.0), Sense::click());
-    let hover = glass::ease_out(ui.ctx().animate_bool_with_time(
-        response.id,
-        response.hovered(),
-        0.12,
-    ));
-    if filled {
-        glass::paint(
-            ui.painter(),
-            rect,
-            palette,
-            Glass::tier(Tier::Pill)
-                .tint(palette.active)
-                .strength(0.85 + 0.15 * hover)
-                .glow(0.4 + 0.3 * hover),
-        );
-    } else {
-        ui.painter().rect_stroke(
-            rect,
-            CornerRadius::same(palette.radius(Tier::Pill)),
-            Stroke::new(1.0_f32, palette.border),
-            egui::StrokeKind::Inside,
-        );
-        if hover > 0.0 {
-            ui.painter().rect_filled(
-                rect,
-                CornerRadius::same(palette.radius(Tier::Pill)),
-                palette.surface_hover.gamma_multiply(hover * 0.7),
-            );
-        }
-    }
-    ui.painter().galley(
-        pos2(
-            rect.center().x - text.size().x * 0.5,
-            rect.center().y - text.size().y * 0.5,
-        ),
-        text,
-        palette.text,
-    );
-    response.on_hover_cursor(CursorIcon::PointingHand)
+fn pill(ui: &mut Ui, palette: &Palette, label: &str) -> egui::Response {
+    crate::widgets::label_button(ui, palette, label, 42.0, 46.0, false)
 }
 
 /// Back, the dots, and forward.
@@ -721,7 +676,7 @@ fn footer(
                 ))
                 .layout(egui::Layout::top_down(egui::Align::Center)),
         );
-        if pill(&mut middle, &palette, tr("setup-set-it-up"), true).clicked() {
+        if pill(&mut middle, &palette, tr("setup-set-it-up")).clicked() {
             go(&ui.ctx().clone(), 1);
         }
         if !NATIVE_MATERIAL {
@@ -742,7 +697,7 @@ fn footer(
             ))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    if pill(&mut left, &palette, tr("common-back"), false).clicked() {
+    if pill(&mut left, &palette, tr("common-back")).clicked() {
         go(&ui.ctx().clone(), now.saturating_sub(1));
     }
 
@@ -764,7 +719,6 @@ fn footer(
             } else {
                 tr("setup-next")
             },
-            true,
         )
         .clicked()
         {

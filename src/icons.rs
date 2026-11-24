@@ -165,8 +165,7 @@ pub fn draw_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
     );
 }
 
-/// A ghost icon button: rounded hover fill, palette-derived glyph color,
-/// pointer cursor, dimmed when disabled, with a press micro-interaction.
+/// A bare icon with hover feedback and a slightly smaller glyph when pressed.
 pub fn icon_button(
     ui: &mut Ui,
     icon: Icon,
@@ -174,7 +173,7 @@ pub fn icon_button(
     palette: &Palette,
     enabled: bool,
 ) -> Response {
-    let (rect, response) = ui.allocate_exact_size(
+    let (_, response) = ui.allocate_exact_size(
         vec2(size + 12.0, size + 8.0),
         if enabled {
             Sense::click()
@@ -183,55 +182,67 @@ pub fn icon_button(
         },
     );
 
-    let hover_t = crate::glass::ease_out(ui.ctx().animate_bool_with_time(
+    paint_icon_button(ui, &response, icon, size, palette);
+    response
+}
+
+pub(crate) fn paint_icon_button(
+    ui: &Ui,
+    response: &Response,
+    icon: Icon,
+    size: f32,
+    palette: &Palette,
+) {
+    let enabled = response.enabled() && response.sense.senses_click();
+    let hover = crate::glass::ease_out(ui.ctx().animate_bool_with_time(
         response.id.with("hover"),
         enabled && response.hovered(),
         0.12,
     ));
-    // Presses feel immediate; only the release settles.
-    let is_down = enabled && response.is_pointer_button_down_on();
-    let press_t = crate::glass::ease_out(ui.ctx().animate_bool_with_time(
+    let pressed = enabled && response.is_pointer_button_down_on();
+    let press = crate::glass::ease_out(ui.ctx().animate_bool_with_time(
         response.id.with("press"),
-        is_down,
-        if is_down { 0.03 } else { 0.12 },
+        pressed,
+        if pressed { 0.03 } else { 0.12 },
     ));
-
-    let painter = ui.painter();
-    if hover_t > 0.0 {
-        painter.rect_filled(
-            rect,
+    if hover > 0.0 {
+        ui.painter().rect_filled(
+            response.rect,
             palette.corner(Tier::Row),
-            palette.surface_hover.gamma_multiply(hover_t),
+            palette.surface_hover.gamma_multiply(hover),
         );
     }
-    let color = if !enabled {
-        palette.text_muted.gamma_multiply(0.35)
+    let color = if enabled {
+        crate::theme::mix(palette.text_muted, palette.text, hover)
     } else {
-        crate::theme::mix(palette.text_muted, palette.text, hover_t)
+        palette.text_muted.gamma_multiply(0.35)
     };
-
-    // Press squish: the glyph scales down slightly while held.
-    let scale = 1.0 - 0.10 * press_t;
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        icon.glyph(),
-        phosphor_font(size * scale),
+    let size = size * (1.0 - 0.10 * press);
+    draw_icon(
+        ui.painter(),
+        Rect::from_center_size(response.rect.center(), vec2(size, size)),
+        icon,
         color,
     );
-
-    finish_button(ui, palette, response, enabled)
-}
-
-fn finish_button(ui: &Ui, palette: &Palette, response: Response, enabled: bool) -> Response {
     if enabled && response.has_focus() {
         paint_focus(ui, palette, response.rect, Tier::Row);
     }
     if enabled {
-        response.on_hover_cursor(CursorIcon::PointingHand)
-    } else {
-        response
+        response.clone().on_hover_cursor(CursorIcon::PointingHand);
     }
+}
+
+pub(crate) fn labelled_button(
+    ui: &mut Ui,
+    icon: Icon,
+    size: f32,
+    palette: &Palette,
+    enabled: bool,
+    label: &str,
+) -> Response {
+    let response = icon_button(ui, icon, size, palette, enabled);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    crate::overlay_glass::tooltip(response, palette, label)
 }
 
 pub fn paint_focus(ui: &Ui, palette: &Palette, rect: Rect, tier: Tier) {

@@ -4,8 +4,8 @@
 //! same accent, same animation timings.
 
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Role, Sense, Stroke, StrokeKind, Ui,
-    WidgetInfo, pos2, vec2,
+    Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Response, Role, Sense, Stroke,
+    StrokeKind, Ui, WidgetInfo, pos2, vec2,
 };
 
 use crate::glass;
@@ -14,6 +14,69 @@ use crate::theme::{self, Palette, Tier};
 /// Row height shared by every control, so stacked settings line up. The
 /// material's, so a theme that wants roomier controls says so once.
 const ROW_HEIGHT: f32 = crate::theme::Material::ZERVO.row_height;
+
+pub(crate) fn button_ink(
+    ui: &Ui,
+    response: &Response,
+    rect: Rect,
+    palette: &Palette,
+    selected: bool,
+) -> Color32 {
+    let enabled = response.enabled() && response.sense.senses_click();
+    let fill = if selected || (enabled && response.is_pointer_button_down_on()) {
+        palette.button_pressed_fill()
+    } else if enabled && response.hovered() {
+        palette.active
+    } else {
+        palette.button_fill()
+    };
+    let ink = if palette.dark && palette.text == Color32::WHITE {
+        palette.text
+    } else {
+        palette.ink_on(fill).0
+    };
+    let corner = palette.corner(Tier::Control);
+    ui.painter().rect_filled(
+        rect,
+        corner,
+        fill.gamma_multiply(if enabled { 1.0 } else { 0.45 }),
+    );
+    if enabled && response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            corner,
+            Stroke::new(1.5, ink),
+            StrokeKind::Inside,
+        );
+    }
+    if enabled {
+        response.clone().on_hover_cursor(CursorIcon::PointingHand);
+        ink
+    } else {
+        ink.gamma_multiply(0.55)
+    }
+}
+
+pub(crate) fn label_button(
+    ui: &mut Ui,
+    palette: &Palette,
+    label: &str,
+    height: f32,
+    padding: f32,
+    selected: bool,
+) -> Response {
+    let font = FontId::proportional(13.0);
+    let text = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(text.size().x + padding, height), Sense::click());
+    let ink = button_ink(ui, &response, rect, palette, selected);
+    ui.painter()
+        .galley(rect.center() - text.size() * 0.5, text, ink);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, response.enabled(), label));
+    response
+}
 
 /// An iOS-style switch with a label. Returns true when toggled.
 pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str, palette: &Palette) -> bool {
