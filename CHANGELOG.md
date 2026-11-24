@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.1.1 — 24 November 2026
+
+- Fixed a blank toolbar strip that covered the top of the browser when
+  entering macOS fullscreen with the green window button.
+- Fixed macOS rendering flicker during scrolling, video playback, page
+  animation, and sidebar transitions. Zervo now composes the page and browser
+  chrome before presenting them alongside the native Liquid Glass layers.
+- Reduced unnecessary chrome redraws when moving the pointer over a webpage.
+- Kept webpages at their native scale while the sidebar moves, reduced page
+  relayouts, and fixed the orange line that could appear while switching sidebar
+  modes.
+
 ## 0.6.1 — 24 November 2026
 
 Zervo 0.6.1 fixes live macOS appearance switching, polishes the sidebar and

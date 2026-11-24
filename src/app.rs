@@ -605,8 +605,9 @@ impl servo::WebViewDelegate for AppState {
         if !showing {
             return;
         }
-        self.page_frame_ready.set(true);
-        self.window.request_redraw();
+        if !self.page_frame_ready.replace(true) {
+            self.window.request_redraw();
+        }
     }
 
     /// Servo reports the URL for same-document navigation too, which is the

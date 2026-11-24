@@ -34,6 +34,7 @@ mod discrete_gpu {
 
 mod app;
 mod backdrop;
+mod compositor;
 mod controls;
 mod dashboard;
 #[cfg(target_os = "macos")]
@@ -238,6 +239,10 @@ struct RunningApp {
     animation_waker: Waker,
     animation_pending: bool,
     painted_webview: Option<WebViewId>,
+    /// Private GPU target. Only the completed composition is copied to the window.
+    composition: Option<compositor::ColorTarget>,
+    /// Area where page pointer motion also reveals the native traffic lights.
+    controls_hover_rect: Option<egui::Rect>,
     /// What `apply_theme` was last run for. Reapplying the theme
     /// means restyling egui, retuning the window's appearance and the frosted
     /// material, and telling every webview its prefers-color-scheme changed —
@@ -649,6 +654,8 @@ impl ApplicationHandler<WakerEvent> for App {
             animation_waker: waker.clone(),
             animation_pending: false,
             painted_webview: None,
+            composition: None,
+            controls_hover_rect: None,
             applied_theme,
             applied_appearance,
             shot: shot::Shot::from_env(),
@@ -767,7 +774,12 @@ impl RunningApp {
                 return;
             },
             WindowEvent::Resized(new_size) => {
-                state.window_rendering_context.resize(new_size);
+                if new_size.width == 0 || new_size.height == 0 {
+                    return;
+                }
+                if state.window_rendering_context.size() != new_size {
+                    state.window_rendering_context.resize(new_size);
+                }
                 let _ = self.egui_glow.on_window_event(&state.window, &event);
                 self.redraw();
                 return;
@@ -802,6 +814,7 @@ impl RunningApp {
 
         // Route the remaining (input) events: egui first, unless the cursor is
         // over the web content, in which case pointer events bypass the chrome.
+        let previous_cursor = self.cursor;
         match &event {
             WindowEvent::CursorMoved { position, .. } => self.cursor = Some(*position),
             WindowEvent::CursorLeft { .. } => self.cursor = None,
@@ -900,6 +913,30 @@ impl RunningApp {
             self.controls_open || egui::Popup::is_any_open(&self.egui_glow.egui_ctx);
         let mut consumed = false;
         match &event {
+            WindowEvent::CursorMoved { .. }
+                if over_content
+                    && pointer_on_page
+                    && self.hovered_webview.is_some()
+                    && self.sidebar_overlay.is_none()
+                    && !self.controls_hover_rect.is_some_and(|rect| {
+                        let in_controls = |p: PhysicalPosition<f64>| {
+                            rect.contains(egui::pos2(p.x as f32, p.y as f32) / scale)
+                        };
+                        previous_cursor.is_some_and(in_controls)
+                            || self.cursor.is_some_and(in_controls)
+                    }) =>
+            {
+                // Update the adapter's click position, but leave the page's motion
+                // out of egui's frame input. Processing PointerMoved there starts
+                // egui's own repaint cycle even when no chrome widget is under it.
+                let input_len = self.egui_glow.egui_winit.egui_input().events.len();
+                let _ = self.egui_glow.on_window_event(&state.window, &event);
+                self.egui_glow
+                    .egui_winit
+                    .egui_input_mut()
+                    .events
+                    .truncate(input_len);
+            },
             WindowEvent::MouseWheel { .. } | WindowEvent::MouseInput { .. } if over_content => {
                 // Clicks on the page take keyboard focus away from the chrome,
                 // or the address bar would keep eating keystrokes.
@@ -1212,7 +1249,14 @@ impl RunningApp {
 
     fn redraw(&mut self) {
         let state = self.state.clone();
-        let _ = state.rendering_context.make_current();
+        let window_size = state.window.inner_size();
+        if window_size.width == 0
+            || window_size.height == 0
+            || state.rendering_context.make_current().is_err()
+        {
+            return;
+        }
+        let gl = state.window_rendering_context.glow_gl_api();
 
         // One reading of the clock for the whole frame. What gets drawn and
         // what gets scheduled have to agree about what time it is, or a toast
@@ -1484,8 +1528,8 @@ impl RunningApp {
                 && let Some(webview) = &active_webview
             {
                 let size = PhysicalSize::new(
-                    (content_rect.width() * scale).round().max(1.0) as u32,
-                    (content_rect.height() * scale).round().max(1.0) as u32,
+                    (output.webview_size.x * scale).round().max(1.0) as u32,
+                    (output.webview_size.y * scale).round().max(1.0) as u32,
                 );
                 let current_size = webview.size();
                 let resized = size.width != current_size.width as u32
@@ -1504,20 +1548,28 @@ impl RunningApp {
 
                 // Blit the page under all chrome widgets. Only when a live
                 // webview exists — otherwise the FBO holds a stale frame.
-                if let Some(render_to_parent) = offscreen.render_to_parent_callback() {
+                offscreen.prepare_for_rendering();
+                // SAFETY: Servo has bound the shared offscreen context's page FBO.
+                // The page is copied during paint, before applying tab or resize actions.
+                let page = unsafe { gl.get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING) };
+                if let Some(page) = page {
                     root.layer_painter(LayerId::background())
                         .add(egui::PaintCallback {
                             rect: content_rect,
                             callback: Arc::new(CallbackFn::new(move |info, painter| {
                                 let clip = info.viewport_in_pixels();
-                                let rect_in_parent = euclid::default::Rect::new(
-                                    euclid::default::Point2D::new(
-                                        clip.left_px,
-                                        clip.from_bottom_px,
+                                let x = clip.left_px;
+                                let y = clip.from_bottom_px;
+                                compositor::blit(
+                                    painter.gl(),
+                                    page,
+                                    compositor::page_crop(
+                                        size.height as i32,
+                                        clip.width_px,
+                                        clip.height_px,
                                     ),
-                                    euclid::default::Size2D::new(clip.width_px, clip.height_px),
+                                    [x, y, x + clip.width_px, y + clip.height_px],
                                 );
-                                render_to_parent(painter.gl(), rect_in_parent);
                             })),
                         });
 
@@ -1584,6 +1636,33 @@ impl RunningApp {
             ui_output = Some(output);
         });
 
+        use glow::HasContext as _;
+        let size = [window_size.width, window_size.height];
+        if self
+            .composition
+            .as_ref()
+            .is_none_or(|frame| frame.size != size)
+        {
+            if let Some(old) = self.composition.take() {
+                old.destroy(&gl);
+            }
+            self.composition = compositor::ColorTarget::new(&gl, size);
+        }
+        // With limited GPU memory the ordinary window target is still usable.
+        state.window_rendering_context.prepare_for_rendering();
+        // SAFETY: the rendering context is current. Both the clear and subsequent
+        // paint callbacks target our private colour buffer when available.
+        unsafe {
+            if let Some(frame) = &self.composition {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(frame.framebuffer));
+            }
+            gl.disable(glow::SCISSOR_TEST);
+            gl.color_mask(true, true, true, true);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+        }
+        self.egui_glow.paint(&state.window);
+
         // Downloads the user allowed in the pass just drawn. Started here
         // rather than inside it, because the UI pass holds `controls` borrowed
         // and starting one wants the browser state too.
@@ -1606,6 +1685,8 @@ impl RunningApp {
         }
 
         let mut ambient = false;
+        #[cfg(target_os = "macos")]
+        let mut native_geometry = None;
         if let Some(output) = ui_output {
             self.content_rect_points = output.content_rect;
             self.page_rect_points = output.page_rect;
@@ -1634,21 +1715,18 @@ impl RunningApp {
                                 .sidebar_overlay
                                 .is_some_and(|sidebar| sidebar.contains_rect(rect))
                     });
-                let controls_hovered = window_controls.is_some_and(|rect| {
-                    cursor.is_some_and(|point| rect.expand(8.0 / zoom).contains(point))
-                });
+                self.controls_hover_rect = window_controls
+                    .filter(|_| controls_over_page)
+                    .map(|rect| rect.expand(8.0 / zoom));
+                let controls_hovered = self
+                    .controls_hover_rect
+                    .is_some_and(|rect| cursor.is_some_and(|point| rect.contains(point)));
                 let opacity = ctx.animate_bool_with_time(
                     egui::Id::unique("native_window_controls_visible"),
                     !controls_over_page || controls_hovered,
                     palette.material.animation.min(0.16),
                 );
-                vibrancy::set_window_controls_opacity(&state.window, opacity);
-                if let Some(backdrop) = &self._vibrancy {
-                    let native = output.native_glass;
-                    let fallback = native.sidebar.filter(|_| !native.sidebar_captured);
-                    backdrop.update_sidebar(fallback, zoom);
-                    backdrop.update_address(native.address, zoom);
-                }
+                native_geometry = Some((output.native_glass, zoom, opacity));
             }
             state
                 .content_origin
@@ -1718,24 +1796,16 @@ impl RunningApp {
             self.library_saved_at = std::time::Instant::now();
         }
 
-        // Paint order: bind the window framebuffer, egui paint (runs the blit
-        // callback first, then draws chrome over it), swap.
-        let _ = state.rendering_context.make_current();
-        state.window_rendering_context.prepare_for_rendering();
-        // Nothing in surfman or Servo clears the window framebuffer, so clear
-        // it to fully transparent ourselves: with a non-opaque layer, any
-        // pixel the chrome does not cover shows what is behind the window.
-        use glow::HasContext as _;
-        let gl = state.window_rendering_context.glow_gl_api();
-        // SAFETY: the window context is current and its framebuffer is bound.
-        // Reset the clear state inherited from Servo's draws.
-        unsafe {
-            gl.disable(glow::SCISSOR_TEST);
-            gl.color_mask(true, true, true, true);
-            gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
+        // Actions can re-enter the engine or open an AppKit panel. Rebind the
+        // window after them and publish the whole composition in a single copy.
+        if state.window_rendering_context.make_current().is_err() {
+            return;
         }
-        self.egui_glow.paint(&state.window);
+        state.window_rendering_context.prepare_for_rendering();
+        if let Some(frame) = &self.composition {
+            let full = [0, 0, size[0] as i32, size[1] as i32];
+            compositor::blit(&gl, frame.framebuffer, full, full);
+        }
         // The picture of a page on its way out, taken in the one moment it can
         // be: the chrome has just been painted, the framebuffer still holds the
         // page the reader is leaving, and the buffers have not swapped. The
@@ -1817,6 +1887,14 @@ impl RunningApp {
             unsafe { gl.flush() };
             CATransaction::begin();
             CATransaction::setDisableActions(true);
+            if let Some((native, zoom, opacity)) = native_geometry {
+                vibrancy::set_window_controls_opacity(&state.window, opacity);
+                if let Some(backdrop) = &self._vibrancy {
+                    backdrop
+                        .update_sidebar(native.sidebar.filter(|_| !native.sidebar_captured), zoom);
+                    backdrop.update_address(native.address, zoom);
+                }
+            }
             if let Some(backdrop) = &self._vibrancy {
                 backdrop.show_window_glass(window_glass);
             }
@@ -1827,7 +1905,15 @@ impl RunningApp {
         state.window.pre_present_notify();
         state.window_rendering_context.present();
         #[cfg(target_os = "macos")]
-        objc2_quartz_core::CATransaction::commit();
+        {
+            // Surfman's inner transaction swaps the surface and waits for vblank.
+            // Its layer and our glass are still held by the outer transaction.
+            // Finish any outstanding GPU writes before WindowServer can sample
+            // either image, after allowing the GPU to work through that wait.
+            // SAFETY: surfman leaves the same window GL context current.
+            unsafe { gl.finish() };
+            objc2_quartz_core::CATransaction::commit();
+        }
 
         // Include repaint requests from native overlays made during painting.
         let egui_deadline = self.repaint_at.take();
@@ -2837,6 +2923,9 @@ impl Drop for RunningApp {
         #[cfg(target_os = "macos")]
         if let Some(overlays) = &self.glass_overlays {
             overlays.destroy(&self.state.window_rendering_context.glow_gl_api());
+        }
+        if let Some(frame) = self.composition.take() {
+            frame.destroy(&self.state.window_rendering_context.glow_gl_api());
         }
         self.egui_glow.destroy();
     }

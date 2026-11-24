@@ -103,11 +103,11 @@ pub fn configure_titlebar(window: &impl HasWindowHandle) -> Option<()> {
     let mtm = MainThreadMarker::new()?;
     let window = content_view(window)?.window()?;
     let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("ZervoTitlebar"));
-    // A hidden toolbar selects the unified titlebar geometry without
-    // reserving a toolbar row or introducing any browser controls.
-    toolbar.setVisible(false);
     window.setToolbar(Some(&toolbar));
     window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+    // AppKit can reset visibility when attaching a toolbar. Hide it after
+    // attachment so AppKit doesn't draw an empty toolbar in fullscreen.
+    toolbar.setVisible(false);
     window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
     Some(())
 }

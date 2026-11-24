@@ -1928,7 +1928,10 @@ pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
                 ui.label(
                     RichText::new(crate::l10n::message(
                         "settings-version",
-                        [("version", env!("CARGO_PKG_VERSION").into())],
+                        [(
+                            "version",
+                            env!("CARGO_PKG_VERSION").replace('+', ".").into(),
+                        )],
                     ))
                     .color(palette.text_muted),
                 );

@@ -8,6 +8,7 @@ use crate::l10n::text as tr;
 use crate::overlay_glass::ComboBoxGlassExt;
 use std::collections::HashMap;
 
+use egui::emath::GuiRounding as _;
 use egui::epaint::Mesh;
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Key, Margin, Panel, Rect,
@@ -206,6 +207,8 @@ pub struct UiOutput {
     /// Window-space rect of the web-content card, in logical points,
     /// snapped to the physical pixel grid so the blit and masks align.
     pub content_rect: egui::Rect,
+    /// Layout size of the engine page. The moving sidebar clips this viewport.
+    pub webview_size: egui::Vec2,
     /// The surface the page is painted on.
     ///
     /// The same rectangle, except at the last step of the seam, where the
@@ -328,6 +331,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             #[cfg(target_os = "macos")]
             native_glass: std::mem::take(&mut chrome.native_glass),
             content_rect: window,
+            webview_size: window.size(),
             page_rect: window,
             settings_open: true,
             sidebar_overlay: None,
@@ -417,6 +421,13 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     }
     let top_margin = theme::content_margin(&chrome.palette) * present;
     let content_rect = paint_content_backdrop(root, outer, &chrome.palette, top_margin);
+    // Lay out the wide endpoint once. While docking or undocking, reveal a
+    // top-left crop at native scale so text and pointer coordinates stay aligned.
+    let webview_size = if present != f32::from(layout.is_sidebar()) {
+        window.size()
+    } else {
+        content_rect.size()
+    };
 
     // The last step of the seam: the chrome stops being a panel beside the
     // page and becomes a tint laid on it. The sidebar keeps its own layout
@@ -619,6 +630,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         #[cfg(target_os = "macos")]
         native_glass: std::mem::take(&mut chrome.native_glass),
         content_rect,
+        webview_size,
         page_rect,
         settings_open,
         sidebar_overlay,
@@ -669,8 +681,11 @@ fn draw_sidebar(
     let stored = chrome
         .settings
         .sidebar_width
-        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+        .round_ui();
     let settled = reveal >= 1.0;
+    // The panel and its sliding contents share an edge on egui's layout grid.
+    let visible_width = (stored * reveal.clamp(0.0, 1.0)).round_ui();
     let mut reserved = None;
     let panel = if settled {
         Panel::left(SIDEBAR_ID)
@@ -680,7 +695,7 @@ fn draw_sidebar(
     } else {
         Panel::left(SIDEBAR_MORPH_ID)
             .resizable(false)
-            .exact_size(stored * reveal.max(0.0))
+            .exact_size(visible_width)
     };
     // egui paints its hover/drag stroke even with the idle separator off.
     // Mask only that parent style. The panel keeps its cursor, drag and AX handle.
@@ -753,7 +768,7 @@ fn draw_sidebar(
             // Slide the full-width body inside the panel's visible slice.
             // Keeping the width fixed preserves the alignment of every row.
             let full = Rect::from_min_size(
-                ui.max_rect().min - vec2(stored * (1.0 - reveal), 0.0),
+                ui.max_rect().min - vec2(stored - visible_width, 0.0),
                 vec2(
                     stored - f32::from(SIDEBAR_MARGIN.left + SIDEBAR_MARGIN.right),
                     ui.max_rect().height(),

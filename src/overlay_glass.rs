@@ -997,7 +997,7 @@ mod macos {
 
     #[derive(Default)]
     struct Renderer {
-        target: Option<(glow::Framebuffer, glow::Renderbuffer)>,
+        target: Option<crate::compositor::ColorTarget>,
         size: [u32; 2],
         previous: Option<(Option<glow::Framebuffer>, Option<glow::Framebuffer>)>,
         nested: usize,
@@ -1017,43 +1017,10 @@ mod macos {
                 return true;
             }
             self.destroy(gl);
-            // SAFETY: main-thread renderer with its OpenGL context current.
-            // Restore framebuffer and renderbuffer bindings before returning.
-            unsafe {
-                let Ok(fbo) = gl.create_framebuffer() else {
-                    return false;
-                };
-                let Ok(color) = gl.create_renderbuffer() else {
-                    gl.delete_framebuffer(fbo);
-                    return false;
-                };
-                let previous = gl.get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING);
-                let previous_color = gl.get_parameter_renderbuffer(glow::RENDERBUFFER_BINDING);
-                gl.bind_renderbuffer(glow::RENDERBUFFER, Some(color));
-                gl.renderbuffer_storage(
-                    glow::RENDERBUFFER,
-                    glow::RGBA8,
-                    size[0] as i32,
-                    size[1] as i32,
-                );
-                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(fbo));
-                gl.framebuffer_renderbuffer(
-                    glow::DRAW_FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0,
-                    glow::RENDERBUFFER,
-                    Some(color),
-                );
-                let complete = gl.check_framebuffer_status(glow::DRAW_FRAMEBUFFER)
-                    == glow::FRAMEBUFFER_COMPLETE;
-                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, previous);
-                gl.bind_renderbuffer(glow::RENDERBUFFER, previous_color);
-                if !complete {
-                    gl.delete_framebuffer(fbo);
-                    gl.delete_renderbuffer(color);
-                    return false;
-                }
-                self.target = Some((fbo, color));
-            }
+            let Some(target) = crate::compositor::ColorTarget::new(gl, size) else {
+                return false;
+            };
+            self.target = Some(target);
             self.size = size;
             true
         }
@@ -1075,7 +1042,7 @@ mod macos {
                 return;
             }
             self.failed_size = None;
-            let Some((fbo, _)) = self.target else {
+            let Some(target) = &self.target else {
                 return;
             };
             // SAFETY: this is the current context's complete framebuffer.
@@ -1085,7 +1052,7 @@ mod macos {
                     gl.get_parameter_framebuffer(glow::DRAW_FRAMEBUFFER_BINDING),
                     gl.get_parameter_framebuffer(glow::READ_FRAMEBUFFER_BINDING),
                 ));
-                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target.framebuffer));
                 let viewport = info.viewport_in_pixels();
                 gl.enable(glow::SCISSOR_TEST);
                 gl.scissor(
@@ -1133,13 +1100,13 @@ mod macos {
             } else {
                 &mut self.frames[self.active]
             };
-            let copied = self.target.and_then(|(source, _)| {
+            let copied = self.target.as_ref().and_then(|target| {
                 if size.iter().any(|&dimension| dimension <= 0) {
                     return Some(false);
                 }
                 frame.ink.copy(
                     gl,
-                    source,
+                    target.framebuffer,
                     [viewport.left_px, viewport.from_bottom_px],
                     size,
                     full_width,
@@ -1185,13 +1152,8 @@ mod macos {
             for frame in &mut self.frames {
                 frame.ink.destroy(gl);
             }
-            if let Some((fbo, color)) = self.target.take() {
-                // SAFETY: these names belong to the current OpenGL context
-                // and are no longer used by paint callbacks.
-                unsafe {
-                    gl.delete_framebuffer(fbo);
-                    gl.delete_renderbuffer(color);
-                }
+            if let Some(target) = self.target.take() {
+                target.destroy(gl);
             }
         }
     }

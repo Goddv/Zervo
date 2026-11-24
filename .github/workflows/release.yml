@@ -65,6 +65,8 @@ jobs:
             sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' | head -1
           }
           TAGGED="$(cargo_version < Cargo.toml)"
+          # A fourth release component is stored as Cargo build metadata.
+          TAGGED="${TAGGED/+/.}"
           [ "$TAG" = "v$TAGGED" ] \
             || { echo "tag $TAG does not match the Cargo.toml version at that tag ($TAGGED)"; exit 1; }
 
@@ -95,6 +97,7 @@ jobs:
       - name: Archive
         run: |
           VERSION="$(sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' Cargo.toml | head -1)"
+          VERSION="${VERSION/+/.}"
           mkdir -p dist
           git archive --format=tar.gz \
             --prefix="zervo-$VERSION/" \

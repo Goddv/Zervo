@@ -67,6 +67,15 @@ done
     die "--notarize needs --dmg: the disk image is what is submitted and stapled"
 
 VERSION="$(zervo_version)"
+RELEASE_VERSION="${VERSION%%+*}"
+ARTIFACT_VERSION="${VERSION/+/.}"
+# macOS expects numeric bundle versions. Reserve two digits for rebuilds
+# within a patch version so the build number also increases on the next patch.
+REVISION=0
+if [[ "$VERSION" =~ \+([0-9]{1,2})$ ]]; then
+    REVISION="${BASH_REMATCH[1]}"
+fi
+BUILD_VERSION="${RELEASE_VERSION%.*}.$(( ${RELEASE_VERSION##*.} * 100 + 10#$REVISION ))"
 # Read out of .cargo/config.toml rather than written down a second time. The
 # bundle's LSMinimumSystemVersion and the compiler's deployment target have to
 # be the same number, and the way that goes wrong is somebody changing one of
@@ -201,8 +210,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>            <string>Zervo</string>
     <key>CFBundleIconFile</key>              <string>Zervo</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
-    <key>CFBundleShortVersionString</key>    <string>$VERSION</string>
-    <key>CFBundleVersion</key>               <string>$VERSION</string>
+    <key>CFBundleShortVersionString</key>    <string>$RELEASE_VERSION</string>
+    <key>CFBundleVersion</key>               <string>$BUILD_VERSION</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
     <key>LSApplicationCategoryType</key>     <string>public.app-category.utilities</string>
     <key>LSMinimumSystemVersion</key>        <string>$MIN_MACOS</string>
@@ -359,7 +368,7 @@ if [ "$MAKE_DMG" = 1 ]; then
     # "Intel and Apple Silicon", via a placeholder so the substitution for the
     # separator cannot fire inside a name it has already written.
     ARCH_HUMAN="$(printf '%s' "$ARCH_LIST" | sed -e 's/ /+/g' -e 's/arm64/Apple Silicon/g' -e 's/x86_64/Intel/g' -e 's/+/ and /g')"
-    DMG="$OUTPUT/Zervo-$VERSION-$ARCH_SLUG.dmg"
+    DMG="$OUTPUT/Zervo-$ARTIFACT_VERSION-$ARCH_SLUG.dmg"
     STAGE="$(mktemp -d)"
     zervo_cleanup_on_exit "$STAGE"
 
@@ -411,7 +420,7 @@ browser to depend on.
 
 https://github.com/Goddv/Zervo
 README
-    sed -i '' -e "s/@VERSION@/$VERSION/" \
+    sed -i '' -e "s/@VERSION@/$ARTIFACT_VERSION/" \
               -e "s/@MINMACOS@/$MIN_MACOS/" \
               -e "s/@ARCHS@/$ARCH_HUMAN/" \
               "$STAGE/READ ME FIRST.txt"
@@ -422,10 +431,10 @@ README
     # in 22s on a 338 MB Zervo.app. It still mounts in the kernel, unlike ULMO,
     # which saves another 27 MB and costs two minutes and a helper process. It
     # needs macOS 10.11, comfortably below this bundle's own floor.
-    if ! hdiutil create -volname "Zervo $VERSION" -srcfolder "$STAGE" -ov \
+    if ! hdiutil create -volname "Zervo $ARTIFACT_VERSION" -srcfolder "$STAGE" -ov \
             -format ULFO "$DMG" > /dev/null 2>&1; then
         warn "ULFO unavailable; falling back to UDZO"
-        hdiutil create -volname "Zervo $VERSION" -srcfolder "$STAGE" -ov \
+        hdiutil create -volname "Zervo $ARTIFACT_VERSION" -srcfolder "$STAGE" -ov \
             -format UDZO "$DMG" > /dev/null
     fi
 
