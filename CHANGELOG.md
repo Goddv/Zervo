@@ -4,6 +4,8 @@
 
 - Fixed a blank toolbar strip that covered the top of the browser when
   entering macOS fullscreen with the green window button.
+- Aligned the macOS traffic lights with the sidebar navigation row and kept
+  them visible inside the browser in fullscreen.
 - Fixed macOS rendering flicker during scrolling, video playback, page
   animation, and sidebar transitions. Zervo now composes the page and browser
   chrome before presenting them alongside the native Liquid Glass layers.

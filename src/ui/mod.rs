@@ -656,6 +656,7 @@ const SIDEBAR_MARGIN: Margin = Margin {
 
 /// The gap between the nav row and the address pill under it.
 const NAV_ROW_GAP: f32 = 10.0;
+const NAV_ROW_HEIGHT: f32 = 26.0;
 
 /// While the sidebar is narrowing out of existence its width belongs to the
 /// animation rather than to the reader, so it is a different panel with a
@@ -809,11 +810,10 @@ fn sidebar_nav_offset(
     align: bool,
     button_count: usize,
 ) -> egui::Vec2 {
-    let row_height = SIDEBAR_ICON + 8.0;
     let inset = (controls.right() + 8.0 - sidebar_left).max(0.0);
     // icon_button adds six points on either side of the glyph.
     if align && inset + button_count as f32 * (SIDEBAR_ICON + 12.0) <= sidebar_width {
-        vec2(inset, controls.center().y - row_height * 0.5)
+        vec2(inset, controls.center().y - NAV_ROW_HEIGHT * 0.5)
     } else {
         vec2(0.0, controls.bottom() + 8.0)
     }
@@ -879,7 +879,6 @@ fn sidebar_body(
 
     // Navigation sits clear of the macOS window controls.
     {
-        let nav_height = SIDEBAR_ICON + 8.0;
         let row_top = ui.cursor().top();
         // The overlay moves its whole body. Use the settled origin to choose
         // a row and inset so the controls travel with it from the first frame.
@@ -899,7 +898,12 @@ fn sidebar_body(
                 )
             })
             .unwrap_or_default();
-        ui.add_space((offset.y - row_top).max(0.0));
+        // A compact titlebar can place the shared row above the body's margin.
+        let nav_top = if offset.x > 0.0 {
+            offset.y
+        } else {
+            row_top.max(offset.y)
+        };
         let star;
         // The nav row gets a rect of its own rather than a `horizontal`.
         //
@@ -914,9 +918,10 @@ fn sidebar_body(
         // The width check above places the whole row below the traffic lights
         // when the sidebar is too narrow for both to fit on one line.
         let row = Rect::from_min_size(
-            pos2(ui.max_rect().min.x, ui.cursor().min.y),
-            vec2(ui.max_rect().width(), nav_height),
-        );
+            pos2(ui.max_rect().min.x, nav_top),
+            vec2(ui.max_rect().width(), NAV_ROW_HEIGHT),
+        )
+        .round_ui();
         let mut nav = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
@@ -3986,7 +3991,7 @@ mod tests {
         let width_needed = 75.0 + 5.0 * (SIDEBAR_ICON + 12.0);
         let aligned = sidebar_nav_offset(controls, 12.0, width_needed, true, 5);
         assert_eq!(aligned.x, 75.0);
-        assert_eq!(aligned.y + (SIDEBAR_ICON + 8.0) * 0.5, controls.center().y);
+        assert_eq!(aligned.y + NAV_ROW_HEIGHT * 0.5, controls.center().y);
         assert_eq!(
             sidebar_nav_offset(controls, 12.0, width_needed - 1.0, true, 5),
             vec2(0.0, 41.0),

@@ -1350,8 +1350,10 @@ impl RunningApp {
         #[cfg(not(target_os = "macos"))]
         let (native_available, window_glass) = (false, false);
         #[cfg(target_os = "macos")]
-        let window_controls =
-            vibrancy::window_controls(&state.window, self.egui_glow.egui_ctx.zoom_factor());
+        let (window_controls, fullscreen) =
+            self._vibrancy.as_ref().map_or((None, false), |backdrop| {
+                backdrop.window_controls(self.egui_glow.egui_ctx.zoom_factor())
+            });
         #[cfg(not(target_os = "macos"))]
         let window_controls = None;
         if self.theme_fade.is_some() {
@@ -1707,7 +1709,8 @@ impl RunningApp {
             {
                 let ctx = &self.egui_glow.egui_ctx;
                 let zoom = ctx.zoom_factor();
-                let controls_over_page = !output.settings_open
+                let controls_over_page = !fullscreen
+                    && !output.settings_open
                     && active_webview.is_some()
                     && window_controls.is_some_and(|rect| {
                         output.content_rect.intersects(rect)
@@ -1887,19 +1890,22 @@ impl RunningApp {
             unsafe { gl.flush() };
             CATransaction::begin();
             CATransaction::setDisableActions(true);
-            if let Some((native, zoom, opacity)) = native_geometry {
-                vibrancy::set_window_controls_opacity(&state.window, opacity);
-                if let Some(backdrop) = &self._vibrancy {
-                    backdrop
-                        .update_sidebar(native.sidebar.filter(|_| !native.sidebar_captured), zoom);
-                    backdrop.update_address(native.address, zoom);
-                }
+            if let Some((ref native, zoom, _)) = native_geometry
+                && let Some(backdrop) = &self._vibrancy
+            {
+                backdrop.update_sidebar(native.sidebar.filter(|_| !native.sidebar_captured), zoom);
+                backdrop.update_address(native.address, zoom);
             }
             if let Some(backdrop) = &self._vibrancy {
                 backdrop.show_window_glass(window_glass);
             }
             if let Some(overlays) = &mut self.glass_overlays {
                 overlays.present(&self.egui_glow.egui_ctx);
+            }
+            if let Some((_, _, opacity)) = native_geometry
+                && let Some(backdrop) = &self._vibrancy
+            {
+                backdrop.update_window_controls(opacity);
             }
         }
         state.window.pre_present_notify();

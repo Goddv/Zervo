@@ -19,7 +19,7 @@
 #![cfg(target_os = "macos")]
 
 use objc2::rc::Retained;
-use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass};
+use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass, sel};
 use objc2_app_kit::{
     NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSGlassEffectView,
     NSGlassEffectViewStyle, NSTitlebarSeparatorStyle, NSToolbar, NSView,
@@ -37,6 +37,7 @@ pub struct Vibrancy {
     content: Retained<NSView>,
     sidebar: Retained<NSVisualEffectView>,
     address: Retained<NSVisualEffectView>,
+    fullscreen_controls: Option<FullscreenControls>,
 }
 
 impl Vibrancy {
@@ -53,7 +54,13 @@ impl Vibrancy {
     }
 
     pub fn update_sidebar(&self, rect: Option<egui::Rect>, zoom: f32) {
-        update_surface(&self.content, &self.sidebar, rect, zoom);
+        update_surface(
+            &self.content,
+            &self.sidebar,
+            rect,
+            zoom,
+            NSWindowOrderingMode::Below,
+        );
     }
 
     pub fn update_address(&self, rect: Option<(egui::Rect, f32)>, zoom: f32) {
@@ -65,7 +72,65 @@ impl Vibrancy {
             &self.address,
             rect.map(|(rect, _)| rect),
             zoom,
+            NSWindowOrderingMode::Below,
         );
+    }
+
+    pub fn window_controls(&self, zoom: f32) -> (Option<egui::Rect>, bool) {
+        let Some(window) = self.content.window() else {
+            return (None, false);
+        };
+        if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+            return (
+                self.fullscreen_controls
+                    .as_ref()
+                    .map(|row| row.bounds(zoom)),
+                true,
+            );
+        }
+        let bounds = self.content.bounds();
+        let rect = WINDOW_CONTROLS
+            .into_iter()
+            .filter_map(|kind| {
+                let button = window.standardWindowButton(kind)?;
+                if button.isHiddenOrHasHiddenAncestor() {
+                    return None;
+                }
+                let rect = button.convertRect_toView(button.bounds(), Some(&self.content));
+                let y = if self.content.isFlipped() {
+                    rect.min().y - bounds.min().y
+                } else {
+                    bounds.max().y - rect.max().y
+                };
+                Some(egui::Rect::from_min_size(
+                    egui::pos2((rect.min().x - bounds.min().x) as f32, y as f32) / zoom,
+                    egui::vec2(rect.size.width as f32, rect.size.height as f32) / zoom,
+                ))
+            })
+            .reduce(egui::Rect::union);
+        (rect, false)
+    }
+
+    pub fn update_window_controls(&self, opacity: f32) {
+        let Some(window) = self.content.window() else {
+            return;
+        };
+        let fullscreen = window.styleMask().contains(NSWindowStyleMask::FullScreen);
+        if let Some(row) = &self.fullscreen_controls {
+            row.update(&self.content, fullscreen);
+        }
+        let opacity = if fullscreen && self.fullscreen_controls.is_some() {
+            0.0
+        } else {
+            f64::from(opacity)
+        };
+        for kind in WINDOW_CONTROLS {
+            if let Some(button) = window.standardWindowButton(kind)
+                && button.alphaValue() != opacity
+            {
+                button.setAlphaValue(opacity);
+            }
+        }
     }
 
     /// Swap material, crossfading over `duration` seconds.
@@ -118,51 +183,83 @@ const WINDOW_CONTROLS: [NSWindowButton; 3] = [
     NSWindowButton::ZoomButton,
 ];
 
-pub fn set_window_controls_opacity(window: &impl HasWindowHandle, opacity: f32) {
-    let Some(window) = content_view(window).and_then(|content| content.window()) else {
-        return;
-    };
-    let opacity = f64::from(opacity);
-    for kind in WINDOW_CONTROLS {
-        if let Some(button) = window.standardWindowButton(kind)
-            && button.alphaValue() != opacity
-        {
-            button.setAlphaValue(opacity);
-        }
-    }
+struct FullscreenControls {
+    view: Retained<NSView>,
 }
 
-pub fn window_controls(window: &impl HasWindowHandle, zoom: f32) -> Option<egui::Rect> {
-    let _mtm = MainThreadMarker::new()?;
-    let content = content_view(window)?;
-    let window = content.window()?;
-    if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
-        return None;
-    }
-    let bounds = content.bounds();
-    WINDOW_CONTROLS
-        .into_iter()
-        .filter_map(|kind| {
-            let button = window.standardWindowButton(kind)?;
-            if button.isHiddenOrHasHiddenAncestor() {
-                return None;
+impl FullscreenControls {
+    const LEFT: f64 = 13.0;
+    const CENTER_Y: f64 = 20.0;
+    const GAP: f64 = 9.0;
+
+    fn new(window: &NSWindow, mtm: MainThreadMarker) -> Option<Self> {
+        let view = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
+        let style = window.styleMask();
+        let mut width: f64 = 0.0;
+        let mut height: f64 = 0.0;
+        let mut buttons = Vec::with_capacity(WINDOW_CONTROLS.len());
+        for (kind, action) in WINDOW_CONTROLS.into_iter().zip([
+            sel!(performClose:),
+            sel!(performMiniaturize:),
+            sel!(toggleFullScreen:),
+        ]) {
+            let button = NSWindow::standardWindowButton_forStyleMask(kind, style, mtm)?;
+            // SAFETY: the window owns the view hierarchy and implements each
+            // one-argument AppKit action. NSControl keeps a weak target.
+            unsafe {
+                button.setTarget(Some(window));
+                button.setAction(Some(action));
             }
-            let rect = button.convertRect_toView(button.bounds(), Some(&content));
-            let x = rect.min().x - bounds.min().x;
-            let y = if content.isFlipped() {
-                rect.min().y - bounds.min().y
-            } else {
-                bounds.max().y - rect.max().y
-            };
-            Some(egui::Rect::from_min_size(
-                egui::pos2(x as f32, y as f32) / zoom,
-                egui::vec2(rect.size.width as f32, rect.size.height as f32) / zoom,
-            ))
-        })
-        .reduce(egui::Rect::union)
+            button.setEnabled(kind != NSWindowButton::MiniaturizeButton);
+            let size = button.frame().size;
+            width += size.width;
+            height = height.max(size.height);
+            buttons.push(button);
+        }
+        width += Self::GAP * (buttons.len() - 1) as f64;
+        view.setFrameSize(NSSize::new(width, height));
+        let mut x = 0.0;
+        for button in buttons {
+            let size = button.frame().size;
+            button.setFrameOrigin(NSPoint::new(x, (height - size.height) * 0.5));
+            view.addSubview(&button);
+            x += size.width + Self::GAP;
+        }
+        view.setHidden(true);
+        Some(Self { view })
+    }
+
+    fn bounds(&self, zoom: f32) -> egui::Rect {
+        let size = self.view.frame().size;
+        egui::Rect::from_min_size(
+            egui::pos2(
+                Self::LEFT as f32,
+                (Self::CENTER_Y - size.height * 0.5) as f32,
+            ) / zoom,
+            egui::vec2(size.width as f32, size.height as f32) / zoom,
+        )
+    }
+
+    fn update(&self, content: &NSView, fullscreen: bool) {
+        // AppKit detaches the titlebar when entering fullscreen. Keep these
+        // buttons above the browser's content view in the window itself.
+        update_surface(
+            content,
+            &self.view,
+            fullscreen.then(|| self.bounds(1.0)),
+            1.0,
+            NSWindowOrderingMode::Above,
+        );
+    }
 }
 
-fn update_surface(content: &NSView, surface: &NSView, rect: Option<egui::Rect>, zoom: f32) {
+fn update_surface(
+    content: &NSView,
+    surface: &NSView,
+    rect: Option<egui::Rect>,
+    zoom: f32,
+    order: NSWindowOrderingMode,
+) {
     let Some(rect) = rect else {
         if !surface.isHidden() {
             surface.setHidden(true);
@@ -191,11 +288,8 @@ fn update_surface(content: &NSView, surface: &NSView, rect: Option<egui::Rect>, 
     let frame = content.convertRect_toView(local, Some(&parent));
     // SAFETY: reads the superview of a live main-thread AppKit view.
     if unsafe { surface.superview() }.as_deref() != Some(&*parent) {
-        parent.addSubview_positioned_relativeTo(
-            surface,
-            NSWindowOrderingMode::Below,
-            Some(content),
-        );
+        let relative = (order == NSWindowOrderingMode::Below).then_some(content);
+        parent.addSubview_positioned_relativeTo(surface, order, relative);
     }
     if surface.frame() != frame {
         surface.setFrame(frame);
@@ -301,6 +395,7 @@ pub fn install(
         content,
         sidebar,
         address,
+        fullscreen_controls: FullscreenControls::new(&ns_window, mtm),
     })
 }
 
