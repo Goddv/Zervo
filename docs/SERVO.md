@@ -28,8 +28,7 @@ git -C ../servo apply "$PWD/patches/servo/0002-script-show-notification-without-
 cargo build --locked --profile dev-fast --features engine-downloads,media
 ```
 
-For a published build, push the patched engine to a versioned branch of the
-Zervo fork and replace the local patch path with its exact Git revision.
-Refresh `Cargo.lock` with `cargo update -p servo`. Check the default and full
-feature sets, then run [the smoke checklist](TESTING.md), including redirects,
-attachments, and a notification without an icon.
+CI prepares the same sibling checkout with `scripts/prepare-servo.sh`. Update
+`patches/servo/upstream-revision` and refresh `Cargo.lock` together when advancing
+the engine. Check both feature sets and run [the smoke checklist](TESTING.md),
+including redirects, attachments, and a notification without an icon.

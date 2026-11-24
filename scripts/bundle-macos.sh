@@ -17,6 +17,9 @@
 #   --notarize           submit the .dmg to Apple and staple the ticket.
 #                        Needs --sign, and APPLE_ID / APPLE_TEAM_ID /
 #                        APPLE_APP_PASSWORD in the environment.
+#   --updates <dir>     embed the patched Sparkle framework built by
+#                        scripts/build-sparkle.sh. Requires a notarized build
+#                        and ZERVO_SPARKLE_PUBLIC_KEY (the public Ed25519 key).
 #   --output <dir>       where the .app and .dmg go, default the target dir
 #
 # Without --sign the result is UNSIGNED beyond an ad-hoc signature, and macOS
@@ -38,6 +41,7 @@ BUILD=1
 MAKE_DMG=0
 IDENTITY="-"
 NOTARIZE=0
+UPDATER_FRAMEWORK=""
 OUTPUT="$(zervo_target_dir)"
 PREBUILT=()
 
@@ -53,6 +57,7 @@ while [ $# -gt 0 ]; do
         --no-build)  BUILD=0; shift ;;
         --dmg)       MAKE_DMG=1; shift ;;
         --notarize)  NOTARIZE=1; shift ;;
+        --updates)   UPDATER_FRAMEWORK="${2:?--updates needs a framework directory}"; shift 2 ;;
         -h|--help) zervo_usage; exit 0 ;;
         *) die "unknown option: $1 (try --help)" ;;
     esac
@@ -65,6 +70,16 @@ done
 # nothing at all.
 [ "$NOTARIZE" = 1 ] && [ "$MAKE_DMG" = 0 ] && \
     die "--notarize needs --dmg: the disk image is what is submitted and stapled"
+
+if [ -n "$UPDATER_FRAMEWORK" ]; then
+    [[ "$IDENTITY" == "Developer ID Application: "* && "$NOTARIZE" = 1 ]] ||
+        die "--updates requires Developer ID Application signing and --notarize"
+    : "${ZERVO_SPARKLE_PUBLIC_KEY:?--updates needs a Sparkle public key}"
+    [[ "$ZERVO_SPARKLE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
+        die "Sparkle public key must be a base64-encoded 32-byte key"
+    [ -f "$UPDATER_FRAMEWORK/Sparkle.framework/Versions/Current/Sparkle" ] ||
+        die "patched Sparkle framework missing from $UPDATER_FRAMEWORK"
+fi
 
 VERSION="$(zervo_version)"
 RELEASE_VERSION="${VERSION%%+*}"
@@ -339,13 +354,25 @@ if [ -d "$BIN_DIR/lib" ]; then
         sign_or_fail "$lib"
     done < <(find "$BIN_DIR/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0)
 fi
+if [ -n "$UPDATER_FRAMEWORK" ]; then
+    UPDATE_ARCH="$(lipo -archs "$BIN")"
+    case "$UPDATE_ARCH" in
+        arm64|x86_64) ;;
+        *) die "updater-enabled releases require a single architecture" ;;
+    esac
+    # shellcheck source=scripts/lib/bundle-updater.sh
+    . scripts/lib/bundle-updater.sh
+    UPDATE_FEED="https://github.com/Goddv/Zervo/releases/latest/download/zervo-appcast-$UPDATE_ARCH.xml"
+    zervo_bundle_updater "$UPDATER_FRAMEWORK" "$APP" "$UPDATE_FEED" "$ZERVO_SPARKLE_PUBLIC_KEY" "$UPDATE_ARCH"
+fi
+
 if [ "$IDENTITY" = "-" ]; then
     codesign "${BUNDLE_SIGN_ARGS[@]}" "$APP" || warn "codesign failed on the bundle"
 else
     codesign "${BUNDLE_SIGN_ARGS[@]}" "$APP" || die "codesign failed on $APP"
 fi
 
-if ! codesign --verify --strict "$APP"; then
+if ! codesign --verify --deep --strict "$APP"; then
     if [ "$IDENTITY" = "-" ]; then
         warn "the bundle does not verify"
     else
@@ -372,6 +399,24 @@ if [ "$MAKE_DMG" = 1 ]; then
     STAGE="$(mktemp -d)"
     zervo_cleanup_on_exit "$STAGE"
 
+    if [ "$NOTARIZE" = 1 ]; then
+        : "${APPLE_ID:?--notarize needs APPLE_ID}"
+        : "${APPLE_TEAM_ID:?--notarize needs APPLE_TEAM_ID}"
+        : "${APPLE_APP_PASSWORD:?--notarize needs APPLE_APP_PASSWORD}"
+        notarize() {
+            xcrun notarytool submit "$1" --apple-id "$APPLE_ID" \
+                --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+        }
+        # Delta recipients only receive the reconstructed .app. Staple its own
+        # notarization ticket before making the disk image used as a baseline.
+        if [ -n "$UPDATER_FRAMEWORK" ]; then
+            NOTARY_STAGE="$(mktemp -d)"
+            zervo_cleanup_on_exit "$NOTARY_STAGE"
+            ditto -c -k --keepParent "$APP" "$NOTARY_STAGE/Zervo.zip"
+            notarize "$NOTARY_STAGE/Zervo.zip"
+            xcrun stapler staple "$APP"
+        fi
+    fi
     cp -R "$APP" "$STAGE/"
     ln -s /Applications "$STAGE/Applications"
 
@@ -382,7 +427,15 @@ if [ "$MAKE_DMG" = 1 ]; then
     # only in release notes they may never have read.
     # Quoted heredoc, so the substitutions happen afterwards: an unquoted one
     # would also try to expand the "$99/year" below.
-    cat > "$STAGE/READ ME FIRST.txt" <<'README'
+    if [ "$NOTARIZE" = 1 ]; then
+        cat > "$STAGE/READ ME FIRST.txt" <<'README_SIGNED'
+Zervo @VERSION@
+
+Drag Zervo into Applications, then open it normally.
+Requires macOS @MINMACOS@ or later and runs on @ARCHS@.
+README_SIGNED
+    else
+        cat > "$STAGE/READ ME FIRST.txt" <<'README'
 Zervo @VERSION@
 ==============
 
@@ -420,6 +473,8 @@ browser to depend on.
 
 https://github.com/Goddv/Zervo
 README
+    fi
+    MIN_MACOS="$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")"
     sed -i '' -e "s/@VERSION@/$ARTIFACT_VERSION/" \
               -e "s/@MINMACOS@/$MIN_MACOS/" \
               -e "s/@ARCHS@/$ARCH_HUMAN/" \
@@ -444,14 +499,7 @@ README
 
     if [ "$NOTARIZE" = 1 ]; then
         say "notarising"
-        : "${APPLE_ID:?--notarize needs APPLE_ID}"
-        : "${APPLE_TEAM_ID:?--notarize needs APPLE_TEAM_ID}"
-        : "${APPLE_APP_PASSWORD:?--notarize needs APPLE_APP_PASSWORD}"
-        xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait
+        notarize "$DMG"
         xcrun stapler staple "$DMG"
         note "stapled; this image opens without any quarantine step"
     fi

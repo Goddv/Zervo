@@ -1,0 +1,2 @@
+# Patch context preserves whitespace from upstream.
+patches/sparkle/*.patch whitespace=-blank-at-eol

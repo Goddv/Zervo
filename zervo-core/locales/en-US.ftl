@@ -507,3 +507,28 @@ widgets-row-height =
         [one] { $count } row
        *[other] { $count } rows
     }
+
+## Software updates
+
+updates-title = Updates
+updates-check = Check for Updates
+updates-release-notes = Release Notes
+updates-automatic = Install updates automatically
+updates-automatic-hint = Zervo checks in the background and installs verified updates when you quit.
+updates-unavailable = Automatic updates are unavailable in this build.
+updates-idle = Ready to check for updates.
+updates-checking = Checking for updates…
+updates-current = You’re up to date.
+updates-available = An update is available.
+updates-downloading = Downloading the update…
+updates-staging = Preparing the update…
+updates-ready = The update is ready to install when you quit.
+updates-installing = Installing the update…
+updates-manual = This build needs the installer from GitHub.
+updates-no-compatible = No compatible update was found.
+updates-failed = The update could not be completed. You can try again from About.
+updates-history = Release History
+updates-github = View releases on GitHub
+updates-installed = Installed version
+updates-next-version = Version { $version }
+updates-download-size = { $size } incremental download

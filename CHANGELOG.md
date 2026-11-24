@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Added an Updates page with release history and incoming release notes.
+  Check for updates and manage automatic installation in Settings → About.
+- Added signed, architecture-specific incremental updates for notarized macOS
+  releases. Zervo verifies the feed, patch, and staged app before atomically
+  replacing the installed app on quit or restart.
+- When a compatible patch is unavailable, the Updates page links to the
+  standalone GitHub installer.
+
 ## 0.6.1.2 — 24 November 2026
 
 - Updated Servo to upstream main at `3f21bf4ee33`, including the SpiderMonkey

@@ -61,6 +61,7 @@ mod passwords;
 mod phosphor;
 mod transition;
 mod trouble;
+mod updates;
 // macOS has its own paths inline, using the AppKit bindings it already has.
 #[cfg(not(target_os = "macos"))]
 mod platform;
@@ -189,6 +190,9 @@ struct RunningApp {
     system_dark: bool,
     #[cfg(target_os = "macos")]
     _appearance_observer: Option<macos_appearance::AppearanceObserver>,
+    #[cfg(target_os = "macos")]
+    updater: Option<updates::Updater>,
+    update_snapshot: updates::Snapshot,
     /// A picture of the window, when one was asked for. Debug builds only.
     shot: Option<shot::Shot>,
     /// Which workspace the chrome is currently in.
@@ -629,6 +633,15 @@ impl ApplicationHandler<WakerEvent> for App {
         // waits on a photograph.
         let mut wallpaper = wallpaper::Wallpaper::default();
         wallpaper.restore();
+        #[cfg(target_os = "macos")]
+        let updater = updates::Updater::install(waker.0.clone());
+        #[cfg(target_os = "macos")]
+        let update_snapshot = updater
+            .as_ref()
+            .map(updates::Updater::snapshot)
+            .unwrap_or_default();
+        #[cfg(not(target_os = "macos"))]
+        let update_snapshot = updates::Snapshot::default();
         *self = Self::Running(RunningApp {
             state,
             egui_glow,
@@ -636,6 +649,9 @@ impl ApplicationHandler<WakerEvent> for App {
             system_dark,
             #[cfg(target_os = "macos")]
             _appearance_observer: macos_appearance::AppearanceObserver::install(waker.0.clone()),
+            #[cfg(target_os = "macos")]
+            updater,
+            update_snapshot,
             favicons: HashMap::new(),
             settings_open: false,
             modifiers: ModifiersState::default(),
@@ -717,6 +733,13 @@ impl ApplicationHandler<WakerEvent> for App {
             WakerEvent::SystemAppearanceChanged => {
                 app.update_system_theme(system_is_dark(&app.state.window));
                 app.state.servo.spin_event_loop();
+            },
+            #[cfg(target_os = "macos")]
+            WakerEvent::UpdaterChanged => {
+                if let Some(updater) = &app.updater {
+                    app.update_snapshot = updater.snapshot();
+                    app.state.window.request_redraw();
+                }
             },
             WakerEvent::AnimationFrame => {
                 app.animation_pending = false;
@@ -1502,6 +1525,7 @@ impl RunningApp {
                 },
                 favicons: &self.favicons,
                 downloads: &self.downloads,
+                updates: &self.update_snapshot,
                 wallpaper,
                 capture: capture.clone(),
                 crossing: self.crossing.as_ref(),
@@ -2040,12 +2064,16 @@ impl RunningApp {
             UiAction::SelectTab(id) => {
                 (state.browser.borrow().active_tab != Some(*id)).then_some(transition::Way::On)
             },
-            UiAction::OpenSettings | UiAction::OpenHistory | UiAction::OpenDownloads => {
+            UiAction::OpenSettings
+            | UiAction::OpenHistory
+            | UiAction::OpenDownloads
+            | UiAction::OpenUpdates => {
                 let kind = state.browser.borrow().active_tab().map(|tab| tab.kind);
                 let already = match action {
                     UiAction::OpenSettings => Some(TabKind::Settings),
                     UiAction::OpenHistory => Some(TabKind::History),
-                    _ => Some(TabKind::Downloads),
+                    UiAction::OpenDownloads => Some(TabKind::Downloads),
+                    _ => Some(TabKind::Updates),
                 };
                 (kind != already).then_some(transition::Way::On)
             },
@@ -2098,6 +2126,8 @@ impl RunningApp {
                     // stops holding the moment one of them names a host.
                     if let Some(trouble) = crate::trouble::Trouble::from_url(page) {
                         self.apply_action(UiAction::OpenTrouble(trouble, page.to_owned()));
+                    } else if url.host_str() == Some("updates") {
+                        self.apply_action(UiAction::OpenUpdates);
                     } else if page.contains("downloads") {
                         self.apply_action(UiAction::OpenDownloads);
                     } else if page.contains("history") {
@@ -2348,6 +2378,25 @@ impl RunningApp {
             UiAction::OpenDownloads => {
                 let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
                 state.activate_tab(tab_id);
+            },
+            UiAction::OpenUpdates => {
+                let tab_id = state.browser.borrow_mut().find_or_create_updates_tab();
+                state.activate_tab(tab_id);
+            },
+            UiAction::CheckForUpdates =>
+            {
+                #[cfg(target_os = "macos")]
+                if let Some(updater) = &self.updater {
+                    updater.check();
+                }
+            },
+            UiAction::SetAutomaticUpdates(enabled) => {
+                #[cfg(target_os = "macos")]
+                if let Some(updater) = &self.updater {
+                    updater.set_automatic(enabled);
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = enabled;
             },
             UiAction::CancelDownload(id) => {
                 self.downloads.cancel(id);
@@ -2951,6 +3000,8 @@ enum WakerEvent {
     /// AppKit's application appearance changed.
     #[cfg(target_os = "macos")]
     SystemAppearanceChanged,
+    #[cfg(target_os = "macos")]
+    UpdaterChanged,
     /// The platform's accessibility client is asking for the tree, or asking
     /// for something in it to be activated. `accesskit_winit` delivers these
     /// through the same proxy, which is why this is an enum now.

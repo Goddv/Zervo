@@ -14,6 +14,9 @@ name: macOS
 on:
   workflow_call:
     inputs:
+      updater-public-key:
+        type: string
+        default: ""
       profile:
         type: string
         default: release
@@ -101,6 +104,15 @@ jobs:
         with:
           key: macos
 
+      - name: Prepare pinned Servo
+        run: scripts/prepare-servo.sh
+
+      - name: Build patched Sparkle
+        if: inputs.updater-public-key != ''
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: scripts/build-sparkle.sh "$RUNNER_TEMP/zervo-sparkle" "$ARCH"
+
       - name: Install GStreamer
         if: inputs.media
         run: |
@@ -155,6 +167,7 @@ jobs:
           # Through the environment, not interpolated into the script body:
           # `profile` is a free-form string on the workflow_call side.
           PROFILE: ${{ inputs.profile }}
+          ZERVO_SPARKLE_PUBLIC_KEY: ${{ inputs.updater-public-key }}
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -166,6 +179,9 @@ jobs:
           if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
 
           ARGS=(--profile "$PROFILE" --dmg)
+          if [ -n "$ZERVO_SPARKLE_PUBLIC_KEY" ]; then
+            ARGS+=(--updates "$RUNNER_TEMP/zervo-sparkle")
+          fi
           if [ -n "$FEATURES" ]; then ARGS+=(--features "$FEATURES"); fi
           if [ -n "$SIGN_IDENTITY" ]; then
             ARGS+=(--sign "$SIGN_IDENTITY")

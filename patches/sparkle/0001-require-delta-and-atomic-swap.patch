@@ -1,0 +1,218 @@
+diff --git a/Autoupdate/SUPlainInstaller.m b/Autoupdate/SUPlainInstaller.m
+index 7db6c72..bc94f47 100644
+--- a/Autoupdate/SUPlainInstaller.m
++++ b/Autoupdate/SUPlainInstaller.m
+@@ -24,7 +24,6 @@ @implementation SUPlainInstaller
+     SUHost *_host;
+     NSString *_bundlePath;
+     NSString *_installationPath;
+-    NSURL *_temporaryOldDirectory;
+     // We get an obj-c warning if we use 'newTemporaryDirectory' name about new + ownership stuff, so use 'temporaryNewDirectory' instead
+     NSURL *_temporaryNewDirectory;
+     
+@@ -232,85 +231,15 @@ - (BOOL)startInstallationToURL:(NSURL *)installationURL fromUpdateAtURL:(NSURL *
+         progress(9/11.0);
+     }
+     
+-    // First try swapping the application atomically
+-    NSError *swapError = nil;
+-    BOOL swappedApp;
+-    // If we can not safely perform an atomic swap, or if the app is normalized and the installation path differs, go through the old swap path
+-    if (!_canPerformSafeAtomicSwap || (SPARKLE_NORMALIZE_INSTALLED_APPLICATION_NAME && ![oldURL.path isEqual:installationURL.path])) {
+-        swappedApp = NO;
+-    } else {
+-        // We will be cleaning up the temporary directory later in -performCleanup:
+-        // We don't want to clean it up now because it can take some time
+-        swappedApp = [fileManager swapItemAtURL:installationURL withItemAtURL:newFinalURL error:&swapError];
+-    }
+-    
+-    if (!swappedApp) {
+-        // Otherwise swap out the old and new applications using the legacy path
+-        
+-        if (swapError != nil) {
+-            SULog(SULogLevelDefault, @"Invoking fallback from failing to replace original item with error: %@", swapError);
+-        }
+-
+-        // Create a temporary directory for our old app that resides on its volume
+-        NSURL *tempOldDirectoryURL = [fileManager makeTemporaryDirectoryAppropriateForDirectoryURL:oldURL error:error];
+-        if (tempOldDirectoryURL == nil) {
+-            return NO;
+-        }
+-        
+-        _temporaryOldDirectory = tempOldDirectoryURL;
+-
+-        if (progress) {
+-            progress(10/11.0);
+-        }
+-        
+-        NSString *oldURLFilename = oldURL.lastPathComponent;
+-        if (oldURLFilename == nil) {
+-            // this really shouldn't happen..
+-            SULog(SULogLevelError, @"Failed to retrieve last path component from old URL: %@", oldURL.path);
+-            if (error != NULL) {
+-                *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUInstallationError userInfo:@{ NSLocalizedDescriptionKey: @"Failed to perform installation because the last path component of the old installation URL could not be constructed." }];
+-            }
+-            return NO;
+-        }
+-        
+-        // Move the old app to the temporary directory
+-        NSURL *oldTempURL = [tempOldDirectoryURL URLByAppendingPathComponent:oldURLFilename];
+-        NSError *oldMoveError = nil;
+-        if (![fileManager moveItemAtURL:oldURL toURL:oldTempURL error:&oldMoveError]) {
+-            if (error != NULL) {
+-                NSMutableDictionary *userInfo = [NSMutableDictionary dictionaryWithDictionary:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to move the old app at %@ to a temporary location at %@", oldURL.path, oldTempURL.path] }];
+-                
+-                if (oldMoveError != nil) {
+-                    userInfo[NSUnderlyingErrorKey] = oldMoveError;
+-                }
+-                
+-                *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUInstallationError userInfo:userInfo];
+-            }
+-            return NO;
+-        }
+-
+-        if (progress) {
+-            progress(10.5/11.0);
+-        }
+-
+-        // Move the new app to its final destination
+-        NSError *installMoveError = nil;
+-        if (![fileManager moveItemAtURL:newFinalURL toURL:installationURL error:&installMoveError]) {
+-            if (error != NULL) {
+-                NSMutableDictionary *userInfo = [NSMutableDictionary dictionaryWithDictionary:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to move new app at %@ to final destination %@", newFinalURL.path, installationURL.path] }];
+-                
+-                if (installMoveError != nil) {
+-                    userInfo[NSUnderlyingErrorKey] = installMoveError;
+-                }
+-                
+-                *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUInstallationError userInfo:userInfo];
+-            }
+-            
+-            // Attempt to restore our old app back the way it was on failure
+-            [fileManager moveItemAtURL:oldTempURL toURL:oldURL error:NULL];
+-            
+-            return NO;
++    // Require a single filesystem operation so the installed path is always valid.
++    if (!_canPerformSafeAtomicSwap || ![oldURL.path isEqual:installationURL.path]) {
++        if (error != NULL) {
++            *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUInstallationError userInfo:@{ NSLocalizedDescriptionKey: @"The installed application cannot be replaced atomically." }];
+         }
++        return NO;
++    }
++    if (![fileManager swapItemAtURL:installationURL withItemAtURL:newFinalURL error:error]) {
++        return NO;
+     }
+ 
+     if (progress) {
+@@ -400,10 +329,7 @@ - (void)performCleanup
+     if (_temporaryNewDirectory != nil) {
+         [fileManager removeItemAtURL:_temporaryNewDirectory error:NULL];
+     }
+-    
+-    if (_temporaryOldDirectory != nil) {
+-        [fileManager removeItemAtURL:_temporaryOldDirectory error:NULL];
+-    }
++
+ }
+ 
+ @end
+diff --git a/Sparkle/SPUCoreBasedUpdateDriver.m b/Sparkle/SPUCoreBasedUpdateDriver.m
+index 563a136..c026df3 100644
+--- a/Sparkle/SPUCoreBasedUpdateDriver.m
++++ b/Sparkle/SPUCoreBasedUpdateDriver.m
+@@ -127,6 +127,12 @@ - (void)basicDriverDidFindUpdateWithAppcastItem:(SUAppcastItem *)updateItem seco
+ 
+ - (void)downloadUpdateFromAppcastItem:(SUAppcastItem *)updateItem secondaryAppcastItem:(SUAppcastItem * _Nullable)secondaryUpdateItem inBackground:(BOOL)background SPU_OBJC_DIRECT
+ {
++    if (!updateItem.isDeltaUpdate) {
++        NSError *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUDownloadError userInfo:@{ NSLocalizedDescriptionKey: @"No incremental update is available for this installation." }];
++        [_delegate coreDriverIsRequestingAbortUpdateWithError:error];
++        return;
++    }
++
+     _downloadDriver = [[SPUDownloadDriver alloc] initWithUpdateItem:updateItem secondaryUpdateItem:secondaryUpdateItem host:_host userAgent:_userAgent httpHeaders:_httpHeaders inBackground:background delegate:self];
+     
+     id updater = _updater;
+@@ -255,26 +261,19 @@ - (void)extractUpdate:(SPUDownloadedUpdate *)downloadedUpdate SPU_OBJC_DIRECT
+ 
+ - (void)downloadDriverDidFailToDownloadFileWithError:(NSError *)error
+ {
+-    if ([_updateItem isDeltaUpdate]) {
+-        SULog(SULogLevelError, @"Failed to download delta update. Falling back to regular update...");
+-        SULogError(error);
+-        
+-        [self fallBackAndDownloadRegularUpdate];
+-    } else {
+-        id updater = _updater;
+-        id<SPUUpdaterDelegate> updaterDelegate = _updaterDelegate;
+-        
+-        if (updater != nil && [updaterDelegate respondsToSelector:@selector((updater:failedToDownloadUpdate:error:))]) {
+-            NSError *errorToReport = [error.userInfo objectForKey:NSUnderlyingErrorKey];
+-            if (errorToReport == nil) {
+-                errorToReport = error;
+-            }
+-            
+-            [updaterDelegate updater:updater failedToDownloadUpdate:_updateItem error:errorToReport];
++    id updater = _updater;
++    id<SPUUpdaterDelegate> updaterDelegate = _updaterDelegate;
++
++    if (updater != nil && [updaterDelegate respondsToSelector:@selector((updater:failedToDownloadUpdate:error:))]) {
++        NSError *errorToReport = [error.userInfo objectForKey:NSUnderlyingErrorKey];
++        if (errorToReport == nil) {
++            errorToReport = error;
+         }
+         
+-        [_delegate coreDriverIsRequestingAbortUpdateWithError:error];
++        [updaterDelegate updater:updater failedToDownloadUpdate:_updateItem error:errorToReport];
+     }
++
++    [_delegate coreDriverIsRequestingAbortUpdateWithError:error];
+ }
+ 
+ - (void)installerDidStartInstallingWithApplicationTerminated:(BOOL)applicationTerminated
+@@ -359,25 +358,11 @@ - (void)basicDriverIsRequestingAbortUpdateWithError:(nullable NSError *)error
+     [_delegate basicDriverIsRequestingAbortUpdateWithError:error];
+ }
+ 
+-- (void)fallBackAndDownloadRegularUpdate SPU_OBJC_DIRECT
+-{
+-    SUAppcastItem *secondaryUpdateItem = _secondaryUpdateItem;
+-    assert(secondaryUpdateItem != nil);
+-    
+-    BOOL backgroundDownload = _downloadDriver.inBackground;
+-    
+-    // Fall back to the non-delta update. Note that we don't want to trigger another update was found event.
+-    _updateItem = secondaryUpdateItem;
+-    _secondaryUpdateItem = nil;
+-    
+-    [self downloadUpdateFromAppcastItem:secondaryUpdateItem secondaryAppcastItem:nil inBackground:backgroundDownload];
+-}
+-
+ - (void)installerDidFailToApplyDeltaUpdate
+ {
+     [self clearDownloadedUpdate];
+-    
+-    [self fallBackAndDownloadRegularUpdate];
++    NSError *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUUnarchivingError userInfo:@{ NSLocalizedDescriptionKey: @"The incremental update could not be applied." }];
++    [_delegate coreDriverIsRequestingAbortUpdateWithError:error];
+ }
+ 
+ - (void)abortUpdateAndShowNextUpdateImmediately:(BOOL)shouldShowUpdateImmediately error:(nullable NSError *)error
+diff --git a/Sparkle/SUUpdateValidator.m b/Sparkle/SUUpdateValidator.m
+index fa952cd..101a1c8 100644
+--- a/Sparkle/SUUpdateValidator.m
++++ b/Sparkle/SUUpdateValidator.m
+@@ -191,11 +191,11 @@ - (BOOL)validateWithUpdateDirectory:(NSString *)updateDirectory error:(NSError *
+         }
+         
+         NSError *codeSigningInnerError = nil;
+-        if (updateIsCodeSigned && ![SUCodeSigningVerifier codeSignatureIsValidAtBundleURL:installSourceURL error:&codeSigningInnerError]) {
++        if (!hostIsCodeSigned || !updateIsCodeSigned || ![SUCodeSigningVerifier codeSignatureIsValidAtBundleURL:installSourceURL andMatchesSignatureAtBundleURL:host.bundle.bundleURL error:&codeSigningInnerError]) {
+             if (error != NULL) {
+                 NSMutableDictionary *userInfo = [NSMutableDictionary dictionary];
+                 
+-                userInfo[NSLocalizedDescriptionKey] = @"The update archive is validly signed, but the app's Apple code signing signature is corrupted. The update will be rejected.";
++                userInfo[NSLocalizedDescriptionKey] = @"The updated app does not match the installed app's code signing requirement.";
+                 
+                 if (codeSigningInnerError != nil) {
+                     userInfo[NSUnderlyingErrorKey] = codeSigningInnerError;

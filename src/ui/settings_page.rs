@@ -181,7 +181,7 @@ fn draw_settings_cards(
         SettingsSection::General => settings_general(ui, chrome, palette, actions),
         SettingsSection::Layout => settings_layout(ui, chrome, palette, actions),
         SettingsSection::Passwords => settings_passwords(ui, chrome, actions),
-        SettingsSection::About => settings_about(ui, palette),
+        SettingsSection::About => settings_about(ui, palette, chrome.updates, actions),
     });
 }
 
@@ -1916,7 +1916,12 @@ pub(crate) fn settings_passwords(
     });
 }
 
-pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
+fn settings_about(
+    ui: &mut Ui,
+    palette: &Palette,
+    updates: &crate::updates::Snapshot,
+    actions: &mut Vec<UiAction>,
+) {
     settings_section(ui, palette, tr("settings-build-and-engine"), |ui| {
         let icon = application_icon(ui, palette.dark);
         ui.horizontal(|ui| {
@@ -1928,10 +1933,7 @@ pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
                 ui.label(
                     RichText::new(crate::l10n::message(
                         "settings-version",
-                        [(
-                            "version",
-                            env!("CARGO_PKG_VERSION").replace('+', ".").into(),
-                        )],
+                        [("version", crate::updates::installed_version().into())],
                     ))
                     .color(palette.text_muted),
                 );
@@ -1958,6 +1960,30 @@ pub(crate) fn settings_about(ui: &mut Ui, palette: &Palette) {
             toolkit.to_owned()
         };
         about_detail(ui, palette, tr("settings-ui-toolkit"), &toolkit);
+    });
+
+    settings_section(ui, palette, tr("updates-title"), |ui| {
+        note(ui, palette, updates.label());
+        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(updates.can_check, egui::Button::new(tr("updates-check")))
+                .clicked()
+            {
+                actions.push(UiAction::CheckForUpdates);
+            }
+            if ui.button(tr("updates-release-notes")).clicked() {
+                actions.push(UiAction::OpenUpdates);
+            }
+        });
+        if updates.enabled() {
+            ui.add_space(10.0);
+            let mut automatic = updates.automatic;
+            if widgets::toggle(ui, &mut automatic, tr("updates-automatic"), palette) {
+                actions.push(UiAction::SetAutomaticUpdates(automatic));
+            }
+            note(ui, palette, tr("updates-automatic-hint"));
+        }
     });
 
     settings_section(ui, palette, tr("settings-graphics"), |ui| {

@@ -52,9 +52,12 @@ framework. The plist used to say 13.0, typed in beside the compiler rather than
 derived from it, which turned away macOS 11 and 12 at launch from a binary that
 would have run.
 
+Updates-enabled release bundles require macOS 12 or later, the minimum
+supported by Sparkle. See [macOS updates](UPDATES.md) for release setup.
+
 ### Unsigned builds — what your users will see
 
-Zervo releases are **not signed with an Apple Developer ID and not notarized**.
+Preview builds and releases made without signing credentials use ad-hoc signatures.
 A signing certificate costs $99/year, and notarization requires uploading each
 build to Apple.
 
@@ -63,9 +66,8 @@ libraries first and the bundle last. That is not optional: since Apple Silicon,
 all executable code has to carry a signature, and a broken one is worse than
 none. It is also not a Developer ID signature, and does not satisfy Gatekeeper.
 
-`--deep` is not used. Apple deprecated it in macOS 13 — it applies one set of
-options to everything it reaches, which is almost never right, and it only
-reaches a fixed list of subdirectories.
+The bundler signs nested code explicitly with the right options for each
+component. It verifies the resulting signatures recursively.
 
 Gatekeeper's verdict turns entirely on one thing: whether the app carries
 `com.apple.quarantine`. Apple's own `gktool scan Zervo.app` says *"Scan

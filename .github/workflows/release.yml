@@ -76,8 +76,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists; reusing it"
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            [ "$draft" = true ] || { echo "Published release $TAG is immutable; use a new version."; exit 1; }
+            echo "Retrying draft $TAG"
             exit 0
           fi
           gh release create "$TAG" \
@@ -114,6 +115,8 @@ jobs:
   macos:
     needs: draft
     uses: ./.github/workflows/macos.yml
+    with:
+      updater-public-key: ${{ needs.draft.outputs.tag != '' && github.repository == 'Goddv/Zervo' && vars.ZERVO_SPARKLE_PUBLIC_KEY || '' }}
     # Named rather than `secrets: inherit`, which would hand the build every
     # secret the repository has. All six are optional; absent ones arrive as
     # empty strings and the bundler falls back to an ad-hoc signature.
@@ -125,10 +128,64 @@ jobs:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
 
+  updates:
+    name: Sign ${{ matrix.arch }} update assets
+    needs: [draft, macos]
+    if: needs.draft.outputs.tag != '' && github.repository == 'Goddv/Zervo' && vars.ZERVO_SPARKLE_PUBLIC_KEY != ''
+    runs-on: macos-26
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+    env:
+      TAG: ${{ needs.draft.outputs.tag }}
+      ARCH: ${{ matrix.arch }}
+      ZERVO_SPARKLE_PUBLIC_KEY: ${{ vars.ZERVO_SPARKLE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: zervo-macos-${{ matrix.arch }}
+          path: incoming
+
+      - name: Fetch Sparkle release tools
+        run: scripts/fetch-sparkle-tools.sh "$RUNNER_TEMP/sparkle"
+
+      - name: Stage exact release bundles
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build="$(scripts/stage-appcast.sh "$TAG" "$ARCH" "incoming/Zervo-${TAG#v}-$ARCH.dmg" "$RUNNER_TEMP/update-input")"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - name: Generate and verify signed feed and deltas
+        env:
+          BUILD_VERSION: ${{ steps.stage.outputs.build }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          scripts/make-appcast.sh "$RUNNER_TEMP/sparkle/bin" "$RUNNER_TEMP/update-input" \
+            "$RUNNER_TEMP/update-output" "$ARCH" "${TAG#v}" "$BUILD_VERSION" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-updates-${{ matrix.arch }}
+          path: ${{ runner.temp }}/update-output/
+          if-no-files-found: error
+
+
   publish:
     name: Checksums, provenance and publish
-    needs: [draft, source, macos]
-    if: needs.draft.outputs.tag != ''
+    needs: [draft, source, macos, updates]
+    if: >-
+      ${{ !cancelled() && needs.draft.outputs.tag != '' &&
+          needs.source.result == 'success' && needs.macos.result == 'success' &&
+          (needs.updates.result == 'success' || needs.updates.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -144,11 +201,25 @@ jobs:
           path: incoming
 
       - name: Gather
+        env:
+          UPDATE_ASSETS: ${{ needs.updates.result == 'success' }}
         run: |
           mkdir -p release
           cp incoming/zervo-macos-arm64/Zervo-*-arm64.dmg release/
           cp incoming/zervo-macos-x86_64/Zervo-*-x86_64.dmg release/
           cp incoming/zervo-source/*-src.tar.gz release/
+          if [ "$UPDATE_ASSETS" = true ]; then
+            for arch in arm64 x86_64; do
+              dir="incoming/zervo-updates-$arch"
+              cp "$dir/zervo-appcast-$arch.xml" release/
+              # The enrollment release may have no eligible deltas.
+              for delta in "$dir"/*-"$arch".delta; do
+                if [ -f "$delta" ]; then
+                  cp "$delta" release/
+                fi
+              done
+            done
+          fi
 
       - name: Checksums
         # One file covering every platform, which is the thing three

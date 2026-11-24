@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Generate a signed Sparkle feed from the current and prior shipped DMGs.
+set -euo pipefail
+# shellcheck source=scripts/lib/common.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+
+tools="${1:?missing Sparkle tools directory}"
+staged="${2:?missing directory with current and prior DMGs}"
+output="${3:?missing output directory}"
+arch="${4:?missing archive architecture}"
+version="${5:?missing release version}"
+build="${6:?missing CFBundleVersion}"
+prefix="${7:?missing release asset URL prefix}"
+: "${SPARKLE_PRIVATE_ED_KEY:?missing Sparkle signing key}"
+: "${ZERVO_SPARKLE_PUBLIC_KEY:?missing Sparkle public key}"
+case "$arch" in arm64|x86_64) ;; *) die "unsupported architecture: $arch" ;; esac
+[[ "$prefix" == https://*/ ]] || die "release asset prefix must be an HTTPS directory"
+root="$(zervo_repo_root)"
+archive="Zervo-$version-$arch-sparkle.dmg"
+[ -s "$staged/$archive" ] || die "missing candidate $archive"
+feed="zervo-appcast-$arch.xml"
+mkdir -p "$output"
+[ ! -e "$output/$feed" ] || die "appcast already exists in $output"
+# Embed the tagged changelog as signed plain text, including wrapped bullets.
+awk -v version="$version" '
+    /^## / {
+        if (found) exit
+        found = ($2 == version)
+        next
+    }
+    found { print }
+    END { if (!found) exit 1 }
+' "$root/CHANGELOG.md" > "$staged/${archive%.dmg}.txt" ||
+    die "add a changelog section for $version before publishing"
+grep -q '[^[:space:]]' "$staged/${archive%.dmg}.txt" || die "release notes are empty"
+
+# Avoid leaving the private seed in the signing tool's environment.
+signing_key="$SPARKLE_PRIVATE_ED_KEY"
+unset SPARKLE_PRIVATE_ED_KEY
+printf '%s\n' "$signing_key" | "$tools/generate_appcast" --ed-key-file - \
+    --versions "$build" --maximum-versions 1 --maximum-deltas 3 \
+    --delta-compression lzfse --embed-release-notes \
+    --download-url-prefix "$prefix" -o "$output/$feed" "$staged"
+# GitHub asset names share a single namespace across architectures.
+# Rewrite the enclosure URLs and the displayed version, then re-sign the XML.
+python3 - "$output/$feed" "$staged" "$arch" "$version" "$prefix" <<'PYTHON'
+import re
+import sys
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+feed, stage, arch, version, prefix = sys.argv[1:]
+ns = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+ET.register_namespace("sparkle", ns)
+tree = ET.parse(feed)
+for item in tree.findall("./channel/item"):
+    display_version = item.find(f"{{{ns}}}shortVersionString")
+    if display_version is None:
+        raise SystemExit("Missing Sparkle short version")
+    display_version.text = version
+    for delta in item.findall(f"{{{ns}}}deltas/enclosure"):
+        source = delta.attrib["url"].removeprefix(prefix)
+        if not re.fullmatch(r"Zervo[0-9.]+-[0-9.]+\.delta", source):
+            raise SystemExit(f"Unexpected Sparkle delta name: {source}")
+        target = f"{source.removesuffix('.delta')}-{arch}.delta"
+        Path(stage, source).rename(Path(stage, target))
+        delta.set("url", prefix + target)
+tree.write(feed, encoding="utf-8", xml_declaration=True)
+PYTHON
+printf '%s\n' "$signing_key" | "$tools/sign_update" --ed-key-file - "$output/$feed"
+unset signing_key
+
+# Verify the generated files against the public key actually embedded in Zervo.
+# Copy only referenced deltas. The appcast's placeholder DMG is never shipped.
+xcrun swift "$root/scripts/lib/verify-appcast.swift" \
+    "$output/$feed" "$staged" "$archive" "$build" "$prefix" "$ZERVO_SPARKLE_PUBLIC_KEY" "$output"

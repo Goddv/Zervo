@@ -31,6 +31,8 @@ pub enum TabKind {
     History,
     /// The internal downloads page (zervo://downloads).
     Downloads,
+    /// The internal release notes and updater status page.
+    Updates,
     /// One of the four pages a page that will not load lands on
     /// (`zervo://unsupported` and its three siblings). See [`crate::trouble`].
     ///
@@ -47,6 +49,7 @@ impl TabKind {
             Self::Settings => Some(tr("common-settings")),
             Self::History => Some(tr("common-history")),
             Self::Downloads => Some(tr("common-downloads")),
+            Self::Updates => Some(tr("updates-title")),
             Self::NewTab => Some(tr("common-new-tab")),
             Self::Trouble(trouble) => Some(trouble.title()),
             Self::Web => None,
@@ -503,6 +506,11 @@ impl BrowserState {
         let tab = match kind {
             TabKind::Downloads => Tab::new_downloads(id),
             TabKind::History => Tab::new_history(id),
+            TabKind::Updates => Tab {
+                kind,
+                title: tr("updates-title").into(),
+                ..Tab::new(id, "zervo://updates")
+            },
             TabKind::Trouble(trouble) => Tab::new_trouble(id, trouble, trouble.url()),
             _ => Tab::new_settings(id),
         };
@@ -520,6 +528,10 @@ impl BrowserState {
 
     pub fn find_or_create_downloads_tab(&mut self) -> TabId {
         self.find_or_create_internal(TabKind::Downloads)
+    }
+
+    pub fn find_or_create_updates_tab(&mut self) -> TabId {
+        self.find_or_create_internal(TabKind::Updates)
     }
 
     /// The tab for one of the four trouble pages, at `url` — which carries

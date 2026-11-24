@@ -30,6 +30,7 @@ mod setup;
 mod spaces;
 pub(crate) use spaces::{animate_folder_creation, animate_workspace_switch};
 mod text;
+mod updates_page;
 
 // The chrome stays one namespace, to itself and to everything outside it:
 // `ui::ellipsize`, `ui::finish_content_frame`, `ui::paint_newtab_background`
@@ -140,6 +141,9 @@ pub enum UiAction {
     /// `AppState::fill_saved_login`.
     FillSavedLogin,
     OpenDownloads,
+    OpenUpdates,
+    CheckForUpdates,
+    SetAutomaticUpdates(bool),
     OpenHistory,
     /// Add or remove the active page from favourites.
     ToggleFavourite,
@@ -249,6 +253,7 @@ pub struct ChromeContext<'a> {
     pub native_glass: NativeGlass,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
     pub downloads: &'a crate::downloads::DownloadManager,
+    pub updates: &'a crate::updates::Snapshot,
     /// The new tab page's photograph, and whatever is known about it.
     pub wallpaper: crate::wallpaper::View<'a>,
     /// Where to take the blurred copy of the page, when one is due this frame.
@@ -458,6 +463,9 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         Some(TabKind::Downloads) => {
             draw_downloads_page(root, chrome, content_rect, &mut actions);
         },
+        Some(TabKind::Updates) => {
+            updates_page::draw(root, chrome, content_rect, &mut actions);
+        },
         Some(TabKind::History) => {
             draw_history_page(root, chrome, content_rect, &mut actions);
         },
@@ -500,6 +508,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             TabKind::Settings
                 | TabKind::NewTab
                 | TabKind::Downloads
+                | TabKind::Updates
                 | TabKind::History
                 | TabKind::Trouble(_)
         )
@@ -3004,6 +3013,7 @@ fn internal_glyph(kind: TabKind) -> Option<Icon> {
         TabKind::Settings => Some(Icon::Gear),
         TabKind::History => Some(Icon::History),
         TabKind::Downloads => Some(Icon::Download),
+        TabKind::Updates => Some(Icon::Reload),
         TabKind::Trouble(trouble) => Some(trouble.icon()),
         TabKind::Web | TabKind::NewTab => None,
     }

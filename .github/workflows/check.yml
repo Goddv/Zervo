@@ -61,6 +61,9 @@ jobs:
           key: core
           sccache: "false"
 
+      - name: Prepare pinned Servo
+        run: scripts/prepare-servo.sh
+
       - name: Clippy
         # `-D warnings` is the point: the lint policy lives in the workspace's
         # `[lints]` table, and this is what makes it mean something.
@@ -72,12 +75,17 @@ jobs:
   deny:
     name: Advisories and licences
     runs-on: ubuntu-24.04
-    # Reads Cargo.lock; compiles nothing. A vulnerable dependency should not
-    # need an hour of engine build to be noticed.
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Prepare Servo for the audit container
+        # The container mounts this workspace but cannot see its sibling.
+        run: |
+          scripts/prepare-servo.sh
+          mv ../servo .ci-servo
+          sed -i 's|../servo/components/servo|.ci-servo/components/servo|' .cargo/config.toml
+
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           # The action runs in a musl container, which does not have the
@@ -114,7 +122,10 @@ jobs:
         # -x so the shared library in scripts/lib is followed rather than
         # reported as unreadable. Every script that sources it carries a
         # `# shellcheck source=` directive for the same reason.
-        run: shellcheck -x scripts/bundle-macos.sh scripts/make-icns.sh scripts/lib/common.sh
+        run: |
+          shellcheck -x scripts/bundle-macos.sh scripts/make-icns.sh scripts/lib/common.sh \
+            scripts/build-sparkle.sh scripts/fetch-sparkle-tools.sh scripts/prepare-servo.sh \
+            scripts/make-appcast.sh scripts/stage-appcast.sh
 
   workflows:
     name: Workflows
