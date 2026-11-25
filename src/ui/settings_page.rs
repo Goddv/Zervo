@@ -1489,24 +1489,6 @@ pub(crate) fn settings_layout(
         },
     );
     settings_section(ui, palette, tr("settings-new-tab-page"), |ui| {
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.newtab_home,
-            &crate::settings::NewTabHome::ALL,
-            crate::settings::NewTabHome::label,
-        ) {
-            actions.push(UiAction::PersistSettings);
-        }
-        ui.add_space(4.0);
-        note(ui, palette, chrome.settings.newtab_home.note());
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr("settings-both-pages-are-the-same-page-nothing"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
-        ui.add_space(10.0);
         ui.label(
             RichText::new(tr("settings-custom-greeting"))
                 .size(12.0)
@@ -1516,7 +1498,6 @@ pub(crate) fn settings_layout(
             ui,
             TextEdit::singleline(&mut chrome.settings.newtab_message)
                 .font(FontId::proportional(13.0))
-                .hint_text(tr("settings-leave-empty-for-the-time-of-day"))
                 .desired_width(f32::INFINITY),
         )
         .response;

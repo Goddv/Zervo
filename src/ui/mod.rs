@@ -91,6 +91,7 @@ pub(crate) fn paint_application_icon(ui: &Ui, rect: Rect, dark: bool) {
 #[derive(Debug)]
 pub enum UiAction {
     OpenCommand(CommandMode),
+    OpenCommandFrom(Rect),
     OpenAddress(String),
     Navigate(String),
     Back,

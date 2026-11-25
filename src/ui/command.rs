@@ -3,6 +3,9 @@ use super::*;
 const MAX_ROWS: usize = 7;
 const ROW_HEIGHT: f32 = 36.0;
 const ROW_GAP: f32 = 5.0;
+const CAPTION_HEIGHT: f32 = 24.0;
+const FIELD_HEIGHT: f32 = 44.0;
+const PADDING: i8 = 14;
 
 #[derive(Debug, Clone, Copy)]
 pub enum CommandMode {
@@ -15,6 +18,28 @@ pub struct CommandBar {
     query: String,
     selection: usize,
     select_all: bool,
+    transition: Option<Transition>,
+}
+
+struct Transition {
+    origin: Rect,
+    opened_at: Option<f64>,
+    closing: Option<(f64, f32)>,
+}
+
+impl Transition {
+    fn progress(&mut self, now: f64, duration: f32) -> f32 {
+        if duration <= 0.0 {
+            return if self.closing.is_some() { 0.0 } else { 1.0 };
+        }
+        let opened = *self.opened_at.get_or_insert(now);
+        let (started, elapsed) = if let Some((closed, from)) = self.closing {
+            (from, -((now - closed) as f32))
+        } else {
+            (0.0, (now - opened) as f32)
+        };
+        (started + elapsed / duration).clamp(0.0, 1.0)
+    }
 }
 
 impl CommandBar {
@@ -27,7 +52,23 @@ impl CommandBar {
             },
             selection: 0,
             select_all: true,
+            transition: None,
         }
+    }
+
+    pub(crate) fn from_new_tab(origin: Rect) -> Self {
+        Self {
+            transition: Some(Transition {
+                origin,
+                opened_at: None,
+                closing: None,
+            }),
+            ..Self::new(CommandMode::CurrentTab, "")
+        }
+    }
+
+    pub(crate) fn from_home(&self) -> bool {
+        self.transition.is_some()
     }
 }
 
@@ -49,36 +90,70 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     let top = (window.height() * 0.12).clamp(24.0, 56.0);
     let width = (window.width() - 64.0).clamp(1.0, 520.0);
     let max_height = (window.height() - top - 24.0).max(0.0);
+    let now = ctx.input(|input| input.time);
+    let duration = palette.material.animation;
+    let mut progress = 1.0;
+    let mut closing = false;
+    let mut area = egui::Modal::default_area(id)
+        .anchor(Align2::CENTER_TOP, vec2(0.0, top))
+        .fade_in(false);
+    let mut field = Rect::from_min_size(
+        pos2(
+            window.center().x - width * 0.5,
+            window.top() + top + f32::from(PADDING) + CAPTION_HEIGHT + ROW_GAP,
+        ),
+        vec2(width, FIELD_HEIGHT),
+    );
+    if let Some(transition) = &mut bar.transition {
+        progress = transition.progress(now, duration);
+        closing = transition.closing.is_some();
+        if closing && progress <= 0.0 {
+            ctx.request_repaint();
+            return false;
+        }
+        field = lerp_rect(transition.origin, field, crate::glass::ease_out(progress));
+    }
+    let eased = crate::glass::ease_out(progress);
+    let padding = (f32::from(PADDING) * eased).round() as i8;
+    let caption_height = CAPTION_HEIGHT * eased;
+    let spacing = ROW_GAP * eased;
+    if bar.from_home() {
+        let margin = f32::from(padding);
+        area = egui::Area::new(id)
+            .kind(egui::UiKind::Modal)
+            .sense(Sense::hover())
+            .order(egui::Order::Foreground)
+            .fixed_pos(field.min - vec2(margin, margin + caption_height + spacing))
+            .constrain(false)
+            .fade_in(false);
+    }
+    let shade = Color32::from_black_alpha(if palette.dark { 105 } else { 53 });
+    let width = field.width().max(1.0);
     let modal = egui::Modal::new(id)
-        .area(
-            egui::Modal::default_area(id)
-                .anchor(Align2::CENTER_TOP, vec2(0.0, top))
-                .fade_in(false),
-        )
-        .backdrop_color(Color32::from_black_alpha(if palette.dark {
-            105
-        } else {
-            53
-        }))
+        .area(area)
+        .backdrop_color(shade.gamma_multiply(eased))
         .frame(Frame::NONE)
         .show(ctx, |ui| {
             let surface = crate::overlay_glass::Surface::begin(ui);
-            let mut frame = Frame::NONE.inner_margin(14);
+            let mut frame = Frame::NONE.inner_margin(padding);
             if !surface.is_native() {
                 frame = frame
                     .fill(palette.surface)
                     .stroke(Stroke::new(1.0_f32, palette.border))
-                    .corner_radius(crate::overlay_glass::Role::Dialog.radius())
+                    .corner_radius(12 + (8.0 * eased).round() as u8)
                     .shadow(egui::epaint::Shadow {
                         offset: [0, 14],
                         blur: 38,
                         spread: 0,
-                        color: Color32::from_black_alpha(95),
+                        color: Color32::from_black_alpha(95).gamma_multiply(eased),
                     });
             }
             let card = frame.show(ui, |ui| {
                 ui.set_width(width);
-                ui.spacing_mut().item_spacing.y = ROW_GAP;
+                ui.spacing_mut().item_spacing.y = spacing;
+                if closing {
+                    ui.disable();
+                }
                 let down =
                     ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
                 let up =
@@ -89,29 +164,46 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                     CommandMode::NewTab => tr("common-new-tab"),
                     CommandMode::CurrentTab => tr("command-current-tab"),
                 };
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(caption)
-                            .size(12.0)
-                            .strong()
-                            .color(palette.text_muted),
+                let (title, _) =
+                    ui.allocate_exact_size(vec2(width, caption_height), Sense::hover());
+                if eased > 0.35 {
+                    let alpha = ((eased - 0.35) / 0.65).clamp(0.0, 1.0);
+                    let ink = palette.text_muted.gamma_multiply(alpha);
+                    ui.painter().text(
+                        title.left_center(),
+                        Align2::LEFT_CENTER,
+                        caption,
+                        FontId::proportional(12.0),
+                        ink,
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if icons::icon_button(ui, Icon::Close, 13.0, &palette, true)
-                            .on_hover_text(tr("common-close"))
-                            .clicked()
-                        {
-                            ui.close();
-                        }
+                    let close = Rect::from_center_size(
+                        title.right_center() - vec2(13.0, 0.0),
+                        vec2(24.0, caption_height),
+                    );
+                    let response = ui.interact(close, id.with("close"), Sense::click());
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, tr("common-close"))
                     });
-                });
+                    if response.has_focus() {
+                        icons::paint_focus(ui, &palette, close, Tier::Control);
+                    }
+                    if response.on_hover_text(tr("common-close")).clicked() {
+                        ui.close();
+                    }
+                    icons::draw_icon(
+                        ui.painter(),
+                        Rect::from_center_size(close.center(), vec2(13.0, 13.0)),
+                        Icon::Close,
+                        ink,
+                    );
+                }
                 let edit = TextEdit::singleline(&mut bar.query)
                     .id(id.with("query"))
-                    .font(FontId::proportional(19.0))
+                    .font(FontId::proportional(15.0 + 4.0 * eased))
                     .text_color(palette.text)
                     .hint_text(tr("command-search-placeholder"))
                     .desired_width(width)
-                    .min_size(vec2(0.0, 44.0))
+                    .min_size(vec2(0.0, field.height()))
                     .margin(Margin::symmetric(12, 11))
                     .background_color(palette.surface);
                 let mut editor = crate::overlay_glass::text_field(ui, edit);
@@ -138,7 +230,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                 }
 
                 let rows = results(bar.query.trim(), bar.mode, chrome);
-                ui.add_space(5.0);
+                ui.add_space(5.0 * eased);
                 let max = rows.len();
                 bar.selection = match (down, up) {
                     _ if max == 0 => 0,
@@ -150,10 +242,19 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                 let full_list = MAX_ROWS as f32 * (ROW_HEIGHT + ROW_GAP) - ROW_GAP;
                 let results_height = (max_height - used - 28.0).clamp(ROW_HEIGHT, full_list);
                 let mut chosen = None;
+                let reveal = ((eased - 0.22) / 0.78).clamp(0.0, 1.0);
+                if reveal == 0.0 {
+                    return if enter && editor.response.has_focus() {
+                        rows.into_iter().nth(bar.selection).map(|row| row.action)
+                    } else {
+                        None
+                    };
+                }
                 egui::ScrollArea::vertical()
-                    .max_height(results_height)
+                    .max_height(results_height * reveal)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.multiply_opacity(reveal);
                         if rows.is_empty() {
                             ui.label(
                                 RichText::new(tr("command-no-matches")).color(palette.text_muted),
@@ -180,8 +281,20 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
 
     if let Some(action) = modal.inner {
         actions.push(action);
-    } else if !modal.should_close() {
+    } else if closing || !modal.should_close() {
         chrome.browser.command_bar = Some(bar);
+        if progress < 1.0 || closing {
+            ctx.request_repaint();
+        }
+        return true;
+    } else if duration > 0.0
+        && progress > 0.0
+        && let Some(transition) = &mut bar.transition
+    {
+        transition.closing = Some((now, progress));
+        chrome.browser.command_bar = Some(bar);
+        ctx.memory_mut(|memory| memory.surrender_focus(id.with("query")));
+        ctx.request_repaint();
         return true;
     }
     ctx.memory_mut(|memory| memory.surrender_focus(id.with("query")));
@@ -365,4 +478,23 @@ fn result_row(ui: &mut Ui, row: &ResultRow, selected: bool, palette: &Palette) -
         egui::WidgetInfo::selected(egui::Role::ListBoxOption, true, selected, row.title)
     });
     response.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_morph_reverses_from_its_current_position() {
+        let origin = Rect::from_min_size(pos2(50.0, 200.0), vec2(650.0, 54.0));
+        let mut bar = CommandBar::from_new_tab(origin);
+        let transition = bar.transition.as_mut().unwrap();
+        assert_eq!(transition.progress(1.0, 0.25), 0.0);
+        let partial = transition.progress(1.125, 0.25);
+        assert_eq!(partial, 0.5);
+        transition.closing = Some((1.125, partial));
+        assert_eq!(transition.progress(1.125, 0.25), partial);
+        assert_eq!(transition.progress(1.25, 0.25), 0.0);
+        assert_eq!(transition.progress(1.125, 0.0), 0.0);
+    }
 }

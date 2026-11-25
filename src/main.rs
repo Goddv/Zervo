@@ -2105,10 +2105,17 @@ impl RunningApp {
             self.want_crossing(way);
         }
         match action {
-            UiAction::OpenCommand(mode) => {
+            UiAction::OpenCommand(_) | UiAction::OpenCommandFrom(_) => {
                 if self.settings.seen_setup && state.controls.borrow().is_empty() {
                     let mut browser = state.browser.borrow_mut();
-                    browser.command_bar = Some(ui::CommandBar::new(mode, &browser.address_bar));
+                    let bar = match action {
+                        UiAction::OpenCommand(mode) => {
+                            ui::CommandBar::new(mode, &browser.address_bar)
+                        },
+                        UiAction::OpenCommandFrom(rect) => ui::CommandBar::from_new_tab(rect),
+                        _ => unreachable!(),
+                    };
+                    browser.command_bar = Some(bar);
                     state.window.request_redraw();
                 }
             },
@@ -2459,7 +2466,7 @@ impl RunningApp {
                 let settings = &mut self.settings;
                 settings.sidebar_widgets = dashboard::Placed::defaults();
                 settings.reset_sidebar_sections();
-                settings.newtab_tiles = newtab::Tile::defaults();
+                settings.newtab_widgets = None;
                 settings.newtab_world_clocks = newtab::Zone::defaults();
                 settings.sidebar_width = ui::SIDEBAR_DEFAULT_WIDTH;
                 settings.save();

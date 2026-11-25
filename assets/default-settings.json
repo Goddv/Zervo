@@ -12,7 +12,6 @@
   "search_engine": "Google",
   "new_tab_page": "ZervoPage",
   "new_tab_background": "Grid",
-  "newtab_home": "Composed",
   "always_show_tab_close": false,
   "show_forward_button": true,
   "show_reload_button": true,
@@ -79,41 +78,6 @@
     "up": "None",
     "down": "ToggleShelf"
   },
-  "newtab_tiles": [
-    {
-      "card": "Clock",
-      "at": {
-        "col": 0,
-        "row": 0
-      },
-      "span": {
-        "w": 3,
-        "h": 2
-      }
-    },
-    {
-      "card": "WorldClocks",
-      "at": {
-        "col": 6,
-        "row": 0
-      },
-      "span": {
-        "w": 6,
-        "h": 2
-      }
-    },
-    {
-      "card": "Search",
-      "at": {
-        "col": 0,
-        "row": 4
-      },
-      "span": {
-        "w": 12,
-        "h": 1
-      }
-    }
-  ],
   "newtab_world_clocks": [
     {
       "label": "London",

@@ -1,226 +1,122 @@
-//! zervo://newtab — a page of cards the reader arranges.
-//!
-//! Everything on the page is a card on a twelve-column grid, and every card
-//! can be moved, resized or taken off. Nothing is packed: a card stays where
-//! it was put, including in a row with nothing above it, because an
-//! arrangement that rearranges itself is not an arrangement.
-//!
-//! Dragging only happens in edit mode. The alternative — a page where a card
-//! is always draggable — has to guess whether a press on a link meant *open
-//! that* or *pick this up*, and it guesses wrong often enough to be worse than
-//! a button. So the cards are inert until Customise is pressed, and then they
-//! are nothing but handles.
-//!
-//! What the cards show is what the browser already knows: pinned tabs, the
-//! sites visited most, favourites, downloads, what a page is playing. The two
-//! that hold their own material — a note and a to-do list — keep it in the
-//! library beside the favourites, not in the settings, because it is the
-//! reader's writing rather than their preferences.
+//! New Tab backdrop, navigation, and saved widget configuration.
+
+mod home;
+mod widgets;
 
 use crate::l10n::text as tr;
-use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Key, Rect, RichText, Sense,
-    Stroke, StrokeKind, TextEdit, Ui, pos2, vec2,
-};
+use egui::{Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Rect, Sense, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::glass::{self, Glass};
-use crate::grid::{self, Cell, Span};
+use crate::glass;
+use crate::grid::{Cell, Span};
 use crate::icons::{self, Icon};
-use crate::state::TabId;
-use crate::theme::{self, Palette, Tier};
+use crate::theme::{self, Palette};
 use crate::ui::{ChromeContext, UiAction};
 
-// ── The grid ───────────────────────────────────────────────────────────────
-
-/// Twelve columns, always. Cells narrow with the window rather than the grid
-/// losing columns: a card at column nine is at column nine in any window, and
-/// the arrangement survives a resize.
-pub const COLUMNS: u8 = 12;
-const ROW_HEIGHT: f32 = 68.0;
-const GAP: f32 = 12.0;
-/// The page's own margin, inside the content card.
 const PAGE_PAD: f32 = 26.0;
-/// The widest the grid is allowed to get. Past this the cards stop being cards
-/// and start being stripes.
-const CANVAS_MAX: f32 = 1240.0;
-/// The header row: the greeting, and the three page controls.
+const CANVAS_MAX: f32 = 1100.0;
 const HEADER: f32 = 46.0;
-/// The credit line under a photograph.
 const CREDIT: f32 = 20.0;
-use crate::theme::MIN_VEIL;
-/// Below this the grid is not worth drawing; the page shows a clock and a
-/// search box instead.
-const NARROW: f32 = 460.0;
-/// How deep the board is allowed to get when a card is added and has to be put
-/// somewhere. Past what the window shows the page scrolls, so a card never
-/// lands nowhere — but nor does it land forty rows down.
-const BOARD_ROWS: u8 = 12;
 
-// ── Cards ──────────────────────────────────────────────────────────────────
-
-/// What a card shows.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum Card {
-    Search,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Widget {
     Clock,
-    WorldClocks,
     QuickLinks,
-    TopSites,
     Recent,
-    Favourites,
+    Writing,
+    WorldClocks,
+    PinnedTabs,
+    MostVisited,
     Downloads,
     NowPlaying,
-    Notes,
-    Tasks,
-    Workspaces,
-    Mark,
+    Spaces,
 }
 
-impl Card {
-    pub const ALL: [Card; 13] = [
-        Card::Search,
-        Card::Clock,
-        Card::WorldClocks,
-        Card::QuickLinks,
-        Card::TopSites,
-        Card::Recent,
-        Card::Favourites,
-        Card::Downloads,
-        Card::NowPlaying,
-        Card::Notes,
-        Card::Tasks,
-        Card::Workspaces,
-        Card::Mark,
+impl Widget {
+    pub const DEFAULT: [Self; 4] = [Self::Clock, Self::QuickLinks, Self::Recent, Self::Writing];
+    const ALL: [Self; 10] = [
+        Self::Clock,
+        Self::QuickLinks,
+        Self::Recent,
+        Self::Writing,
+        Self::WorldClocks,
+        Self::PinnedTabs,
+        Self::MostVisited,
+        Self::Downloads,
+        Self::NowPlaying,
+        Self::Spaces,
     ];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Card::Search => tr("common-search"),
-            Card::Clock => tr("newtab-clock"),
-            Card::WorldClocks => tr("common-world-clocks"),
-            Card::QuickLinks => tr("newtab-quick-links"),
-            Card::TopSites => tr("common-most-visited"),
-            Card::Recent => tr("newtab-recent"),
-            Card::Favourites => tr("common-favourites"),
-            Card::Downloads => tr("common-downloads"),
-            Card::NowPlaying => tr("common-now-playing"),
-            Card::Notes => tr("newtab-note"),
-            Card::Tasks => tr("newtab-to-do"),
-            Card::Workspaces => tr("newtab-workspaces"),
-            Card::Mark => tr("newtab-zervo-icon"),
-        }
-    }
-
-    fn icon(self) -> Icon {
-        match self {
-            Card::Search => Icon::Search,
-            Card::Clock => Icon::Clock,
-            Card::WorldClocks => Icon::World,
-            Card::QuickLinks => Icon::Apps,
-            Card::TopSites => Icon::TrendUp,
-            Card::Recent => Icon::Recent,
-            Card::Favourites => Icon::Star,
-            Card::Downloads => Icon::Download,
-            Card::NowPlaying => Icon::Music,
-            Card::Notes => Icon::Note,
-            Card::Tasks => Icon::Todo,
-            Card::Workspaces => Icon::Stack,
-            Card::Mark => Icon::Browser,
-        }
-    }
-
-    fn default_span(self) -> Span {
-        match self {
-            Card::Search => Span::new(9, 1),
-            Card::Clock => Span::new(3, 2),
-            Card::WorldClocks => Span::new(6, 2),
-            Card::QuickLinks => Span::new(9, 2),
-            Card::TopSites => Span::new(5, 2),
-            Card::Recent => Span::new(3, 4),
-            Card::Favourites => Span::new(4, 2),
-            Card::Downloads => Span::new(4, 2),
-            Card::NowPlaying => Span::new(4, 1),
-            Card::Notes => Span::new(4, 3),
-            Card::Tasks => Span::new(3, 3),
-            Card::Workspaces => Span::new(3, 2),
-            Card::Mark => Span::new(2, 2),
-        }
-    }
-
-    /// Cards that carry their own material rather than sitting in a card:
-    /// over a photograph these read better as light on the picture than as
-    /// another rectangle on top of it.
-    fn bare(self) -> bool {
-        matches!(self, Card::Clock | Card::Mark)
-    }
-
-    /// Cards with a heading. The ones without are either bare or so obviously
-    /// themselves that a label would be noise.
-    fn heading(self) -> bool {
-        !matches!(self, Card::Search | Card::Clock | Card::Mark)
+    fn label(self) -> &'static str {
+        tr(match self {
+            Self::Clock => "newtab-clock",
+            Self::QuickLinks => "newtab-quick-links",
+            Self::Recent => "newtab-recent",
+            Self::Writing => "newtab-notes-and-tasks",
+            Self::WorldClocks => "common-world-clocks",
+            Self::PinnedTabs => "sidebar-pinned-tabs",
+            Self::MostVisited => "common-most-visited",
+            Self::Downloads => "common-downloads",
+            Self::NowPlaying => "common-now-playing",
+            Self::Spaces => "newtab-workspaces",
+        })
     }
 }
 
-/// A card, and where it sits.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct Tile {
-    pub card: Card,
-    pub at: Cell,
-    pub span: Span,
+#[derive(Clone, Deserialize)]
+pub(crate) struct LegacyTile {
+    card: String,
+    at: Cell,
+    span: Span,
 }
 
-impl Tile {
-    fn new(card: Card, col: u8, row: u8) -> Self {
-        Tile {
-            card,
-            at: Cell::new(col, row),
-            span: card.default_span(),
-        }
+pub(crate) fn migrate_widgets(mut tiles: Vec<LegacyTile>) -> Vec<Widget> {
+    let defaults: [&[(&str, u8, u8, u8, u8)]; 2] = [
+        &[
+            ("Clock", 0, 0, 3, 2),
+            ("WorldClocks", 6, 0, 6, 2),
+            ("Search", 0, 4, 12, 1),
+        ],
+        &[
+            ("Clock", 4, 1, 4, 2),
+            ("Search", 2, 3, 8, 1),
+            ("Recent", 2, 5, 4, 3),
+            ("TopSites", 6, 5, 4, 3),
+        ],
+    ];
+    if defaults.iter().any(|layout| {
+        tiles.len() == layout.len()
+            && layout.iter().all(|&(card, col, row, w, h)| {
+                tiles.iter().any(|tile| {
+                    tile.card == card
+                        && tile.at == Cell::new(col, row)
+                        && tile.span == Span::new(w, h)
+                })
+            })
+    }) {
+        return Widget::DEFAULT.to_vec();
     }
-
-    /// The arrangement a fresh install opens with, and the one Reset restores.
-    ///
-    /// Seven rows deep, which fits the window Zervo opens at without the page
-    /// having to be scrolled on the first run.
-    /// What a fresh board opens on.
-    ///
-    /// Four cards, not eight. This used to put up seven boxed panels out of
-    /// the gate, which is a settings screen wearing a hat — and, on a page
-    /// whose whole point is a backdrop, it amounts to choosing a picture and
-    /// then covering it.
-    ///
-    /// A new tab is opened to go somewhere, so it should answer that one
-    /// question three ways and stop: the field, big and centred; the session
-    /// you actually abandoned, named and resumable; and the handful of sites
-    /// you truly use. The clock is the fourth because it is `bare` — light on
-    /// the picture rather than another rectangle over it — so it costs the
-    /// backdrop nothing.
-    ///
-    /// Nothing has been removed. All thirteen cards still exist, still on the
-    /// same grid, still draggable and resizable, and every one of them is a
-    /// press of "Add card" away. What changed is which of them greets you.
-    ///
-    /// Laid out on the twelve-column board with two columns of margin either
-    /// side, so the whole arrangement is centred rather than starting in the
-    /// corner, and with row four left empty so the field has air under it.
-    pub fn defaults() -> Vec<Tile> {
-        let at = |card: Card, col: u8, row: u8, span: Span| {
-            let mut tile = Tile::new(card, col, row);
-            tile.span = span;
-            tile
+    tiles.sort_by_key(|tile| (tile.at.row, tile.at.col));
+    let mut widgets = Vec::new();
+    for tile in tiles {
+        let widget = match tile.card.as_str() {
+            "Clock" => Widget::Clock,
+            "QuickLinks" => Widget::PinnedTabs,
+            "Favourites" => Widget::QuickLinks,
+            "TopSites" => Widget::MostVisited,
+            "Recent" => Widget::Recent,
+            "Notes" | "Tasks" => Widget::Writing,
+            "WorldClocks" => Widget::WorldClocks,
+            "Downloads" => Widget::Downloads,
+            "NowPlaying" => Widget::NowPlaying,
+            "Workspaces" => Widget::Spaces,
+            _ => continue,
         };
-        vec![
-            at(Card::Clock, 4, 1, Span::new(4, 2)),
-            at(Card::Search, 2, 3, Span::new(8, 1)),
-            at(Card::Recent, 2, 5, Span::new(4, 3)),
-            at(Card::TopSites, 6, 5, Span::new(4, 3)),
-        ]
+        if !widgets.contains(&widget) {
+            widgets.push(widget);
+        }
     }
-
-    fn placement(self) -> grid::Placement {
-        (self.at, self.span)
-    }
+    widgets
 }
 
 /// A clock face on the world-clocks card.
@@ -298,18 +194,6 @@ impl Zone {
     ];
 }
 
-/// What the page asks the arrangement to do. Collected and applied after the
-/// cards are drawn, so nothing is mutating the list it is iterating.
-enum Change {
-    Remove(usize),
-    Place { index: usize, at: Cell },
-    Resize { index: usize, span: Span },
-    Add(Card),
-    Reset,
-}
-
-// ── The page ───────────────────────────────────────────────────────────────
-
 /// Draw the whole page. Returns true while something on it is still moving,
 /// so the caller can schedule the next frame instead of spinning.
 ///
@@ -334,8 +218,12 @@ pub fn draw(
     let native_frost =
         chrome.native_glass.vibrancy_available && palette.translucency.is_translucent();
     let ground = if native_frost {
-        // Leave the AppKit window backdrop visible through the new-tab page.
-        theme::page_veil(&palette, 0.18)
+        let strength = match chrome.settings.new_tab_background {
+            crate::settings::NewTabBackground::Plain => theme::MIN_VEIL,
+            _ if palette.dark => 0.58,
+            _ => 0.78,
+        };
+        theme::page_veil(&palette, strength)
     } else {
         theme::page_ground(&palette)
     };
@@ -401,8 +289,8 @@ pub fn draw(
 
     let ink = Ink::new(&chrome.palette, over_photo);
 
-    if content_rect.width() < NARROW || content_rect.height() < 260.0 {
-        draw_narrow(root, chrome, content_rect, &ink, actions);
+    if content_rect.width() < 300.0 || content_rect.height() < 180.0 {
+        home::compact(root, chrome, content_rect, actions);
         chrome.palette = restore;
         return ambient;
     }
@@ -418,37 +306,24 @@ pub fn draw(
 
     let header = Rect::from_min_size(canvas.min, vec2(canvas.width(), HEADER));
     let credit_height = if over_photo { CREDIT } else { 0.0 };
-    let board = Rect::from_min_max(
+    let dashboard = Rect::from_min_max(
         pos2(canvas.min.x, header.max.y + 8.0),
         pos2(canvas.max.x, canvas.max.y - credit_height),
     );
 
-    let composed = chrome.settings.newtab_home == crate::settings::NewTabHome::Composed
-        // Arranging is a board thing. Pressing Customise on the composed page
-        // takes you to the board, so being in edit mode *means* being on it.
-        && !chrome.browser.newtab_editing;
-    draw_header(root, chrome, header, &ink, actions, composed);
-
-    let mut changes = Vec::new();
-    if composed {
-        ambient |= draw_composed(root, chrome, board, &ink, actions);
-    } else {
-        ambient |= draw_board(root, chrome, board, &ink, &mut changes, actions);
-    }
+    draw_header(root, chrome, header, &ink, actions);
+    home::draw(root, chrome, dashboard, actions);
 
     if over_photo {
         draw_credit(
             root,
             chrome,
-            Rect::from_min_max(pos2(canvas.min.x, board.max.y), canvas.max),
+            Rect::from_min_max(pos2(canvas.min.x, dashboard.max.y), canvas.max),
             &ink,
             actions,
         );
     }
 
-    if apply(chrome, changes) {
-        actions.push(UiAction::PersistSettings);
-    }
     // Whatever is drawn after the page — a dialog the page raised, the content
     // card's own edges — is not on the wallpaper and must not be frosted
     // against it.
@@ -470,7 +345,6 @@ struct Ink {
     halo: Color32,
     /// True when a photograph is behind everything.
     photo: bool,
-    dark: bool,
 }
 
 impl Ink {
@@ -490,7 +364,6 @@ impl Ink {
             },
             halo: Color32::from_black_alpha(58),
             photo,
-            dark: palette.dark,
         }
     }
 
@@ -524,7 +397,6 @@ impl Ink {
             muted,
             halo,
             photo: self.photo,
-            dark: !light,
         }
     }
 
@@ -640,7 +512,7 @@ fn paint_photo(
     // Clamped to the same floor the slider offers rather than to zero: the
     // settings file is a text file anyone can edit, and a card on a bright
     // photograph with no veil under it cannot be read at all.
-    let dim = chrome.settings.wallpaper_dim.clamp(MIN_VEIL, 1.0) * fade;
+    let dim = chrome.settings.wallpaper_dim.clamp(theme::MIN_VEIL, 1.0) * fade;
     backdrop.rect_filled(content_rect, radius, theme::page_veil(&palette, dim * 0.5));
     let scrim = |height: f32, strength: f32, from_top: bool| {
         let band = if from_top {
@@ -684,18 +556,11 @@ fn cover(image: egui::Vec2, target: Rect) -> Rect {
 
 // ── Header ─────────────────────────────────────────────────────────────────
 
-/// Time-of-day greeting, or the reader's own message when they set one.
-fn greeting(settings: &crate::settings::Settings) -> String {
-    if !settings.newtab_message.trim().is_empty() {
-        return settings.newtab_message.trim().to_owned();
-    }
-    match jiff::ZonedDateTime::now().hour() {
-        5..=11 => tr("newtab-good-morning"),
-        12..=17 => tr("newtab-good-afternoon"),
-        18..=21 => tr("newtab-good-evening"),
-        _ => tr("newtab-good-night"),
-    }
-    .to_owned()
+fn editing(chrome: &ChromeContext) -> bool {
+    chrome
+        .browser
+        .newtab_editing
+        .is_some_and(|tab| chrome.browser.active_tab == Some(tab))
 }
 
 fn draw_header(
@@ -704,69 +569,31 @@ fn draw_header(
     header: Rect,
     ink: &Ink,
     actions: &mut Vec<UiAction>,
-    composed: bool,
 ) {
     let palette = chrome.palette;
     // On the photograph, not on a card, so it follows the photograph — the
     // same rule the cards use, applied to the two strings that are not in one.
     let header_ink = ink.over(&palette, header, false);
     let ink = &header_ink;
-    // The composed page says the hour and the greeting in one line down the
-    // middle of itself, so the header would be saying it twice.
-    if !composed {
+    let mark = Rect::from_center_size(
+        pos2(header.left() + 15.0, header.center().y),
+        vec2(30.0, 30.0),
+    );
+    crate::ui::paint_application_icon(root, mark, palette.dark);
+    if header.width() >= 450.0 {
         ink.write(
             root.painter(),
-            pos2(header.min.x, header.center().y),
+            pos2(mark.right() + 10.0, header.center().y),
             Align2::LEFT_CENTER,
-            greeting(chrome.settings),
-            FontId::proportional(19.0),
+            "Zervo",
+            FontId::proportional(18.0),
             ink.text,
         );
     }
 
-    // Right to left, so the buttons keep their order as the window narrows.
-    let editing = chrome.browser.newtab_editing;
-    let mut cursor = header.max.x;
-    // The one control that moves between the two pages. On the composed page
-    // it is the way to the board — 7a's own "Customise ⌥␣" — and on the board
-    // it is the way back, so neither page is a dead end.
-    let switch = header_button(
-        root,
-        &palette,
-        &mut cursor,
-        header,
-        if composed { Icon::Sliders } else { Icon::Home },
-        if composed {
-            tr("newtab-customise")
-        } else {
-            tr("common-home")
-        },
-        false,
-    );
-    if switch.clicked() {
-        chrome.settings.newtab_home = if composed {
-            crate::settings::NewTabHome::Board
-        } else {
-            crate::settings::NewTabHome::Composed
-        };
-        actions.push(UiAction::PersistSettings);
-    }
-    if composed {
-        // The board's own controls belong to the board.
-        let wallpaper = header_button(
-            root,
-            &palette,
-            &mut cursor,
-            header,
-            Icon::Mountains,
-            tr("newtab-backdrop"),
-            false,
-        );
-        let anchor = wallpaper.rect;
-        draw_backdrop_menu(root, chrome, anchor, &wallpaper, actions);
-        return;
-    }
-    let done = header_button(
+    let editing = editing(chrome);
+    let mut cursor = header.right();
+    let customise = header_button(
         root,
         &palette,
         &mut cursor,
@@ -779,92 +606,23 @@ fn draw_header(
         },
         editing,
     );
-    if done.clicked() {
-        chrome.browser.newtab_editing = !editing;
+    if customise.clicked() {
+        chrome.browser.newtab_editing = if editing {
+            None
+        } else {
+            chrome.browser.active_tab
+        };
     }
-
-    let add = header_button(
-        root,
-        &palette,
-        &mut cursor,
-        header,
-        Icon::Plus,
-        tr("newtab-add-card"),
-        false,
-    );
-    let add_anchor = add.rect;
-    let menu_id = Id::unique("zervo_newtab_add_open");
-    if add.clicked() {
-        // Adding puts the page into edit mode: the card lands somewhere, and
-        // somewhere is rarely where it is wanted.
-        chrome.browser.newtab_editing = true;
-        let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
-        root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
-    }
-    if root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true) {
-        let rows: Vec<crate::dashboard::Row<Card>> = Card::ALL
-            .iter()
-            .map(|card| {
-                let already = chrome
-                    .settings
-                    .newtab_tiles
-                    .iter()
-                    .any(|tile| tile.card == *card);
-                crate::dashboard::Row::Item(card.label().to_owned(), *card, already)
-            })
-            .collect();
-        match crate::dashboard::menu(
-            root,
-            &palette,
-            "zervo_newtab_add_menu",
-            add_anchor,
-            200.0,
-            &rows,
-        ) {
-            Some(card) => {
-                root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
-                root.ctx()
-                    .data_mut(|data| data.insert_temp(Id::unique("zervo_newtab_added"), card));
-            },
-            None if root.input(|input| input.pointer.any_pressed())
-                && !crate::dashboard::over_menu(root.ctx())
-                && !add.clicked() =>
-            {
-                root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
-            },
-            None => {},
-        }
-    }
-
-    let wallpaper = header_button(
+    let backdrop = header_button(
         root,
         &palette,
         &mut cursor,
         header,
         Icon::Mountains,
-        // Never lit. It opens a menu; it is not a state. Tinting it because a
-        // photograph happens to be up made it read as a button stuck down.
         tr("newtab-backdrop"),
         false,
     );
-    let backdrop_anchor = wallpaper.rect;
-    draw_backdrop_menu(root, chrome, backdrop_anchor, &wallpaper, actions);
-
-    if editing {
-        let reset = header_button(
-            root,
-            &palette,
-            &mut cursor,
-            header,
-            Icon::Reset,
-            tr("newtab-reset"),
-            false,
-        );
-        if reset.clicked() {
-            root.ctx()
-                .data_mut(|data| data.insert_temp(Id::unique("zervo_newtab_reset"), true));
-        }
-    }
+    draw_backdrop_menu(root, chrome, backdrop.rect, &backdrop, actions);
 }
 
 /// One control in the header: a glyph and a word on a small pill. Advances
@@ -1107,785 +865,6 @@ fn draw_credit(
     }
 }
 
-// ── The board ──────────────────────────────────────────────────────────────
-
-/// Draw the arrangement, and take drags, drops, resizes and removals.
-fn draw_board(
-    root: &mut Ui,
-    chrome: &mut ChromeContext,
-    board: Rect,
-    ink: &Ink,
-    changes: &mut Vec<Change>,
-    actions: &mut Vec<UiAction>,
-) -> bool {
-    let ctx = root.ctx().clone();
-    let palette = chrome.palette;
-    let editing = chrome.browser.newtab_editing;
-
-    // Deferred asks from the header, which cannot reach the change list from
-    // where it is drawn.
-    let added = Id::unique("zervo_newtab_added");
-    if let Some(card) = ctx.data(|data| data.get_temp::<Card>(added)) {
-        ctx.data_mut(|data| data.remove::<Card>(added));
-        changes.push(Change::Add(card));
-    }
-    if ctx
-        .data_mut(|data| data.remove_temp::<bool>(Id::unique("zervo_newtab_reset")))
-        .is_some()
-    {
-        changes.push(Change::Reset);
-    }
-
-    let tiles = chrome.settings.newtab_tiles.clone();
-    let metrics = grid::Metrics::new(board, COLUMNS, ROW_HEIGHT, GAP);
-    // The grid is as deep as the arrangement needs or as the window allows,
-    // whichever is more; anything past the window scrolls.
-    let needed = tiles
-        .iter()
-        .map(|tile| tile.at.row.saturating_add(tile.span.h.max(1)))
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let rows = needed.max(metrics.rows);
-    let overflow = (metrics.height_for(rows) - board.height()).max(0.0);
-
-    let scroll_id = Id::unique("zervo_newtab_scroll");
-    let mut scroll = ctx
-        .data(|data| data.get_temp::<f32>(scroll_id))
-        .unwrap_or(0.0);
-    let pointer = ctx.input(|input| input.pointer.latest_pos());
-    if overflow > 0.0 && pointer.is_some_and(|pos| board.contains(pos)) {
-        scroll -= ctx.input(|input| input.smooth_scroll_delta.y);
-    }
-    scroll = scroll.clamp(0.0, overflow);
-    ctx.data_mut(|data| data.insert_temp(scroll_id, scroll));
-
-    let metrics = grid::Metrics {
-        rows,
-        origin: pos2(board.min.x, board.min.y - scroll),
-        ..metrics
-    };
-
-    let mut area = root.new_child(egui::UiBuilder::new().max_rect(board));
-    // Room on every side for a card to keep its shadow, which is painted
-    // outside the card. It was horizontal only, on the grounds that the
-    // vertical clip stops a scrolled card spilling over the header and the
-    // credit line — true, but it also sliced the shadow off the top and bottom
-    // rows, which is a hard edge on three cards out of four rather than a
-    // scrolling nicety. What can now spill is a card's outermost twelve points
-    // of shadow, which is what a shadow is for.
-    //
-    // The number is `glass`'s own spread for a card-sized radius; it is written
-    // out rather than imported because being a point or two generous here costs
-    // nothing and a dependency on the material's internals costs something.
-    const SHADOW_ROOM: f32 = 12.0;
-    area.set_clip_rect(board.expand(SHADOW_ROOM));
-    let area = &mut area;
-
-    if editing {
-        // The board itself, so it is obvious what the cards are being
-        // arranged on. One faint wash, not a grid of lines: the cards are
-        // what the eye should be following.
-        area.painter().rect_filled(
-            board.expand(6.0),
-            CornerRadius::same(palette.radius(Tier::Panel)),
-            palette
-                .accent
-                .gamma_multiply(if ink.dark { 0.05 } else { 0.045 }),
-        );
-    }
-
-    let drag_id = Id::unique("zervo_newtab_drag");
-    let grab_id = Id::unique("zervo_newtab_grab");
-    let resize_id = Id::unique("zervo_newtab_resize");
-    let held = ctx.data(|data| data.get_temp::<usize>(drag_id));
-    let resizing = ctx.data(|data| data.get_temp::<usize>(resize_id));
-    // Where inside the card the pointer went down. Kept, so a card follows the
-    // pointer from the corner it was picked up by. Centring it on the pointer
-    // instead — which is the obvious thing, and what the shelf does with its
-    // one-cell widgets — makes a card nine columns wide jump half its own
-    // width the moment it is touched, and a card grabbed near its right edge
-    // lands several rows further down than the pointer ever went.
-    let grab = ctx
-        .data(|data| data.get_temp::<egui::Vec2>(grab_id))
-        .unwrap_or_default();
-
-    // Where a carried card would land, and what is already there.
-    let landing = match (editing.then_some(held).flatten(), pointer) {
-        (Some(index), Some(pos)) => tiles
-            .get(index)
-            .map(|tile| metrics.cell_at(pos - grab, tile.span)),
-        _ => None,
-    };
-    if let Some(at) = landing
-        && let Some(tile) = held.and_then(|index| tiles.get(index))
-    {
-        let destination = metrics.rect(at, tile.span);
-        area.painter().rect_filled(
-            destination,
-            CornerRadius::same(palette.radius(Tier::Card)),
-            palette.accent.gamma_multiply(0.10),
-        );
-        area.painter().rect_stroke(
-            destination,
-            CornerRadius::same(palette.radius(Tier::Card)),
-            Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
-            StrokeKind::Inside,
-        );
-    }
-
-    let mut ambient = false;
-    let mut carried = None;
-    for (index, tile) in tiles.iter().enumerate() {
-        let slot = metrics.rect(tile.at, tile.span);
-        let mine = held == Some(index);
-        // Scrolled out of sight: nothing to draw or interact with — unless it
-        // is the card being carried, whose slot is where it *was*. Skipping
-        // that one stops its handle being interacted with, and a drag whose
-        // handle goes quiet never reports that it stopped.
-        if !mine && !slot.intersects(board.expand(ROW_HEIGHT)) {
-            continue;
-        }
-        let over = pointer.is_some_and(|pos| slot.contains(pos) && board.contains(pos));
-
-        if editing {
-            let response = area.interact(slot, drag_id.with(index), Sense::click_and_drag());
-            if response.drag_started() {
-                let offset = response
-                    .interact_pointer_pos()
-                    .map(|pos| pos - slot.min)
-                    .unwrap_or_default();
-                ctx.data_mut(|data| {
-                    data.insert_temp(drag_id, index);
-                    data.insert_temp(grab_id, offset);
-                });
-            }
-            if mine && response.drag_stopped() {
-                ctx.data_mut(|data| data.remove::<usize>(drag_id));
-                if let Some(at) = landing {
-                    changes.push(Change::Place { index, at });
-                }
-            }
-            if over || mine {
-                ctx.set_cursor_icon(if mine {
-                    CursorIcon::Grabbing
-                } else {
-                    CursorIcon::Grab
-                });
-            }
-        }
-
-        // A carried card follows the pointer, and is drawn last so it passes
-        // over its neighbours rather than under them.
-        let drawn = match (mine, pointer) {
-            (true, Some(pos)) => {
-                Rect::from_min_size(pos - metrics.size(tile.span) / 2.0, slot.size())
-            },
-            _ => slot,
-        };
-        if mine {
-            carried = Some((index, *tile, drawn));
-            continue;
-        }
-
-        let widget = crate::overlay_glass::Surface::begin(area);
-        ambient |= draw_tile(
-            area,
-            chrome,
-            *tile,
-            drawn,
-            ink,
-            false,
-            widget.is_native(),
-            card_id(index),
-            actions,
-        );
-
-        if editing && over {
-            draw_handles(area, &palette, drawn, index, changes);
-        }
-        // The resize corner outlives the hover. Dragging it outwards is how a
-        // card is made bigger, and that takes the pointer off the card it
-        // belongs to — gate this on hover alone and the handle stops being
-        // interacted with mid-drag, so the drop is never seen, the resize
-        // never lands, and the card is left stuck in resizing state.
-        if editing && (over || resizing == Some(index)) {
-            draw_resizer(
-                area, &palette, &metrics, *tile, index, drawn, changes, resizing,
-            );
-        }
-        widget.finish(area, drawn, crate::overlay_glass::Role::Widget);
-    }
-
-    if let Some((index, tile, drawn)) = carried {
-        let widget = crate::overlay_glass::Surface::begin(area);
-        ambient |= draw_tile(
-            area,
-            chrome,
-            tile,
-            drawn,
-            ink,
-            true,
-            widget.is_native(),
-            card_id(index),
-            actions,
-        );
-        widget.finish(area, drawn, crate::overlay_glass::Role::Widget);
-    }
-
-    if overflow > 0.0 {
-        // A thumb rather than a scrollbar: there is nothing to grab, it is
-        // only there to say the page continues.
-        let travel = board.height() - 40.0;
-        let thumb = Rect::from_min_size(
-            pos2(
-                board.max.x + 4.0,
-                board.min.y + travel * (scroll / overflow),
-            ),
-            vec2(3.0, 40.0),
-        );
-        area.painter().rect_filled(
-            thumb,
-            CornerRadius::same(palette.radius(Tier::Hairline)),
-            ink.muted.gamma_multiply(0.5),
-        );
-    }
-
-    ambient
-}
-
-/// The remove button, and the mark that says a card can be picked up.
-fn draw_handles(
-    area: &mut Ui,
-    palette: &Palette,
-    rect: Rect,
-    index: usize,
-    changes: &mut Vec<Change>,
-) {
-    let close =
-        Rect::from_center_size(pos2(rect.max.x - 12.0, rect.min.y + 12.0), vec2(18.0, 18.0));
-    let remove = area.interact(
-        close,
-        Id::unique("zervo_newtab_remove").with(index),
-        Sense::click(),
-    );
-    icons::paint_icon_button(area, &remove, Icon::Close, 10.0, palette);
-    if crate::overlay_glass::tooltip(remove, palette, tr("newtab-take-this-card-off")).clicked() {
-        changes.push(Change::Remove(index));
-    }
-    icons::draw_icon(
-        area.painter(),
-        Rect::from_center_size(pos2(rect.min.x + 12.0, rect.min.y + 12.0), vec2(13.0, 13.0)),
-        Icon::DragHandle,
-        palette.text_muted.gamma_multiply(0.8),
-    );
-}
-
-/// The corner that resizes by whole cells, with a preview of what it would
-/// come to.
-#[expect(clippy::too_many_arguments)]
-fn draw_resizer(
-    area: &mut Ui,
-    palette: &Palette,
-    metrics: &grid::Metrics,
-    tile: Tile,
-    index: usize,
-    rect: Rect,
-    changes: &mut Vec<Change>,
-    resizing: Option<usize>,
-) {
-    let ctx = area.ctx().clone();
-    let resize_id = Id::unique("zervo_newtab_resize");
-    let corner =
-        Rect::from_center_size(pos2(rect.max.x - 12.0, rect.max.y - 12.0), vec2(22.0, 22.0));
-    icons::draw_icon(
-        area.painter(),
-        corner.shrink(5.0),
-        Icon::Resize,
-        palette.text_muted.gamma_multiply(0.8),
-    );
-    let handle = area.interact(
-        corner,
-        Id::unique("zervo_newtab_size").with(index),
-        Sense::click_and_drag(),
-    );
-    if handle.hovered() || resizing == Some(index) {
-        ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
-    }
-    if handle.drag_started() {
-        ctx.data_mut(|data| data.insert_temp(resize_id, index));
-    }
-    if resizing != Some(index) {
-        return;
-    }
-    // A drag that ended somewhere this card never heard about — the pointer
-    // left the window, or another widget took the press — would otherwise
-    // leave the card resizing for the rest of the session.
-    if !ctx.input(|input| input.pointer.any_down()) && !handle.drag_stopped() {
-        ctx.data_mut(|data| data.remove::<usize>(resize_id));
-        return;
-    }
-    let Some(pointer) = ctx.input(|input| input.pointer.latest_pos()) else {
-        return;
-    };
-    let stride = metrics.cell + vec2(metrics.gap, metrics.gap);
-    let wanted = Span::new(
-        (((pointer.x - rect.min.x + metrics.gap) / stride.x).round() as i32)
-            .clamp(1, metrics.columns as i32) as u8,
-        (((pointer.y - rect.min.y + metrics.gap) / stride.y).round() as i32)
-            .clamp(1, metrics.rows as i32) as u8,
-    );
-    area.painter().rect_stroke(
-        Rect::from_min_size(rect.min, metrics.size(wanted)),
-        CornerRadius::same(palette.radius(Tier::Card)),
-        Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.85)),
-        StrokeKind::Inside,
-    );
-    if handle.drag_stopped() {
-        ctx.data_mut(|data| data.remove::<usize>(resize_id));
-        if wanted != tile.span {
-            changes.push(Change::Resize {
-                index,
-                span: wanted,
-            });
-        }
-    }
-}
-
-/// Apply what the page asked for. Returns true when the arrangement moved and
-/// wants writing out.
-fn apply(chrome: &mut ChromeContext, changes: Vec<Change>) -> bool {
-    if changes.is_empty() {
-        return false;
-    }
-    // A change that adds or removes a card renumbers the ones after it, so
-    // anything still holding an index from this frame is now pointing at the
-    // wrong card. Nothing here can generate two structural changes at once
-    // anyway — you cannot drop a card and press its ✕ in the same frame — so
-    // the rest are dropped rather than applied to the wrong tile.
-    let mut structural = false;
-    for change in changes {
-        if structural {
-            break;
-        }
-        structural = matches!(change, Change::Remove(_) | Change::Add(_) | Change::Reset);
-        let tiles = &mut chrome.settings.newtab_tiles;
-        match change {
-            Change::Remove(index) => {
-                if index < tiles.len() {
-                    tiles.remove(index);
-                }
-            },
-            Change::Place { index, at } => {
-                if let Some(tile) = tiles.get_mut(index) {
-                    tile.at = at;
-                }
-            },
-            Change::Resize { index, span } => {
-                if let Some(tile) = tiles.get_mut(index) {
-                    tile.span = span;
-                }
-            },
-            Change::Add(card) => {
-                let taken: Vec<grid::Placement> =
-                    tiles.iter().map(|tile| tile.placement()).collect();
-                let span = card.default_span();
-                let at =
-                    grid::free_cell(&taken, span, COLUMNS, BOARD_ROWS).unwrap_or(Cell::new(0, 0));
-                tiles.push(Tile { card, at, span });
-            },
-            Change::Reset => *tiles = Tile::defaults(),
-        }
-    }
-    true
-}
-
-// ── Drawing one card ───────────────────────────────────────────────────────
-
-/// Draw a card's frame and its contents. Returns true when it wants another
-/// frame soon.
-/// Every widget inside a card hangs off this, and it is the card's place in
-/// the arrangement rather than its kind or its position on screen. Two cards
-/// of the same kind are allowed, and two cards side by side have rows at
-/// exactly the same height — either would collide on any other key, and egui
-/// answers a collision with a red banner across the page.
-fn card_id(index: usize) -> Id {
-    Id::unique("zervo_newtab_card").with(index)
-}
-
-#[expect(clippy::too_many_arguments)]
-fn draw_tile(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    tile: Tile,
-    rect: Rect,
-    ink: &Ink,
-    carried: bool,
-    native_material: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) -> bool {
-    let palette = chrome.palette;
-    let editing = chrome.browser.newtab_editing;
-    // A bare card has no material of its own — until it is being arranged,
-    // when it needs an edge to be grabbed by.
-    let framed = !tile.card.bare() || editing;
-    // Every card asks again, for itself. The page's answer is the right one
-    // only for a card that happens to sit where the page was sampled — a
-    // photograph is dark sky at the top and bright water at the bottom, and
-    // pale text set for the sky disappears into the water.
-    let card_ink = if native_material {
-        Ink::new(&palette, false)
-    } else {
-        ink.over(&palette, rect, framed)
-    };
-    let ink = &card_ink;
-    if native_material && editing {
-        area.painter().rect_stroke(
-            rect,
-            crate::overlay_glass::Role::Widget.radius(),
-            Stroke::new(1.0, palette.accent.gamma_multiply(0.55)),
-            StrokeKind::Inside,
-        );
-    } else if !native_material && framed && tile.card != Card::Search {
-        let material = if carried {
-            Glass::tier(Tier::Card)
-        } else if editing {
-            Glass::tier(Tier::Card)
-                .strength(0.8)
-                .border(palette.accent.gamma_multiply(0.55))
-        } else {
-            Glass::tier(Tier::Card)
-                .strength(if ink.photo { 0.95 } else { 0.85 })
-                // 5a's cards carry `0 0 0 1px accent(.18)`. It is the whole
-                // difference between a card sitting in a coloured room and a
-                // card cut out of it.
-                .ring(palette.accent_ring(0.18))
-        }
-        .opaque(palette.bg);
-        area.painter()
-            .extend(glass::shapes(rect, &palette, material));
-    }
-
-    let mut body = rect.shrink(12.0);
-    if tile.card.heading() {
-        let head = pos2(rect.min.x + 13.0, rect.min.y + 17.0);
-        icons::draw_icon(
-            area.painter(),
-            Rect::from_center_size(head + vec2(0.0, 0.0), vec2(12.0, 12.0)),
-            tile.card.icon(),
-            palette.text_muted,
-        );
-        area.painter().text(
-            head + vec2(11.0, 0.0),
-            Align2::LEFT_CENTER,
-            tile.card.label().to_uppercase(),
-            FontId::proportional(10.0),
-            palette.text_muted,
-        );
-        body = Rect::from_min_max(
-            pos2(rect.min.x + 12.0, rect.min.y + 30.0),
-            rect.max - vec2(12.0, 10.0),
-        );
-    }
-    if body.width() < 8.0 || body.height() < 8.0 {
-        return false;
-    }
-
-    // While a card is being arranged it is a handle, not a control: nothing
-    // inside it takes a click, so a drag never opens a link by accident.
-    let live = !editing && !carried;
-
-    match tile.card {
-        Card::Search => draw_search(
-            area,
-            chrome,
-            rect,
-            ink,
-            live,
-            id,
-            actions,
-            Search::Card {
-                native_widget: native_material,
-            },
-        ),
-        Card::Clock => return draw_clock(area, rect, ink),
-        Card::WorldClocks => return draw_world_clocks(area, chrome, body, ink),
-        Card::QuickLinks => draw_quick_links(area, chrome, body, live, id, actions),
-        Card::TopSites => draw_top_sites(area, chrome, body, live, id, actions),
-        Card::Recent => draw_recent(area, chrome, body, live, id, actions),
-        Card::Favourites => draw_favourites(area, chrome, body, live, id, actions),
-        Card::Downloads => draw_downloads(area, chrome, body, live, id, actions),
-        Card::NowPlaying => draw_now_playing(area, chrome, body, live, id, actions),
-        Card::Notes => draw_notes(area, chrome, body, live, id),
-        Card::Tasks => draw_tasks(area, chrome, body, live, id),
-        Card::Workspaces => draw_workspaces(area, chrome, body, live, id, actions),
-        Card::Mark => draw_mark(area, &palette, rect),
-    }
-    false
-}
-
-// ── The composed page ──────────────────────────────────────────────────────
-
-/// The hero field's own size, from 7a: a 600×60 capsule.
-const HERO_WIDTH: f32 = 600.0;
-const HERO_HEIGHT: f32 = 60.0;
-/// One card in the resume strip.
-const RESUME_HEIGHT: f32 = 66.0;
-/// A chip in the row under it, and the row's own gap.
-const CHIP_HEIGHT: f32 = 26.0;
-const CHIP_GAP: f32 = 8.0;
-
-/// Turn 7a's page: the clock, one field, and what you were doing.
-///
-/// The argument the study makes for it is short. A new tab is opened to go
-/// somewhere, and `Tile::defaults()` answers that with seven boxed panels —
-/// "a settings screen wearing a hat", and worse, seven opaque rectangles laid
-/// over a backdrop the reader chose and can now no longer see. So: the field,
-/// big and centred; the session actually abandoned, named and resumable; and
-/// the three sites genuinely used, as chips rather than a ranked table with
-/// visit counts nobody reads.
-///
-/// The board is not gone and nothing on it was deleted. It is
-/// [`NewTabHome::Board`], one press of the header's own chip away, with all
-/// thirteen cards still on their grid.
-fn draw_composed(
-    root: &mut Ui,
-    chrome: &mut ChromeContext,
-    canvas: Rect,
-    ink: &Ink,
-    actions: &mut Vec<UiAction>,
-) -> bool {
-    // Reserve enough room for the clock, greeting and search before showing
-    // recent sites. The shelf can leave this page only a few rows high.
-    const MIN_HERO_HEIGHT: f32 = 148.0;
-    let resume: Vec<Resume> = Resume::recent(chrome, 3);
-    let strip = resume_height(&resume);
-    let strip = if canvas.height() >= strip + MIN_HERO_HEIGHT {
-        strip
-    } else {
-        0.0
-    };
-    let hero = Rect::from_min_max(canvas.min, pos2(canvas.max.x, canvas.max.y - strip));
-    if hero.height() < MIN_HERO_HEIGHT {
-        draw_narrow(root, chrome, hero, ink, actions);
-        return false;
-    }
-
-    // ── The hero.
-    let hero_ink = ink.over(&chrome.palette, hero, false);
-    let centre = hero.center();
-    let field_height = (hero.height() * 0.28).clamp(44.0, HERO_HEIGHT);
-    let size = 42.0;
-    let top = centre.y - (size + 46.0 + field_height) / 2.0;
-    crate::ui::paint_application_icon(
-        root,
-        Rect::from_center_size(pos2(centre.x, top + size / 2.0), vec2(size, size)),
-        chrome.palette.dark,
-    );
-    hero_ink.write(
-        root.painter(),
-        pos2(centre.x, top + size + 12.0),
-        Align2::CENTER_CENTER,
-        tr("common-new-tab"),
-        FontId::proportional(15.5),
-        hero_ink.muted,
-    );
-    let field = Rect::from_center_size(
-        pos2(centre.x, top + size + 36.0 + field_height / 2.0),
-        vec2(HERO_WIDTH.min(canvas.width() - 48.0), field_height),
-    );
-    draw_search(
-        root,
-        chrome,
-        field,
-        ink,
-        true,
-        Id::unique("zervo_newtab_hero"),
-        actions,
-        Search::Hero,
-    );
-    // ── Pick up where you left off.
-    if strip <= 0.0 {
-        return false;
-    }
-    let strip_rect = Rect::from_min_max(pos2(canvas.min.x, canvas.max.y - strip), canvas.max);
-    let strip_ink = ink.over(&chrome.palette, strip_rect, false);
-    let label = strip_rect.min.y + 6.0;
-    strip_ink.write(
-        root.painter(),
-        pos2(strip_rect.min.x, label),
-        Align2::LEFT_TOP,
-        tr("newtab-pick-up-where-you-left-off"),
-        FontId::proportional(10.5),
-        strip_ink.muted,
-    );
-    let counted = chrome
-        .browser
-        .workspaces
-        .get(chrome.browser.active_workspace)
-        .map_or(0, |workspace| workspace.tabs.len());
-    strip_ink.write(
-        root.painter(),
-        pos2(strip_rect.max.x, label),
-        Align2::RIGHT_TOP,
-        crate::l10n::message("newtab-open-tab-count", [("count", counted.into())]),
-        FontId::proportional(10.5),
-        strip_ink.muted.gamma_multiply(0.7),
-    );
-
-    let cards = Rect::from_min_size(
-        pos2(strip_rect.min.x, label + 20.0),
-        vec2(strip_rect.width(), RESUME_HEIGHT),
-    );
-    // Three across when there are three, and a third of the row each when
-    // there are fewer — a single card stretched to the full width of the page
-    // is a banner, and the strip is meant to read as a shelf of things.
-    let third = (cards.width() - CHIP_GAP * 2.0) / 3.0;
-    let each = ((cards.width() - CHIP_GAP * (resume.len() as f32 - 1.0)) / resume.len() as f32)
-        .min(third.max(220.0));
-    for (index, item) in resume.iter().enumerate() {
-        let rect = Rect::from_min_size(
-            pos2(cards.min.x + index as f32 * (each + CHIP_GAP), cards.min.y),
-            vec2(each, RESUME_HEIGHT),
-        );
-        if draw_resume(root, chrome, rect, item, index).clicked() {
-            actions.push(UiAction::Navigate(item.url.clone()));
-        }
-    }
-
-    // ── The three sites, as chips.
-    let chips = Rect::from_min_size(
-        pos2(cards.min.x, cards.max.y + 12.0),
-        vec2(cards.width(), CHIP_HEIGHT),
-    );
-    let mut cursor = chips.min.x;
-    strip_ink.write(
-        root.painter(),
-        pos2(cursor, chips.center().y),
-        Align2::LEFT_CENTER,
-        tr("common-most-visited"),
-        FontId::proportional(11.5),
-        strip_ink.muted.gamma_multiply(0.8),
-    );
-    cursor += 78.0;
-    let sites: Vec<(String, String)> = chrome
-        .library
-        .top_sites(3)
-        .iter()
-        .map(|site| (site.host.clone(), site.url.clone()))
-        .collect();
-    for (host, url) in &sites {
-        let Some(response) = draw_site_chip(root, chrome, &mut cursor, chips, host, false) else {
-            break;
-        };
-        if response.clicked() {
-            actions.push(UiAction::Navigate(url.clone()));
-        }
-    }
-    // The last chip is the one that is not a site. Pinning is the same
-    // favourite the star in the sidebar keeps, so a site pinned here appears
-    // there and on the board's Favourites card — one list, three ways in.
-    if let Some(response) = draw_site_chip(
-        root,
-        chrome,
-        &mut cursor,
-        chips,
-        tr("newtab-pin-a-site"),
-        true,
-    ) {
-        let menu_id = Id::unique("zervo_newtab_pin_open");
-        if response.clicked() {
-            let open = root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true);
-            root.ctx().data_mut(|data| data.insert_temp(menu_id, !open));
-        }
-        if root.ctx().data(|data| data.get_temp::<bool>(menu_id)) == Some(true) {
-            let pinned: Vec<String> = chrome
-                .library
-                .favourites
-                .iter()
-                .map(|entry| entry.url.clone())
-                .collect();
-            let choices: Vec<(String, String)> = chrome
-                .library
-                .top_sites(8)
-                .iter()
-                .map(|site| (site.url.clone(), site.host.clone()))
-                .collect();
-            // The menu carries an index rather than the strings: its payload
-            // has to be `Copy`, and everything it names is right here.
-            let rows: Vec<crate::dashboard::Row<usize>> = choices
-                .iter()
-                .enumerate()
-                .map(|(index, (url, host))| {
-                    crate::dashboard::Row::Item(host.clone(), index, pinned.contains(url))
-                })
-                .collect();
-            match crate::dashboard::menu(
-                root,
-                &chrome.palette,
-                "zervo_newtab_pin_menu",
-                response.rect,
-                220.0,
-                &rows,
-            ) {
-                Some(index) => {
-                    root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
-                    if let Some((url, host)) = choices.get(index) {
-                        actions.push(UiAction::PinSite(url.clone(), host.clone()));
-                    }
-                },
-                None if root.input(|input| input.pointer.any_pressed())
-                    && !crate::dashboard::over_menu(root.ctx())
-                    && !response.clicked() =>
-                {
-                    root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
-                },
-                None => {},
-            }
-        }
-    }
-    false
-}
-
-/// One thing worth going back to.
-struct Resume {
-    title: String,
-    url: String,
-    host: String,
-    when: String,
-}
-
-impl Resume {
-    fn recent(chrome: &ChromeContext, limit: usize) -> Vec<Resume> {
-        let now = jiff::Timestamp::now().as_second();
-        chrome
-            .library
-            .recent(limit)
-            .iter()
-            .map(|visit| Resume {
-                title: crate::ui::display_name(&visit.title, &visit.url).to_owned(),
-                url: visit.url.clone(),
-                host: crate::ui::host_of(&visit.url),
-                when: ago(now.saturating_sub(visit.at)),
-            })
-            .collect()
-    }
-}
-
-/// "2 days ago" — the coarsest true unit, which is the only one worth reading
-/// on a card that exists to be recognised rather than audited.
-fn ago(seconds: i64) -> String {
-    let minutes = seconds.max(0) / 60;
-    match minutes {
-        0..=1 => tr("newtab-age-now").to_owned(),
-        2..=59 => crate::l10n::message("newtab-age-minutes", [("count", minutes.into())]),
-        60..=1439 => crate::l10n::message("newtab-age-hours", [("count", (minutes / 60).into())]),
-        1440..=2879 => tr("newtab-age-yesterday").to_owned(),
-        _ => crate::l10n::message("newtab-age-days", [("count", (minutes / 1440).into())]),
-    }
-}
-
 fn weekday(date: &jiff::ZonedDateTime, short: bool) -> &'static str {
     const LONG: [&str; 7] = [
         "clock-weekday-monday",
@@ -1953,1369 +932,6 @@ pub(crate) fn calendar_date(date: &jiff::ZonedDateTime, short: bool) -> String {
     )
 }
 
-/// How tall the bottom block is, or zero when there is nothing to put in it.
-fn resume_height(resume: &[Resume]) -> f32 {
-    if resume.is_empty() {
-        return 0.0;
-    }
-    // Label, cards, chips, and the padding under them.
-    26.0 + RESUME_HEIGHT + 12.0 + CHIP_HEIGHT + 14.0
-}
-
-fn draw_resume(
-    root: &mut Ui,
-    chrome: &ChromeContext,
-    rect: Rect,
-    item: &Resume,
-    index: usize,
-) -> egui::Response {
-    let palette = &chrome.palette;
-    let response = root.interact(
-        rect,
-        Id::unique("zervo_newtab_resume").with(index),
-        Sense::click(),
-    );
-    let hover = glass::ease_out(root.ctx().animate_bool_with_time(
-        response.id.with("hover"),
-        response.hovered(),
-        0.12,
-    ));
-    let widget = crate::overlay_glass::Surface::begin(root);
-    if widget.is_native() {
-        if hover > 0.0 {
-            root.painter().rect_filled(
-                rect,
-                crate::overlay_glass::Role::Widget.radius(),
-                palette.surface_hover.gamma_multiply(hover * 0.24),
-            );
-        }
-    } else {
-        glass::paint(
-            root.painter(),
-            rect,
-            palette,
-            Glass::tier(Tier::Panel)
-                .strength(0.82 + 0.18 * hover)
-                .ring(palette.accent_ring(0.14 + 0.14 * hover))
-                .opaque(palette.bg),
-        );
-    }
-    let ink = Ink::new(palette, false);
-    let ink = if widget.is_native() {
-        ink
-    } else {
-        ink.over(palette, rect, true)
-    };
-
-    // The badge: the host's initial on a small square, which is what a favicon
-    // would occupy if the page had one to hand.
-    let badge = Rect::from_min_size(
-        pos2(rect.min.x + 14.0, rect.center().y - 15.0),
-        vec2(30.0, 30.0),
-    );
-    root.painter().rect_filled(
-        badge,
-        palette.corner(Tier::Row),
-        theme::mix(palette.surface, palette.accent, 0.25),
-    );
-    root.painter().text(
-        badge.center(),
-        Align2::CENTER_CENTER,
-        crate::ui::initial(&item.title, &item.url),
-        FontId::proportional(12.0),
-        ink.text,
-    );
-
-    let text_left = badge.max.x + 11.0;
-    let width = rect.max.x - text_left - 12.0;
-    ink.write(
-        root.painter(),
-        pos2(text_left, rect.center().y - 9.0),
-        Align2::LEFT_CENTER,
-        fit(
-            root.painter(),
-            &item.title,
-            &FontId::proportional(12.5),
-            width,
-        ),
-        FontId::proportional(12.5),
-        ink.text,
-    );
-    ink.write(
-        root.painter(),
-        pos2(text_left, rect.center().y + 10.0),
-        Align2::LEFT_CENTER,
-        fit(
-            root.painter(),
-            &format!("{} · {}", item.host, item.when),
-            &FontId::proportional(11.0),
-            width,
-        ),
-        FontId::proportional(11.0),
-        ink.muted,
-    );
-    widget.finish(root, rect, crate::overlay_glass::Role::Widget);
-    response.on_hover_cursor(CursorIcon::PointingHand)
-}
-
-/// One chip in the row under the resume cards. Returns `None` once the row is
-/// full, so the caller stops rather than drawing off the end of the page.
-fn draw_site_chip(
-    root: &mut Ui,
-    chrome: &ChromeContext,
-    cursor: &mut f32,
-    row: Rect,
-    label: &str,
-    quiet: bool,
-) -> Option<egui::Response> {
-    let palette = &chrome.palette;
-    let font = FontId::proportional(11.5);
-    let text_width = root
-        .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
-        .rect
-        .width();
-    let width = text_width + 40.0;
-    if *cursor + width > row.max.x {
-        return None;
-    }
-    let rect = Rect::from_min_size(pos2(*cursor, row.min.y), vec2(width, CHIP_HEIGHT));
-    *cursor += width + CHIP_GAP;
-
-    let response = root.interact(
-        rect,
-        Id::unique("zervo_newtab_chip").with(label),
-        Sense::click(),
-    );
-    let tint = crate::widgets::button_ink(root, &response, rect, palette, false);
-    if quiet {
-        icons::draw_icon(
-            root.painter(),
-            Rect::from_center_size(pos2(rect.min.x + 13.0, rect.center().y), vec2(11.0, 11.0)),
-            Icon::Plus,
-            tint,
-        );
-    } else {
-        // A 14pt square standing in for the favicon, with the host's letter in
-        // it — the same stand-in the sidebar's tab rows use.
-        let mark =
-            Rect::from_center_size(pos2(rect.min.x + 14.0, rect.center().y), vec2(14.0, 14.0));
-        root.painter().rect_filled(
-            mark,
-            palette.corner(Tier::Hairline),
-            theme::mix(palette.surface, palette.accent, 0.3),
-        );
-        root.painter().text(
-            mark.center(),
-            Align2::CENTER_CENTER,
-            crate::ui::initial(label, label),
-            FontId::proportional(8.0),
-            palette.text,
-        );
-    }
-    root.painter().text(
-        pos2(rect.min.x + 25.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        label,
-        font,
-        tint,
-    );
-    Some(response.on_hover_cursor(CursorIcon::PointingHand))
-}
-
-// ── The narrow page ────────────────────────────────────────────────────────
-
-/// What is left when the window is too small for a grid: the two things
-/// somebody opening a new tab in a narrow window actually wants.
-fn draw_narrow(
-    root: &mut Ui,
-    chrome: &mut ChromeContext,
-    content_rect: Rect,
-    ink: &Ink,
-    actions: &mut Vec<UiAction>,
-) {
-    if content_rect.height() < 48.0 || content_rect.width() < 140.0 {
-        return;
-    }
-    let centre = content_rect.center();
-    let show_clock = content_rect.height() >= 112.0;
-    if show_clock {
-        let now = jiff::ZonedDateTime::now();
-        ink.write(
-            root.painter(),
-            pos2(centre.x, centre.y - 31.0),
-            Align2::CENTER_CENTER,
-            now.strftime("%H:%M").to_string(),
-            FontId::proportional(36.0),
-            ink.text,
-        );
-        root.ctx()
-            .request_repaint_after(std::time::Duration::from_secs(20));
-    }
-    let pill = Rect::from_center_size(
-        pos2(centre.x, centre.y + if show_clock { 27.0 } else { 0.0 }),
-        vec2(content_rect.width() - 24.0, 44.0),
-    );
-    draw_search(
-        root,
-        chrome,
-        pill,
-        ink,
-        true,
-        Id::unique("zervo_newtab_narrow"),
-        actions,
-        Search::Card {
-            native_widget: false,
-        },
-    );
-}
-
-// ── Cards ──────────────────────────────────────────────────────────────────
-
-/// How the search field is dressed.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Search {
-    /// A card on the board: the pill tier's corner, and the card's own height
-    /// held between a readable minimum and maximum.
-    Card { native_widget: bool },
-    /// 7a's hero: a capsule sixty points tall, ringed and lit, with the
-    /// keyboard shortcut on the end. "The field, big and centred" is most of
-    /// what that page is.
-    Hero,
-}
-
-#[expect(clippy::too_many_arguments)]
-fn draw_search(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    rect: Rect,
-    ink: &Ink,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-    look: Search,
-) {
-    let palette = chrome.palette;
-    let native_widget = matches!(
-        look,
-        Search::Card {
-            native_widget: true
-        }
-    );
-    let surface = (!native_widget).then(|| crate::overlay_glass::Surface::begin(area));
-    let native_material = native_widget
-        || surface
-            .as_ref()
-            .is_some_and(crate::overlay_glass::Surface::is_native);
-    if look == Search::Hero {
-        let response = area.interact(rect, id, Sense::click());
-        let fill = if response.hovered() {
-            palette.surface_hover
-        } else {
-            palette.surface
-        };
-        if !native_material || response.hovered() {
-            area.painter().rect_filled(
-                rect,
-                12,
-                if native_material {
-                    fill.gamma_multiply(0.35)
-                } else {
-                    fill
-                },
-            );
-        }
-        if !native_material {
-            area.painter().rect_stroke(
-                rect,
-                12,
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
-        }
-        if response.has_focus() {
-            icons::paint_focus(area, &palette, rect, Tier::Control);
-        }
-        let label = tr("chrome-search-or-enter-an-address");
-        icons::draw_icon(
-            area.painter(),
-            Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), vec2(17.0, 17.0)),
-            Icon::Search,
-            palette.text_muted,
-        );
-        let key = if cfg!(target_os = "macos") {
-            "⌘L"
-        } else {
-            "Ctrl+L"
-        };
-        if rect.width() >= 260.0 {
-            area.painter().text(
-                pos2(rect.right() - 16.0, rect.center().y),
-                Align2::RIGHT_CENTER,
-                key,
-                FontId::proportional(12.0),
-                palette.text_muted,
-            );
-        }
-        let mut text = egui::text::LayoutJob::simple_singleline(
-            label.to_owned(),
-            FontId::proportional(15.0),
-            palette.text,
-        );
-        text.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 106.0).max(48.0));
-        let text = area.painter().layout_job(text);
-        area.painter().galley(
-            pos2(rect.left() + 46.0, rect.center().y - text.size().y / 2.0),
-            text,
-            palette.text,
-        );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, live, label));
-        if live
-            && response
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-        {
-            actions.push(UiAction::OpenCommand(crate::ui::CommandMode::CurrentTab));
-        }
-        if let Some(surface) = surface {
-            surface.finish(area, rect, crate::overlay_glass::Role::Field);
-        }
-        return;
-    }
-    let height = rect.height().clamp(38.0, 52.0);
-    let pill = Rect::from_center_size(rect.center(), vec2(rect.width(), height));
-
-    // Focus is read from what last frame recorded. A frame's lag on a
-    // two-tenths-of-a-second bloom is not something anyone can see, and the
-    // alternative is painting the pill after the field that sits inside it.
-    let focus_id = id.with("focused");
-    let focused = area.ctx().data(|data| data.get_temp::<bool>(focus_id)) == Some(true);
-    let focus = glass::ease_out(
-        area.ctx()
-            .animate_bool_with_time(id.with("focus"), focused, 0.22),
-    );
-
-    // What it is painted over when there is nothing behind it worth showing.
-    // Over a photograph there is, and the material frosts against that instead
-    // — this is what the pill falls back to on a plain or generated backdrop.
-    let backing = palette.bg;
-    if !native_material {
-        glass::paint(
-            area.painter(),
-            pill,
-            &palette,
-            Glass::tier(Tier::Pill)
-                .strength(1.0)
-                // `0 0 0 1px accent(.24)` on 5a's search field and .28 on 7a's
-                // hero, and lit before it is focused — focus deepens the ring
-                // rather than introducing it.
-                .ring(palette.accent_ring(0.24 + 0.4 * focus))
-                .glow((0.5 + 0.5 * focus).min(1.0))
-                // No `fades()`: it is a text field, not a card, and a text field
-                // nobody can find is not one. The history search field is solid
-                // for exactly this reason.
-                .opaque(backing),
-        );
-    }
-    let glyph = 16.0;
-    let lead = 20.0;
-    icons::draw_icon(
-        area.painter(),
-        Rect::from_center_size(pos2(pill.min.x + lead, pill.center().y), vec2(glyph, glyph)),
-        Icon::Search,
-        theme::mix(palette.text_muted, palette.accent, focus),
-    );
-
-    let hint = crate::l10n::message(
-        "newtab-search-compact",
-        [("engine", chrome.settings.search_engine.label().into())],
-    );
-    let tail = 14.0;
-    let font = 14.5;
-    let field = Rect::from_min_max(
-        pos2(pill.min.x + lead + glyph * 0.5 + 12.0, pill.min.y),
-        pos2(pill.max.x - tail, pill.max.y),
-    );
-    if !live {
-        // Inert while the page is being arranged: a text field that takes
-        // focus mid-drag steals the keyboard from whatever was doing.
-        let shown = if chrome.browser.newtab_query.trim().is_empty() {
-            hint
-        } else {
-            chrome.browser.newtab_query.clone()
-        };
-        area.painter().text(
-            pos2(field.min.x, field.center().y),
-            Align2::LEFT_CENTER,
-            fit(
-                area.painter(),
-                &shown,
-                &FontId::proportional(font),
-                field.width(),
-            ),
-            FontId::proportional(font),
-            palette.text_muted,
-        );
-        if let Some(surface) = surface {
-            surface.finish(area, pill, crate::overlay_glass::Role::Field);
-        }
-        return;
-    }
-
-    // The field's own id comes from the card's, not from where it happens to
-    // sit: two search cards on one page would otherwise be one text field.
-    let mut inner = area.new_child(
-        egui::UiBuilder::new()
-            .max_rect(field)
-            .id_salt(id)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    // The hint is painted here rather than handed to `TextEdit::hint_text`.
-    //
-    // egui takes a `RichText` for the hint and then throws its colour away —
-    // "Since we can't set a fallback color per atom, we have to override it
-    // here. Sucks, since it means users won't be able to override it" — and
-    // what it substitutes came out, on the hero's frosted capsule over a lit
-    // page, within five values of the pill's own colour. On a page whose whole
-    // argument is one big field, an unreadable hint is the field saying
-    // nothing at all.
-    //
-    // Painted directly it also gets what a hint on glass needs and egui could
-    // not have known to give it: the ink `Palette::over` picks for whatever is
-    // behind this particular pill.
-    if chrome.browser.newtab_query.is_empty() {
-        let muted = if native_material {
-            palette.text_muted
-        } else {
-            ink.over(&palette, pill, true).muted
-        };
-        area.painter().text(
-            pos2(field.min.x, field.center().y),
-            Align2::LEFT_CENTER,
-            fit(
-                area.painter(),
-                &hint,
-                &FontId::proportional(font),
-                field.width(),
-            ),
-            FontId::proportional(font),
-            muted,
-        );
-    }
-    let editor = TextEdit::singleline(&mut chrome.browser.newtab_query)
-        .frame(Frame::NONE)
-        .font(FontId::proportional(font))
-        .text_color(palette.text)
-        .align(egui::Align2::LEFT_CENTER)
-        .desired_width(field.width());
-    let response = inner.add(editor);
-    let has_focus = response.has_focus();
-    area.ctx()
-        .data_mut(|data| data.insert_temp(focus_id, has_focus));
-    if response.lost_focus()
-        && inner.input(|input| input.key_pressed(Key::Enter))
-        && !chrome.browser.newtab_query.trim().is_empty()
-    {
-        let target =
-            crate::ui::normalize_url(&chrome.browser.newtab_query, chrome.settings.search_engine);
-        chrome.browser.newtab_query.clear();
-        actions.push(UiAction::Navigate(target));
-    }
-    if has_focus && native_material {
-        icons::paint_focus(area, &palette, pill, Tier::Control);
-    }
-    if let Some(surface) = surface {
-        surface.finish(area, pill, crate::overlay_glass::Role::Field);
-    }
-}
-
-fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
-    let now = jiff::ZonedDateTime::now();
-    // The time scales with the card: at one row it is a line of text, at three
-    // it is the thing you look at first.
-    let size = (rect.height() * 0.42).clamp(22.0, 62.0);
-    ink.write(
-        area.painter(),
-        pos2(rect.center().x, rect.center().y - size * 0.22),
-        Align2::CENTER_CENTER,
-        now.strftime("%H:%M").to_string(),
-        FontId::proportional(size),
-        ink.text,
-    );
-    if rect.height() > 56.0 {
-        ink.write(
-            area.painter(),
-            pos2(rect.center().x, rect.center().y + size * 0.48),
-            Align2::CENTER_CENTER,
-            calendar_date(&now, false),
-            FontId::proportional(12.0),
-            ink.muted,
-        );
-    }
-    area.ctx()
-        .request_repaint_after(std::time::Duration::from_secs(20));
-    false
-}
-
-fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &Ink) -> bool {
-    let palette = chrome.palette;
-    let zones = &chrome.settings.newtab_world_clocks;
-    if zones.is_empty() {
-        empty(
-            area,
-            &palette,
-            body,
-            tr("newtab-add-a-city-in-settings-layout"),
-        );
-        return false;
-    }
-    let now = jiff::Timestamp::now();
-    // As many across as fit at a readable width, the rest wrap onto a row of
-    // their own.
-    let per_row = ((body.width() / 96.0).floor() as usize).clamp(1, zones.len());
-    let rows = zones.len().div_ceil(per_row);
-    let cell = vec2(body.width() / per_row as f32, body.height() / rows as f32);
-    for (index, zone) in zones.iter().enumerate() {
-        let slot = Rect::from_min_size(
-            pos2(
-                body.min.x + (index % per_row) as f32 * cell.x,
-                body.min.y + (index / per_row) as f32 * cell.y,
-            ),
-            cell,
-        );
-        let Ok(tz) = jiff::tz::TimeZone::get(&zone.name) else {
-            area.painter().text(
-                slot.center(),
-                Align2::CENTER_CENTER,
-                "—",
-                FontId::proportional(13.0),
-                palette.text_muted,
-            );
-            continue;
-        };
-        let there = now.to_zoned_datetime(tz);
-        let clock = (slot.height() * 0.34).clamp(16.0, 26.0);
-        area.painter().text(
-            pos2(slot.min.x + 2.0, slot.min.y + 9.0),
-            Align2::LEFT_TOP,
-            fit(
-                area.painter(),
-                zone.display_label(),
-                &FontId::proportional(11.0),
-                cell.x - 8.0,
-            ),
-            FontId::proportional(11.0),
-            palette.text_muted,
-        );
-        area.painter().text(
-            pos2(slot.min.x + 2.0, slot.min.y + 24.0),
-            Align2::LEFT_TOP,
-            there.strftime("%H:%M").to_string(),
-            FontId::proportional(clock),
-            ink.text,
-        );
-        if slot.height() > 58.0 {
-            area.painter().text(
-                pos2(slot.min.x + 2.0, slot.min.y + 26.0 + clock),
-                Align2::LEFT_TOP,
-                crate::l10n::message(
-                    "clock-zone-day",
-                    [
-                        ("zone", there.strftime("%Z").to_string().into()),
-                        ("weekday", weekday(&there, true).into()),
-                    ],
-                ),
-                FontId::proportional(10.0),
-                palette.text_muted,
-            );
-        }
-    }
-    area.ctx()
-        .request_repaint_after(std::time::Duration::from_secs(20));
-    false
-}
-
-fn draw_quick_links(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    body: Rect,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    struct Link {
-        tab_id: TabId,
-        workspace: usize,
-        title: String,
-    }
-    let links: Vec<Link> = chrome
-        .browser
-        .workspaces
-        .iter()
-        .enumerate()
-        .flat_map(|(workspace, space)| {
-            space
-                .tabs
-                .iter()
-                .filter(|tab| tab.pinned)
-                .map(move |tab| Link {
-                    tab_id: tab.id,
-                    workspace,
-                    title: crate::ui::display_name(&tab.title, &tab.url).to_owned(),
-                })
-        })
-        .take(24)
-        .collect();
-    if links.is_empty() {
-        empty(area, &palette, body, tr("newtab-pin-a-tab-and-it-turns-up"));
-        return;
-    }
-
-    let tile = vec2(74.0, 70.0);
-    let per_row = ((body.width() / tile.x).floor() as usize).max(1);
-    for (index, link) in links.iter().enumerate() {
-        let column = index % per_row;
-        let row = index / per_row;
-        let slot = Rect::from_min_size(
-            pos2(
-                body.min.x + column as f32 * tile.x,
-                body.min.y + row as f32 * tile.y,
-            ),
-            tile,
-        )
-        .shrink(3.0);
-        if slot.max.y > body.max.y + 6.0 {
-            break; // The card is full; the rest are in the sidebar.
-        }
-        let response = area.interact(
-            slot,
-            id.with(("link", link.tab_id)),
-            if live { Sense::click() } else { Sense::hover() },
-        );
-        let hover = glass::ease_out(area.ctx().animate_bool_with_time(
-            response.id.with("hover"),
-            live && response.hovered(),
-            0.12,
-        ));
-        if hover > 0.0 {
-            area.painter().rect_filled(
-                slot,
-                CornerRadius::same(palette.radius(Tier::Card)),
-                palette.surface_hover.gamma_multiply(hover),
-            );
-        }
-        let icon = pos2(slot.center().x, slot.min.y + 22.0);
-        match chrome.favicons.get(&link.tab_id) {
-            Some(texture) => {
-                area.painter().image(
-                    texture.id(),
-                    Rect::from_center_size(icon, vec2(22.0, 22.0)),
-                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                    Color32::WHITE,
-                );
-            },
-            None => icons::draw_icon(
-                area.painter(),
-                Rect::from_center_size(icon, vec2(19.0, 19.0)),
-                Icon::Globe,
-                palette.text_muted,
-            ),
-        }
-        area.painter().text(
-            pos2(slot.center().x, slot.max.y - 12.0),
-            Align2::CENTER_CENTER,
-            fit(
-                area.painter(),
-                &link.title,
-                &FontId::proportional(10.5),
-                slot.width() - 4.0,
-            ),
-            FontId::proportional(10.5),
-            theme::mix(palette.text_muted, palette.text, hover),
-        );
-        if live
-            && response
-                .on_hover_cursor(CursorIcon::PointingHand)
-                .on_hover_text(&link.title)
-                .clicked()
-        {
-            actions.push(UiAction::SelectWorkspace(link.workspace));
-            actions.push(UiAction::SelectTab(link.tab_id));
-        }
-    }
-}
-
-fn draw_top_sites(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    body: Rect,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    let rows = ((body.height() / 30.0).floor() as usize).max(1);
-    let sites: Vec<(String, String, usize)> = chrome
-        .library
-        .top_sites(rows)
-        .iter()
-        .map(|site| (site.host.clone(), site.url.clone(), site.visits))
-        .collect();
-    if sites.is_empty() {
-        empty(
-            area,
-            &palette,
-            body,
-            tr("newtab-nowhere-yet-this-fills-as-you-browse"),
-        );
-        return;
-    }
-    for (index, (host, url, visits)) in sites.iter().enumerate() {
-        let row = Rect::from_min_size(
-            pos2(body.min.x, body.min.y + index as f32 * 30.0),
-            vec2(body.width(), 28.0),
-        );
-        if row.max.y > body.max.y + 4.0 {
-            break;
-        }
-        let response = list_row(area, &palette, row, id, index, host, host, live);
-        area.painter().text(
-            pos2(row.max.x - 4.0, row.center().y),
-            Align2::RIGHT_CENTER,
-            visits.to_string(),
-            FontId::proportional(11.0),
-            palette.text_muted,
-        );
-        if live && response.clicked() {
-            actions.push(UiAction::Navigate(url.clone()));
-        }
-    }
-}
-
-fn draw_recent(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    body: Rect,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    let rows = ((body.height() / 30.0).floor() as usize).max(1);
-    let visits: Vec<(String, String)> = chrome
-        .library
-        .recent(rows)
-        .iter()
-        .map(|visit| {
-            (
-                crate::ui::display_name(&visit.title, &visit.url).to_owned(),
-                visit.url.clone(),
-            )
-        })
-        .collect();
-    if visits.is_empty() {
-        empty(area, &palette, body, tr("newtab-nothing-visited-yet"));
-        return;
-    }
-    for (index, (title, url)) in visits.iter().enumerate() {
-        let row = Rect::from_min_size(
-            pos2(body.min.x, body.min.y + index as f32 * 30.0),
-            vec2(body.width(), 28.0),
-        );
-        if row.max.y > body.max.y + 4.0 {
-            break;
-        }
-        let response = list_row(area, &palette, row, id, index, title, url, live);
-        if live && response.clicked() {
-            actions.push(UiAction::Navigate(url.clone()));
-        }
-    }
-}
-
-fn draw_favourites(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    body: Rect,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    let rows = ((body.height() / 30.0).floor() as usize).max(1);
-    let saved: Vec<(String, String)> = chrome
-        .library
-        .favourites
-        .iter()
-        .rev()
-        .take(rows)
-        .map(|entry| (entry.title.clone(), entry.url.clone()))
-        .collect();
-    if saved.is_empty() {
-        empty(
-            area,
-            &palette,
-            body,
-            tr("newtab-nothing-saved-yet-the-star-adds-a"),
-        );
-        return;
-    }
-    for (index, (title, url)) in saved.iter().enumerate() {
-        let row = Rect::from_min_size(
-            pos2(body.min.x, body.min.y + index as f32 * 30.0),
-            vec2(body.width(), 28.0),
-        );
-        if row.max.y > body.max.y + 4.0 {
-            break;
-        }
-        let response = list_row(area, &palette, row, id, index, title, url, live);
-        if live && response.clicked() {
-            actions.push(UiAction::Navigate(url.clone()));
-        }
-    }
-}
-
-fn draw_downloads(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    body: Rect,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    let rows = ((body.height() / 34.0).floor() as usize).max(1);
-    let items: Vec<(u64, String, Option<f32>, bool)> = chrome
-        .downloads
-        .items
-        .iter()
-        .rev()
-        .take(rows)
-        .map(|item| {
-            (
-                item.id,
-                item.filename.clone(),
-                item.fraction(),
-                item.state == crate::downloads::DownloadState::Running,
-            )
-        })
-        .collect();
-    if items.is_empty() {
-        empty(area, &palette, body, tr("common-no-downloads"));
-        return;
-    }
-    for (index, (download_id, name, fraction, running)) in items.iter().enumerate() {
-        let row = Rect::from_min_size(
-            pos2(body.min.x, body.min.y + index as f32 * 34.0),
-            vec2(body.width(), 32.0),
-        );
-        if row.max.y > body.max.y + 4.0 {
-            break;
-        }
-        let response = area.interact(
-            row,
-            id.with(("download", download_id)),
-            if live { Sense::click() } else { Sense::hover() },
-        );
-        let hover = glass::ease_out(area.ctx().animate_bool_with_time(
-            response.id.with("hover"),
-            live && response.hovered(),
-            0.12,
-        ));
-        if hover > 0.0 {
-            area.painter().rect_filled(
-                row,
-                CornerRadius::same(palette.radius(Tier::Row)),
-                palette.surface_hover.gamma_multiply(hover),
-            );
-        }
-        icons::draw_icon(
-            area.painter(),
-            Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(14.0, 14.0)),
-            if *running {
-                Icon::Download
-            } else {
-                Icon::Check
-            },
-            if *running {
-                palette.accent
-            } else {
-                palette.text_muted
-            },
-        );
-        area.painter().text(
-            pos2(row.min.x + 28.0, row.min.y + 11.0),
-            Align2::LEFT_CENTER,
-            fit(
-                area.painter(),
-                name,
-                &FontId::proportional(12.5),
-                row.width() - 36.0,
-            ),
-            FontId::proportional(12.5),
-            theme::mix(palette.text_muted, palette.text, hover.max(0.4)),
-        );
-        if let Some(fraction) = fraction
-            && *running
-        {
-            let track = Rect::from_min_size(
-                pos2(row.min.x + 28.0, row.max.y - 8.0),
-                vec2(row.width() - 36.0, 3.0),
-            );
-            area.painter().rect_filled(
-                track,
-                CornerRadius::same(palette.radius(Tier::Hairline)),
-                palette.border,
-            );
-            area.painter().rect_filled(
-                Rect::from_min_size(track.min, vec2(track.width() * fraction, track.height())),
-                CornerRadius::same(palette.radius(Tier::Hairline)),
-                palette.accent,
-            );
-        }
-        if live && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-            actions.push(UiAction::OpenDownloads);
-        }
-    }
-}
-
-fn draw_now_playing(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    body: Rect,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    let media = chrome.media;
-    if media.is_idle() {
-        empty(area, &palette, body, tr("newtab-nothing-playing"));
-        return;
-    }
-    let controls = 108.0_f32.min(body.width() * 0.5);
-    let text_width = (body.width() - controls - 8.0).max(20.0);
-    area.painter().text(
-        pos2(body.min.x, body.min.y + 9.0),
-        Align2::LEFT_CENTER,
-        fit(
-            area.painter(),
-            &media.title,
-            &FontId::proportional(13.0),
-            text_width,
-        ),
-        FontId::proportional(13.0),
-        palette.text,
-    );
-    area.painter().text(
-        pos2(body.min.x, body.min.y + 25.0),
-        Align2::LEFT_CENTER,
-        fit(
-            area.painter(),
-            &media.artist,
-            &FontId::proportional(11.5),
-            text_width,
-        ),
-        FontId::proportional(11.5),
-        palette.text_muted,
-    );
-    if media.duration > 0.0 {
-        let track =
-            Rect::from_min_size(pos2(body.min.x, body.max.y - 5.0), vec2(body.width(), 3.0));
-        area.painter().rect_filled(
-            track,
-            CornerRadius::same(palette.radius(Tier::Hairline)),
-            palette.border,
-        );
-        let played = (media.position / media.duration).clamp(0.0, 1.0) as f32;
-        area.painter().rect_filled(
-            Rect::from_min_size(track.min, vec2(track.width() * played, track.height())),
-            CornerRadius::same(palette.radius(Tier::Hairline)),
-            palette.accent,
-        );
-    }
-
-    use servo::MediaSessionActionType;
-    let buttons = [
-        (Icon::SkipBack, MediaSessionActionType::PreviousTrack),
-        (
-            if media.playing {
-                Icon::Pause
-            } else {
-                Icon::Play
-            },
-            if media.playing {
-                MediaSessionActionType::Pause
-            } else {
-                MediaSessionActionType::Play
-            },
-        ),
-        (Icon::SkipForward, MediaSessionActionType::NextTrack),
-    ];
-    for (index, (icon, action)) in buttons.into_iter().enumerate() {
-        let centre = pos2(
-            body.max.x - controls + controls * (0.18 + 0.32 * index as f32),
-            body.min.y + 17.0,
-        );
-        let hit = Rect::from_center_size(centre, vec2(28.0, 28.0));
-        let response = area.interact(
-            hit,
-            id.with(("transport", index)),
-            if live { Sense::click() } else { Sense::hover() },
-        );
-        icons::paint_icon_button(area, &response, icon, 15.0, &palette);
-        if live && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-            actions.push(UiAction::MediaAction(action));
-        }
-    }
-}
-
-fn draw_notes(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool, id: Id) {
-    let palette = chrome.palette;
-    if !live {
-        let note = chrome.library.note_mut().clone();
-        let shown = if note.trim().is_empty() {
-            tr("newtab-a-place-to-put-something-down").to_owned()
-        } else {
-            note
-        };
-        area.painter().text(
-            body.min + vec2(0.0, 2.0),
-            Align2::LEFT_TOP,
-            crate::ui::ellipsize(&shown, 200),
-            FontId::proportional(12.5),
-            palette.text_muted,
-        );
-        return;
-    }
-    let mut inner = area.new_child(egui::UiBuilder::new().max_rect(body).id_salt(id));
-    let editor = TextEdit::multiline(chrome.library.note_mut())
-        .frame(Frame::NONE)
-        .font(FontId::proportional(12.5))
-        .text_color(palette.text)
-        .hint_text(
-            RichText::new(tr("newtab-a-place-to-put-something-down")).color(palette.text_muted),
-        )
-        .desired_width(body.width())
-        .desired_rows(((body.height() / 16.0) as usize).max(1));
-    if inner.add(editor).changed() {
-        chrome.library.changed();
-    }
-}
-
-fn draw_tasks(area: &mut Ui, chrome: &mut ChromeContext, body: Rect, live: bool, id: Id) {
-    let palette = chrome.palette;
-    const ROW: f32 = 26.0;
-    let field = 28.0;
-    let list = Rect::from_min_max(
-        body.min,
-        pos2(body.max.x, (body.max.y - field).max(body.min.y)),
-    );
-    let capacity = ((list.height() / ROW).floor() as usize).max(1);
-
-    let tasks: Vec<(String, bool)> = chrome
-        .library
-        .tasks
-        .iter()
-        .take(capacity)
-        .map(|task| (task.text.clone(), task.done))
-        .collect();
-    if tasks.is_empty() {
-        area.painter().text(
-            pos2(list.min.x, list.min.y + 10.0),
-            Align2::LEFT_CENTER,
-            tr("newtab-nothing-to-do-enviable"),
-            FontId::proportional(11.5),
-            palette.text_muted,
-        );
-    }
-
-    let mut toggled = None;
-    let mut removed = None;
-    for (index, (text, done)) in tasks.iter().enumerate() {
-        let row = Rect::from_min_size(
-            pos2(list.min.x, list.min.y + index as f32 * ROW),
-            vec2(list.width(), ROW - 2.0),
-        );
-        let response = area.interact(
-            row,
-            id.with(("task", index)),
-            if live { Sense::click() } else { Sense::hover() },
-        );
-        let hover = glass::ease_out(area.ctx().animate_bool_with_time(
-            response.id.with("hover"),
-            live && response.hovered(),
-            0.12,
-        ));
-        if hover > 0.0 {
-            area.painter().rect_filled(
-                row,
-                CornerRadius::same(palette.radius(Tier::Control)),
-                palette.surface_hover.gamma_multiply(hover),
-            );
-        }
-        let box_rect =
-            Rect::from_center_size(pos2(row.min.x + 9.0, row.center().y), vec2(14.0, 14.0));
-        if *done {
-            area.painter().rect_filled(
-                box_rect,
-                CornerRadius::same(palette.radius(Tier::Control)),
-                palette.accent,
-            );
-            icons::draw_icon(
-                area.painter(),
-                box_rect.shrink(2.5),
-                Icon::Check,
-                Color32::WHITE,
-            );
-        } else {
-            area.painter().rect_stroke(
-                box_rect,
-                CornerRadius::same(palette.radius(Tier::Control)),
-                Stroke::new(1.0_f32, palette.border),
-                StrokeKind::Inside,
-            );
-        }
-        area.painter().text(
-            pos2(row.min.x + 24.0, row.center().y),
-            Align2::LEFT_CENTER,
-            fit(
-                area.painter(),
-                text,
-                &FontId::proportional(12.5),
-                row.width() - 46.0,
-            ),
-            FontId::proportional(12.5),
-            if *done {
-                palette.text_muted
-            } else {
-                palette.text
-            },
-        );
-        // A done line still says so; a struck-through one says it and stops
-        // asking to be read.
-        if *done {
-            let width = fit(
-                area.painter(),
-                text,
-                &FontId::proportional(12.5),
-                row.width() - 46.0,
-            );
-            let extent = area
-                .painter()
-                .layout_no_wrap(width, FontId::proportional(12.5), Color32::WHITE)
-                .rect
-                .width();
-            area.painter().line_segment(
-                [
-                    pos2(row.min.x + 24.0, row.center().y),
-                    pos2(row.min.x + 24.0 + extent, row.center().y),
-                ],
-                Stroke::new(1.0_f32, palette.text_muted.gamma_multiply(0.8)),
-            );
-        }
-        if live && hover > 0.0 {
-            let bin =
-                Rect::from_center_size(pos2(row.max.x - 10.0, row.center().y), vec2(16.0, 16.0));
-            icons::draw_icon(
-                area.painter(),
-                bin.shrink(3.0),
-                Icon::Close,
-                palette.text_muted,
-            );
-            if area
-                .interact(bin, id.with(("task_remove", index)), Sense::click())
-                .on_hover_cursor(CursorIcon::PointingHand)
-                .clicked()
-            {
-                removed = Some(index);
-            }
-        }
-        if live && response.on_hover_cursor(CursorIcon::PointingHand).clicked() && removed.is_none()
-        {
-            toggled = Some(index);
-        }
-    }
-
-    if live {
-        let entry = Rect::from_min_size(
-            pos2(body.min.x, body.max.y - field + 4.0),
-            vec2(body.width(), field - 6.0),
-        );
-        let mut inner = area.new_child(
-            egui::UiBuilder::new()
-                .max_rect(entry)
-                .id_salt(id)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        let editor = TextEdit::singleline(&mut chrome.browser.newtab_task_draft)
-            .frame(Frame::NONE)
-            .font(FontId::proportional(12.5))
-            .text_color(palette.text)
-            .align(egui::Align2::LEFT_CENTER)
-            .hint_text(RichText::new(tr("newtab-add-something")).color(palette.text_muted))
-            .desired_width(entry.width());
-        let response = inner.add(editor);
-        area.painter().line_segment(
-            [
-                pos2(entry.min.x, entry.min.y - 2.0),
-                pos2(entry.max.x, entry.min.y - 2.0),
-            ],
-            Stroke::new(1.0_f32, palette.border),
-        );
-        if response.lost_focus() && inner.input(|input| input.key_pressed(Key::Enter)) {
-            let draft = std::mem::take(&mut chrome.browser.newtab_task_draft);
-            chrome.library.add_task(&draft);
-            response.request_focus();
-        }
-    }
-
-    if let Some(index) = removed {
-        chrome.library.remove_task(index);
-    } else if let Some(index) = toggled {
-        chrome.library.toggle_task(index);
-    }
-}
-
-fn draw_workspaces(
-    area: &mut Ui,
-    chrome: &mut ChromeContext,
-    body: Rect,
-    live: bool,
-    id: Id,
-    actions: &mut Vec<UiAction>,
-) {
-    let palette = chrome.palette;
-    let active = chrome.browser.active_workspace;
-    let spaces: Vec<(String, usize)> = chrome
-        .browser
-        .workspaces
-        .iter()
-        .map(|space| (space.name.clone(), space.tabs.len()))
-        .collect();
-    for (index, (name, count)) in spaces.iter().enumerate() {
-        let row = Rect::from_min_size(
-            pos2(body.min.x, body.min.y + index as f32 * 28.0),
-            vec2(body.width(), 26.0),
-        );
-        if row.max.y > body.max.y + 4.0 {
-            break;
-        }
-        let response = area.interact(
-            row,
-            id.with(("workspace", index)),
-            if live { Sense::click() } else { Sense::hover() },
-        );
-        let ink = crate::widgets::button_ink(area, &response, row, &palette, index == active);
-        area.painter().circle_filled(
-            pos2(row.min.x + 10.0, row.center().y),
-            4.0,
-            theme::workspace_color_from(index, chrome.settings.space_colour),
-        );
-        area.painter().text(
-            pos2(row.min.x + 22.0, row.center().y),
-            Align2::LEFT_CENTER,
-            fit(
-                area.painter(),
-                name,
-                &FontId::proportional(12.5),
-                row.width() - 52.0,
-            ),
-            FontId::proportional(12.5),
-            ink,
-        );
-        area.painter().text(
-            pos2(row.max.x - 8.0, row.center().y),
-            Align2::RIGHT_CENTER,
-            count.to_string(),
-            FontId::proportional(11.0),
-            ink,
-        );
-        if live && response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-            actions.push(UiAction::SelectWorkspace(index));
-        }
-    }
-}
-
-fn draw_mark(area: &Ui, palette: &Palette, rect: Rect) {
-    let size = (rect.height() * 0.44).clamp(20.0, 76.0);
-    crate::ui::paint_application_icon(
-        area,
-        Rect::from_center_size(rect.center(), vec2(size, size)),
-        palette.dark,
-    );
-}
-
-// ── Small pieces every card uses ───────────────────────────────────────────
-
-/// One row of a list card: a letter badge, a title, and a hover fill.
-#[expect(clippy::too_many_arguments)]
-fn list_row(
-    area: &mut Ui,
-    palette: &Palette,
-    row: Rect,
-    id: Id,
-    index: usize,
-    title: &str,
-    url: &str,
-    live: bool,
-) -> egui::Response {
-    let response = area.interact(
-        row,
-        id.with(("row", index)),
-        if live { Sense::click() } else { Sense::hover() },
-    );
-    let ink = crate::widgets::button_ink(area, &response, row, palette, false);
-    let badge = Rect::from_center_size(pos2(row.min.x + 14.0, row.center().y), vec2(20.0, 20.0));
-    area.painter().rect_filled(
-        badge,
-        CornerRadius::same(palette.radius(Tier::Control)),
-        palette.surface_hover.gamma_multiply(0.9),
-    );
-    area.painter().text(
-        badge.center(),
-        Align2::CENTER_CENTER,
-        crate::ui::initial(title, url),
-        FontId::proportional(11.0),
-        palette.text_muted,
-    );
-    area.painter().text(
-        pos2(row.min.x + 30.0, row.center().y),
-        Align2::LEFT_CENTER,
-        fit(
-            area.painter(),
-            title,
-            &FontId::proportional(12.5),
-            row.width() - 66.0,
-        ),
-        FontId::proportional(12.5),
-        ink,
-    );
-    if live {
-        return response
-            .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text(url);
-    }
-    response
-}
-
-/// What a card says when it has nothing to show. Every card has one: a blank
-/// rectangle looks broken, and "there is nothing here yet" does not.
-fn empty(area: &mut Ui, palette: &Palette, body: Rect, message: &str) {
-    area.painter().text(
-        pos2(body.min.x, body.min.y + 10.0),
-        Align2::LEFT_CENTER,
-        fit(
-            area.painter(),
-            message,
-            &FontId::proportional(11.5),
-            body.width(),
-        ),
-        FontId::proportional(11.5),
-        palette.text_muted,
-    );
-}
-
 /// Trim `text` until it fits `width`, saying so with an ellipsis.
 ///
 /// Measured rather than counted: a column of proportional text truncated by
@@ -3353,82 +969,4 @@ fn fit(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> String
         keep = keep.saturating_sub((keep / 8).max(1));
     }
     "…".to_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The board a fresh profile opens on has to fit inside the grid, and no
-    /// two cards may share a cell.
-    ///
-    /// An overlap is invisible reading the code — four coordinates and four
-    /// spans, all plausible — and completely obvious on screen, where one card
-    /// is drawn over another. This is the kind of arithmetic a test is for.
-    #[test]
-    fn the_default_board_fits_and_does_not_overlap() {
-        let tiles = Tile::defaults();
-        assert!(!tiles.is_empty());
-        let mut taken = vec![false; usize::from(COLUMNS) * usize::from(BOARD_ROWS)];
-        for tile in &tiles {
-            let right = tile.at.col + tile.span.w;
-            let bottom = tile.at.row + tile.span.h;
-            assert!(
-                right <= COLUMNS && bottom <= BOARD_ROWS,
-                "{:?} at ({}, {}) spanning {}x{} runs off a {COLUMNS}x{BOARD_ROWS} board",
-                tile.card,
-                tile.at.col,
-                tile.at.row,
-                tile.span.w,
-                tile.span.h
-            );
-            for row in tile.at.row..bottom {
-                for col in tile.at.col..right {
-                    let cell = usize::from(row) * usize::from(COLUMNS) + usize::from(col);
-                    assert!(
-                        !taken[cell],
-                        "{:?} overlaps something already at ({col}, {row})",
-                        tile.card
-                    );
-                    taken[cell] = true;
-                }
-            }
-        }
-    }
-
-    /// Nothing was deleted: every card is still reachable, whether or not it
-    /// is one of the four the page opens on.
-    #[test]
-    fn every_card_is_still_offered() {
-        assert_eq!(Card::ALL.len(), 13);
-        for card in Card::ALL {
-            assert!(
-                !card.label().is_empty(),
-                "{card:?} has no name to add it by"
-            );
-        }
-        // And the ones that greet you are a strict subset of them.
-        for tile in Tile::defaults() {
-            assert!(Card::ALL.contains(&tile.card));
-        }
-    }
-
-    /// The arrangement is centred on the twelve-column board rather than
-    /// starting in the corner, which is most of what makes it read as calm.
-    #[test]
-    fn the_default_board_is_centred() {
-        let tiles = Tile::defaults();
-        let left = tiles.iter().map(|tile| tile.at.col).min().expect("cards");
-        let right = tiles
-            .iter()
-            .map(|tile| tile.at.col + tile.span.w)
-            .max()
-            .expect("cards");
-        assert_eq!(
-            left,
-            COLUMNS - right,
-            "margins differ: {left} and {}",
-            COLUMNS - right
-        );
-    }
 }

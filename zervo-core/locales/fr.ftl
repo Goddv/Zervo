@@ -161,9 +161,7 @@ settings-show-workspace-tab-counts = Afficher le nombre d’onglets par espace
 settings-always-show-tab-close-buttons = Toujours afficher les boutons de fermeture des onglets
 settings-compact-rows = Lignes compactes
 settings-new-tab-page = Page de nouvel onglet
-settings-both-pages-are-the-same-page-nothing = Il s’agit de deux vues de la même page. Tout reste sur le tableau et la commande dans l’en-tête permet de passer d’une vue à l’autre. Sur le tableau, cliquez sur Personnaliser pour déplacer, redimensionner ou retirer les cartes.
 settings-custom-greeting = Message d’accueil personnalisé
-settings-leave-empty-for-the-time-of-day = Laissez vide pour adapter le message à l’heure de la journée
 settings-take-this-city-off = Retirer cette ville
 settings-no-cities-the-card-says-so-rather = La carte affiche un message si aucune ville n’est sélectionnée.
 settings-add-a-city = Ajouter une ville…
@@ -221,10 +219,7 @@ settings-version = Version { $version }
 options-full-page = Page entière
 options-everything-in-one-column = Tout dans une seule colonne.
 options-nothing-but-the-page-hover-the-edge = Seule la page est visible. Survolez le bord pour afficher la barre latérale.
-options-composed = Vue simple
-options-board = Tableau
 options-the-clock-the-field-and-where-you = L’horloge, le champ de recherche et votre activité récente. Le tableau est à un clic.
-options-every-card-on-the-grid-to-arrange = Toutes les cartes sont sur une grille que vous pouvez organiser à votre guise.
 options-photo = Photo
 options-aurora = Aurore
 options-waves = Vagues
@@ -232,7 +227,7 @@ options-particles = Particules
 options-mesh = Maillage
 options-grid = Grille
 options-gradient = Dégradé
-options-plain = Uni
+options-plain = Vide
 
 ## Barre d’outils, barre latérale, historique, téléchargements et notifications
 
@@ -315,13 +310,10 @@ newtab-clock = Horloge
 newtab-quick-links = Raccourcis
 newtab-recent = Activité récente
 newtab-note = Note
+newtab-notes-and-tasks = Notes et tâches
 newtab-to-do = Tâches
 newtab-workspaces = Espaces
 newtab-zervo-icon = Icône de Zervo
-newtab-good-morning = Bonjour
-newtab-good-afternoon = Bon après-midi
-newtab-good-evening = Bonsoir
-newtab-good-night = Bonne nuit
 newtab-customise = Personnaliser
 newtab-backdrop = Arrière-plan
 newtab-add-card = Ajouter une carte
@@ -332,7 +324,6 @@ newtab-wallpaper-provider = Fournisseur de fonds d’écran
 newtab-commons-picture-of-the-day = Image du jour de Wikimedia Commons
 newtab-now = Maintenant
 newtab-take-this-card-off = Retirer cette carte
-newtab-pick-up-where-you-left-off = REPRENEZ LÀ OÙ VOUS EN ÉTIEZ
 newtab-pin-a-site = Épingler un site
 newtab-add-a-city-in-settings-layout = Ajoutez une ville dans Réglages › Disposition.
 newtab-pin-a-tab-and-it-turns-up = Épinglez un onglet pour le retrouver ici.
@@ -344,7 +335,6 @@ newtab-a-place-to-put-something-down = Un endroit où noter une idée.
 newtab-nothing-to-do-enviable = Rien à faire. Quelle chance.
 newtab-add-something = Ajouter quelque chose…
 
-newtab-search-hero = Recherchez avec { $engine } ou indiquez une adresse
 newtab-search-compact = Rechercher avec { $engine } ou saisir une adresse…
 
 ## Activité dans le nouvel onglet

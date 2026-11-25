@@ -134,41 +134,6 @@ pub enum NewTabPage {
     Homepage,
 }
 
-/// Which shape the new tab page opens in.
-///
-/// Turn 7a's own summary of the change: "Nothing was deleted. World clocks,
-/// the note, the to-do list, downloads, now playing, the mark — all thirteen
-/// still exist, still on the same grid, still draggable and resizable. The
-/// change is which of them greets you."
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NewTabHome {
-    /// The clock, one field, the session you actually left, and the three
-    /// sites you use. A new tab is opened to go somewhere.
-    Composed,
-    /// The board of cards — `Tile::defaults()` and anything added to it —
-    /// arrangeable and resizable. What the page has always been, one press
-    /// away.
-    Board,
-}
-
-impl NewTabHome {
-    pub const ALL: [NewTabHome; 2] = [NewTabHome::Composed, NewTabHome::Board];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            NewTabHome::Composed => tr("options-composed"),
-            NewTabHome::Board => tr("options-board"),
-        }
-    }
-
-    pub fn note(self) -> &'static str {
-        match self {
-            NewTabHome::Composed => tr("sidebar-new-tab-options"),
-            NewTabHome::Board => tr("options-every-card-on-the-grid-to-arrange"),
-        }
-    }
-}
-
 /// Background treatment of the zervo://newtab page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NewTabBackground {
@@ -246,7 +211,6 @@ pub struct Settings {
     pub search_engine: SearchEngine,
     pub new_tab_page: NewTabPage,
     pub new_tab_background: NewTabBackground,
-    pub newtab_home: NewTabHome,
     /// Show tab close buttons always, instead of only on hover.
     pub always_show_tab_close: bool,
     pub show_forward_button: bool,
@@ -339,12 +303,14 @@ pub struct Settings {
     pub gestures: crate::gestures::Gestures,
 
     // ── The new tab page.
-    /// The cards on the page, and where each one sits. Arranged by dragging
-    /// them rather than set here, which is why there is no list of toggles.
-    pub newtab_tiles: Vec<crate::newtab::Tile>,
+    /// Visible widgets in display order. Missing means the default dashboard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newtab_widgets: Option<Vec<crate::newtab::Widget>>,
+    #[serde(rename = "newtab_tiles", skip_serializing)]
+    legacy_newtab_tiles: Option<Vec<crate::newtab::LegacyTile>>,
     /// The cities on the world-clocks card.
     pub newtab_world_clocks: Vec<crate::newtab::Zone>,
-    /// Overrides the time-of-day greeting when non-empty.
+    /// Optional line shown beneath the New Tab clock.
     pub newtab_message: String,
     /// Where the page's photograph comes from.
     pub wallpaper_source: crate::wallpaper::Source,
@@ -416,7 +382,6 @@ impl Default for Settings {
             search_engine: SearchEngine::DuckDuckGo,
             new_tab_page: NewTabPage::ZervoPage,
             new_tab_background: NewTabBackground::Grid,
-            newtab_home: NewTabHome::Composed,
             always_show_tab_close: false,
             show_forward_button: true,
             show_reload_button: true,
@@ -446,7 +411,8 @@ impl Default for Settings {
             appearance: sidebar_default_appearance(),
             legacy_translucency: None,
             gestures: crate::gestures::Gestures::default(),
-            newtab_tiles: crate::newtab::Tile::defaults(),
+            newtab_widgets: None,
+            legacy_newtab_tiles: None,
             newtab_world_clocks: crate::newtab::Zone::defaults(),
             newtab_message: String::new(),
             wallpaper_source: crate::wallpaper::Source::Commons,
@@ -470,6 +436,12 @@ impl Settings {
                 ..Self::default()
             }
         }
+    }
+
+    pub fn visible_newtab_widgets(&self) -> &[crate::newtab::Widget] {
+        self.newtab_widgets
+            .as_deref()
+            .unwrap_or(&crate::newtab::Widget::DEFAULT)
     }
 
     pub fn reset_sidebar_sections(&mut self) {
@@ -516,6 +488,12 @@ pub fn load() -> Settings {
 
 /// Update built-in presets and carry forward older translucency settings.
 fn migrate(settings: &mut Settings) {
+    if let Some(tiles) = settings.legacy_newtab_tiles.take()
+        && settings.newtab_widgets.is_none()
+    {
+        settings.newtab_widgets = Some(crate::newtab::migrate_widgets(tiles));
+    }
+
     use crate::theme::{Preset, Translucency};
 
     if !SidebarSection::ALL
@@ -563,6 +541,33 @@ mod tests {
     /// every value about how Zervo is built moved into one arrangement still
     /// carries `translucency` at the top level, and the reader's choice there
     /// has to survive the move.
+    #[test]
+    fn legacy_new_tab_widgets_keep_their_order_and_are_saved_once() {
+        use crate::newtab::Widget;
+
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "newtab_home": "Board",
+            "newtab_tiles": [
+                {"card":"Notes", "at":{"col":6,"row":1}, "span":{"w":6,"h":2}},
+                {"card":"Tasks", "at":{"col":0,"row":2}, "span":{"w":4,"h":2}},
+                {"card":"Downloads", "at":{"col":0,"row":1}, "span":{"w":6,"h":2}}
+            ]
+        }))
+        .unwrap();
+        migrate(&mut settings);
+        assert_eq!(
+            settings.visible_newtab_widgets(),
+            &[Widget::Downloads, Widget::Writing]
+        );
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert!(saved.get("newtab_home").is_none() && saved.get("newtab_tiles").is_none());
+        let loaded: Settings = serde_json::from_value(saved).unwrap();
+        assert_eq!(
+            loaded.visible_newtab_widgets(),
+            settings.visible_newtab_widgets()
+        );
+    }
+
     #[test]
     fn an_old_translucency_choice_is_carried_across() {
         for (chose, expected, custom) in [

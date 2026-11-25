@@ -161,9 +161,7 @@ settings-show-workspace-tab-counts = Show tab counts for Spaces
 settings-always-show-tab-close-buttons = Always show tab close buttons
 settings-compact-rows = Compact rows
 settings-new-tab-page = New tab page
-settings-both-pages-are-the-same-page-nothing = Both pages are the same page: nothing was removed from the board, and the header's own control moves between them. The cards are arranged on the board itself — press Customise there to move, resize and remove them.
 settings-custom-greeting = Custom greeting
-settings-leave-empty-for-the-time-of-day = Leave empty for the time of day
 settings-take-this-city-off = Take this city off
 settings-no-cities-the-card-says-so-rather = No cities — the card says so rather than showing nothing.
 settings-add-a-city = Add a city…
@@ -221,10 +219,7 @@ settings-version = Version { $version }
 options-full-page = Full Page
 options-everything-in-one-column = Everything in one column.
 options-nothing-but-the-page-hover-the-edge = Nothing but the page; hover the edge.
-options-composed = Composed
-options-board = Board
 options-the-clock-the-field-and-where-you = The clock, the field, and where you left off. The board is one press away.
-options-every-card-on-the-grid-to-arrange = Every card on the grid, to arrange as you like.
 options-photo = Photo
 options-aurora = Aurora
 options-waves = Waves
@@ -232,7 +227,7 @@ options-particles = Particles
 options-mesh = Mesh
 options-grid = Grid
 options-gradient = Gradient
-options-plain = Plain
+options-plain = Empty
 
 ## Toolbar, sidebar, history, downloads, and notifications
 
@@ -315,13 +310,10 @@ newtab-clock = Clock
 newtab-quick-links = Quick links
 newtab-recent = Recent
 newtab-note = Note
+newtab-notes-and-tasks = Notes and tasks
 newtab-to-do = To-do
 newtab-workspaces = Spaces
 newtab-zervo-icon = Zervo icon
-newtab-good-morning = Good morning
-newtab-good-afternoon = Good afternoon
-newtab-good-evening = Good evening
-newtab-good-night = Good night
 newtab-customise = Customise
 newtab-backdrop = Backdrop
 newtab-add-card = Add card
@@ -332,7 +324,6 @@ newtab-wallpaper-provider = Wallpaper provider
 newtab-commons-picture-of-the-day = Commons picture of the day
 newtab-now = Now
 newtab-take-this-card-off = Take this card off
-newtab-pick-up-where-you-left-off = PICK UP WHERE YOU LEFT OFF
 newtab-pin-a-site = Pin a site
 newtab-add-a-city-in-settings-layout = Add a city in Settings › Layout.
 newtab-pin-a-tab-and-it-turns-up = Pin a tab and it turns up here.
@@ -344,7 +335,6 @@ newtab-a-place-to-put-something-down = A place to put something down.
 newtab-nothing-to-do-enviable = Nothing to do. Enviable.
 newtab-add-something = Add something…
 
-newtab-search-hero = Search with { $engine }, or say where to go
 newtab-search-compact = Search with { $engine } or enter an address…
 
 ## New tab activity

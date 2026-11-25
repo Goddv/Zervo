@@ -165,12 +165,9 @@ newtab-clock = 時計
 newtab-quick-links = クイックリンク
 newtab-recent = 最近の履歴
 newtab-note = メモ
+newtab-notes-and-tasks = メモとタスク
 newtab-to-do = ToDo
 newtab-workspaces = ワークスペース
-newtab-good-morning = おはようございます
-newtab-good-afternoon = こんにちは
-newtab-good-evening = こんばんは
-newtab-good-night = おやすみなさい
 newtab-customise = カスタマイズ
 newtab-backdrop = 背景
 newtab-add-card = カードを追加
@@ -179,12 +176,10 @@ newtab-static = 静止
 newtab-animated = アニメーション
 newtab-now = 今すぐ
 newtab-take-this-card-off = このカードを削除
-newtab-pick-up-where-you-left-off = 前回の続き
 newtab-pin-a-site = サイトを固定
 newtab-nothing-visited-yet = 閲覧履歴はまだありません。
 newtab-nothing-playing = 再生中のメディアはありません。
 newtab-add-something = 項目を追加…
-newtab-search-hero = { $engine } で検索、またはアドレスを入力
 newtab-search-compact = { $engine } で検索、またはアドレスを入力…
 
 ## ダイアログとエラーページ

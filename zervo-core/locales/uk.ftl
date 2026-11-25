@@ -161,9 +161,7 @@ settings-show-workspace-tab-counts = Показувати кількість в�
 settings-always-show-tab-close-buttons = Завжди показувати кнопки закриття вкладок
 settings-compact-rows = Компактні рядки
 settings-new-tab-page = Сторінка нової вкладки
-settings-both-pages-are-the-same-page-nothing = Це два вигляди однієї сторінки. Усе лишається на дошці, а перемикач у заголовку змінює вигляд. На дошці натисніть «Налаштувати», щоб переміщувати картки, змінювати їхній розмір або вилучати їх.
 settings-custom-greeting = Власне привітання
-settings-leave-empty-for-the-time-of-day = Залиште порожнім, щоб привітання відповідало часу доби
 settings-take-this-city-off = Вилучити це місто
 settings-no-cities-the-card-says-so-rather = Якщо міст немає, картка показує повідомлення.
 settings-add-a-city = Додати місто…
@@ -221,10 +219,7 @@ settings-version = Версія { $version }
 options-full-page = На всю сторінку
 options-everything-in-one-column = Усе в одному стовпці.
 options-nothing-but-the-page-hover-the-edge = Видно лише сторінку. Наведіть вказівник на край, щоб відкрити бічну панель.
-options-composed = Стислий вигляд
-options-board = Дошка
 options-the-clock-the-field-and-where-you = Годинник, поле пошуку й нещодавня активність. Дошку можна відкрити одним натисканням.
-options-every-card-on-the-grid-to-arrange = Усі картки на сітці. Розташуйте їх як зручно.
 options-photo = Фото
 options-aurora = Полярне сяйво
 options-waves = Хвилі
@@ -232,7 +227,7 @@ options-particles = Частинки
 options-mesh = Сітчасте полотно
 options-grid = Сітка
 options-gradient = Градієнт
-options-plain = Однотонний
+options-plain = Порожній
 
 ## Панель інструментів, бічна панель, історія, завантаження й сповіщення
 
@@ -317,13 +312,10 @@ newtab-clock = Годинник
 newtab-quick-links = Швидкі посилання
 newtab-recent = Нещодавнє
 newtab-note = Нотатка
+newtab-notes-and-tasks = Нотатки й завдання
 newtab-to-do = Завдання
 newtab-workspaces = Простори
 newtab-zervo-icon = Піктограма Zervo
-newtab-good-morning = Доброго ранку
-newtab-good-afternoon = Добрий день
-newtab-good-evening = Добрий вечір
-newtab-good-night = На добраніч
 newtab-customise = Налаштувати
 newtab-backdrop = Тло
 newtab-add-card = Додати картку
@@ -334,7 +326,6 @@ newtab-wallpaper-provider = Постачальник шпалер
 newtab-commons-picture-of-the-day = Зображення дня з Wikimedia Commons
 newtab-now = Зараз
 newtab-take-this-card-off = Вилучити цю картку
-newtab-pick-up-where-you-left-off = ПРОДОВЖУЙТЕ З ТОГО МІСЦЯ, ДЕ ЗУПИНИЛИСЯ
 newtab-pin-a-site = Закріпити сайт
 newtab-add-a-city-in-settings-layout = Додайте місто в розділі «Параметри › Компонування».
 newtab-pin-a-tab-and-it-turns-up = Закріпіть вкладку, щоб вона з’явилася тут.
@@ -346,7 +337,6 @@ newtab-a-place-to-put-something-down = Місце, щоб щось заноту�
 newtab-nothing-to-do-enviable = Справ немає. Можна позаздрити.
 newtab-add-something = Додати щось…
 
-newtab-search-hero = Шукайте через { $engine } або введіть адресу
 newtab-search-compact = Шукати через { $engine } або ввести адресу…
 
 ## Активність на новій вкладці
