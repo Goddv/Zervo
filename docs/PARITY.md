@@ -1,6 +1,6 @@
 # Parity
 
-What Zervo is missing before it behaves like a browser people can use, roughly in
+What Heion is missing before it behaves like a browser people can use, roughly in
 the order the gaps hurt. Most of it is embedder work that belongs here rather than
 in the engine — the delegate methods exist and are simply not implemented yet.
 
@@ -63,7 +63,7 @@ Tier 0 is done. What is left is the list below.
 
 Local and progressive `<video>` plays. YouTube, Netflix, Twitch and most other
 video sites do not, and report "this browser can't play video". Two engine-side
-reasons, measured from a page in Zervo:
+reasons, measured from a page in Heion:
 
 - **`MediaSource` is undefined.** Servo has no Media Source Extensions, and
   adaptive streaming is built on it. This alone is enough for YouTube to refuse
@@ -97,7 +97,7 @@ Each of these is a delegate method or a `WebView` call away.
 - **`screen.availWidth`/`availHeight`** report the whole display rather than
   subtracting the menu bar and Dock.
 - **Offering to save a login from a form.** There is no embedder hook for a
-  submitted form, so Zervo cannot notice you signing in and offer to remember
+  submitted form, so Heion cannot notice you signing in and offer to remember
   it; logins have to be added by hand in Settings. *Filling* one is done — ⌘⇧L
   writes the saved credential into the page through `evaluate_javascript` — and
   this entry claimed for a long time that it could not be, which was never true.
@@ -122,7 +122,7 @@ Each of these is a delegate method or a `WebView` call away.
   streamed to disk with no way to suspend it and no range-request restart, so
   the downloads card offers stop and start-again and nothing between. Real
   pause/resume means teaching the fetch layer about it.
-- **Devtools.** Console output goes to Zervo's log and nowhere the user can see;
+- **Devtools.** Console output goes to Heion's log and nowhere the user can see;
   there is no inspector, network panel or JavaScript console in the browser.
   Servo has a devtools server and `Preferences::devtools_server_enabled` starts
   it, so this is a large piece of embedder work rather than an engine gap — but

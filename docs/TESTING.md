@@ -15,15 +15,12 @@ engine bump or a chrome change, walk this list.
 - [ ] Shrink the window to its minimum size with the sidebar shelf open.
       Keep the address field clear of both button groups. Widen the window
       again and check that the saved field width returns.
-- [ ] With the shelf open above a short new-tab page, the clock and search
-      stay clear of the widget cards and recent sites.
+- [ ] With the shelf open in a short window, the New Tab search pill stays
+      accessible in the page.
 - [ ] Settings (⌘,): every section renders; toggles/sliders/segments respond.
       Changing one does not make the chrome or the page jolt.
 - [ ] Theme: Auto/Light/Dark switch cleanly, including the titlebar; accent
       colours retint the chrome; pages see `prefers-color-scheme`.
-- [ ] New tab page: each of the eight backdrops; the animated ones do not pin
-      the CPU when the window is idle. The page does not blink or flicker while
-      it is simply sitting there.
 
 ## Servo integration
 
@@ -45,42 +42,23 @@ engine bump or a chrome change, walk this list.
       flat wash — the page behind it is visibly softened. Over the new tab page
       and over Settings too, and with the widget shelf open, when the card hangs
       above the page rather than on it.
-- [ ] Dark mode over a bright wallpaper or a white page: cards stay dark and
-      their text stays readable. Light mode over a dark one: the mirror of it.
-- [ ] Text on the new tab page — card rows, the greeting, the clock, the photo
-      credit — is readable over the light and dark parts of the same
-      photograph.
+- [ ] Compare light and dark mode over both light and dark web pages. Chrome
+      controls and text stay readable.
 - [ ] Content card corners: with outline, shadow and halo all off, no seam,
       notch or pale patch at any of the four, on a web page and on an internal
       one. Worth a screen magnifier.
 - [ ] Appearance → outline, shadow, halo: each toggles, the two amounts move
       what they say, and the halo's tint switches between accent and chrome.
 
-## New tab page
-- [ ] Customise: cards gain an edge, a drag mark, a ✕ and a resize corner;
-      Done puts them back. Outside edit mode a card's own links and buttons
-      work and the card does not move.
-- [ ] Drag a card by its middle and by a far corner: it follows the pointer
-      from the point it was grabbed, not from its centre, and lands where the
-      outline says.
-- [ ] Resize from the corner by whole cells; the preview matches the result.
-- [ ] Add card: every kind can be added, lands somewhere free, and shows an
-      empty state rather than a blank rectangle when it has nothing.
-- [ ] Reset restores the default arrangement.
-- [ ] Shrink the window until the grid gives way to the compact clock and
-      search box, and widen it again.
-- [ ] Fill more rows than fit: the page scrolls, and a card scrolled off the
-      top does not spill over the header.
-- [ ] Two cards of the same kind side by side: no egui "widget ID" banner.
-- [ ] Wallpaper → each source fetches; the credit line names the picture, the
-      photographer and the licence, and clicking it opens the source page.
-- [ ] Wallpaper → Choose a file… takes a local picture.
-- [ ] Pull the network cable and shuffle: the page keeps its backdrop and
-      Settings → Wallpaper says what failed.
-- [ ] Over a bright photograph in the light theme: the header pills, the
-      credit line and every card are readable, and no card has a bright rim
-      along its underside.
-- [ ] The note and the to-do list survive a restart.
+## New Tab
+
+- [ ] Grid is the initial backdrop. Switch to Frosted and Liquid Glass under
+      Settings → Layout, then reopen New Tab and check that the choice persists.
+- [ ] Click the centered search pill. It moves into the command bar and the
+      search field accepts typing immediately. Escape returns to the pill.
+- [ ] At normal window height, all seven actions are visible. At minimum
+      height, scroll the list and use the arrow keys to reach the last action.
+- [ ] Check the search pill and app icon in light and dark modes.
 
 ## The chrome's own animations
 
@@ -129,7 +107,7 @@ motions rather than one. Settings → Appearance → Seam, then navigate.
       no gap, and its corner is one arc — the platform's, not a second one
       beside it. Move the corner scale to both ends; the window's corner must
       not move with it, and every other surface must.
-- [ ] The framed layouts keep their gap: Zervo's eight points, Flat's six.
+- [ ] The framed layouts keep their gap: Heion's eight points, Flat's six.
 - [ ] Full-page mode, `zervo://settings`, `zervo://history` and
       `zervo://downloads`: each page's heading clears the close, minimise and
       zoom buttons. A web page is deliberately *not* inset.
@@ -151,7 +129,7 @@ nothing can tell the embedder why an ordinary load ended. See PARITY.md.
 - [ ] `zervo://unsupported?host=watch.example.com&detail=Media%20Source%20Extensions`
       — the host is set in monospace, the missing feature in monospace amber,
       and the three buttons appear. "Open in Safari" opens Safari and not
-      Zervo; "Try again" navigates *this* tab to the site.
+      Heion; "Try again" navigates *this* tab to the site.
 - [ ] `zervo://offline` — no buttons at all, and the count of waiting tabs is
       the real one. Toolbar Reload is enabled and is the only way to try again.
 - [ ] `zervo://certificate?host=mail.example.com&detail=*.cdn.net` — the danger
@@ -171,7 +149,7 @@ nothing can tell the embedder why an ordinary load ended. See PARITY.md.
       — a padlock in red on the certificate page, not a globe.
 - [ ] Pin one of them: the sidebar's tab row and the essentials grid show the
       same icon.
-- [ ] Both themes, and a preset with no glow (Flat or Zervo): the pages are
+- [ ] Both themes, and a preset with no glow (Flat or Heion): the pages are
       readable and nothing rings or glows where the arrangement says it should
       not.
 
@@ -225,7 +203,7 @@ A page is needed that raises them; `new Notification(...)` from the console is
 not enough, because a notification only counts as user-initiated once the page
 holds permission. Any local file with a few buttons on it does.
 
-- [ ] `Notification.requestPermission()` raises a Zervo prompt naming the host
+- [ ] `Notification.requestPermission()` raises a Heion prompt naming the host
       rather than the whole URL. Denying is respected — the promise resolves to
       `denied` and nothing appears.
 - [ ] Granting, then raising one: it grows **out of the bell** in the address
@@ -277,13 +255,13 @@ holds permission. Any local file with a few buttons on it does.
       `xattr -dr com.apple.quarantine`, and video still plays (the bundled
       GStreamer travelled with it).
 - [ ] Linux: `.deb` and `.rpm` install and pull their dependencies. **Whether
-      Zervo starts is untested — say either way.**
+      Heion starts is untested — say either way.**
 - [ ] Windows: the `.exe` runs from the unzipped folder with no console window
       behind it. **Also untested.**
 
 ## Performance
 - [ ] Idle CPU near zero with a static page and no animated background. Check
-      the **new tab page** with a non-animated backdrop as well as a web page —
+      the **new tab page** as well as a web page —
       that one was nineteen per cent until the engine's frame-ready signal
       stopped asking for a repaint on behalf of a tab with no webview.
 - [ ] An animated backdrop still animates: Aurora should sit around ten to

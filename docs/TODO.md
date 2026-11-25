@@ -45,7 +45,7 @@ people do not write it twice.
   empty default body, so a page offering to handle `mailto:` is ignored.
 - **Notifications to the system tray.** They are shown inside the window now,
   which is the honest version of the feature rather than the expected one: a
-  notification you cannot see because Zervo is behind another window is a
+  notification you cannot see because Heion is behind another window is a
   notification that did not arrive. macOS wants a signed bundle and
   `UNUserNotificationCenter`. The icons, badges and images the spec allows are
   dropped too — each would need uploading as a texture.
@@ -130,16 +130,9 @@ Listed so nobody starts them expecting to finish. Details in
   picked to cover seventy of the seventy-seven radii in the tree, so the sweep
   is close to a find-and-replace. Until it happens, a second material only
   reaches half the application.
-- **Changing the wallpaper is a cut, not a cross-fade.** A new picture ramps up
-  from nothing while the old one is simply gone, so for the length of the fade
-  the cards are frosted against a backdrop that is barely there. A real
-  cross-fade means holding the outgoing texture and its backdrop, drawing both,
-  and ramping one down as the other comes up — so `Backdrop` would have to
-  describe two layers rather than one. Worth doing properly rather than
-  approximating.
 - **`Palette` has drifted into being a `Style`.** It began as colours. It now
   also carries `dark`, the card-opacity setting, the whole `Material` and the
-  wallpaper to frost against — none of which are colours. The name is the only
+  page backdrop to frost against — none of which are colours. The name is the only
   thing wrong: everything in there genuinely wants to reach every surface, and
   hanging it off the palette is what let all of it arrive without changing a
   single signature. Renaming touches every file, so it wants doing on its own

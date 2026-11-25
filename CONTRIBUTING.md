@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. Zervo is small and there is a lot of low-hanging fruit.
+Thanks for looking. Heion is small and there is a lot of low-hanging fruit.
 
 ## Getting set up
 
@@ -16,7 +16,7 @@ the one genuinely surprising thing in the codebase.
 ## Translate the interface
 
 [The translation guide](docs/TRANSLATING.md) explains how to edit a catalogue,
-preview it in a built copy of Zervo, and open a pull request. Partial
+preview it in a built copy of Heion, and open a pull request. Partial
 translations work because missing messages fall back to English. Translation
 pull requests do not need to include Rust changes.
 
@@ -65,7 +65,7 @@ from. The easiest starts on it:
 
 ## Engine bugs
 
-If a *page* renders wrong, that is almost always Servo, not Zervo. Reproduce it
+If a *page* renders wrong, that is almost always Servo, not Heion. Reproduce it
 in `servoshell` from a Servo checkout, and if it still happens, report it to
 [servo/servo](https://github.com/servo/servo/issues). Note that Servo does not
 accept AI-generated contributions.

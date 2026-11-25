@@ -1,9 +1,8 @@
 # Architecture
 
-Zervo is one binary and one library. `zervo-core` holds the parts that do not
+Heion is one binary and one library. `zervo-core` holds the parts that do not
 know the engine exists — the theme and the glass material, the card grid, the
-gesture recogniser, the atomic JSON store, and the small HTTPS client the
-wallpaper fetcher rides on. The binary owns a winit window, runs the Servo
+gesture recogniser, the atomic JSON store, and a small HTTPS client. The binary owns a winit window, runs the Servo
 engine inside it, and paints its own chrome around the page with egui.
 
 The split is not architectural tidiness. Compiling the binary means compiling
@@ -59,7 +58,7 @@ Two consequences worth knowing:
 - **A `WebView` is always exactly the size of its `RenderingContext`.** There is
   no per-view rect. "Putting the page in a sub-rect" means sizing the offscreen
   context to that rect and blitting it there.
-- **Nothing clears the window framebuffer** — not surfman, not Servo. Zervo
+- **Nothing clears the window framebuffer** — not surfman, not Servo. Heion
   clears it to transparent each frame, which is what lets the chrome be
   translucent over the macOS vibrancy layer.
 
@@ -158,21 +157,10 @@ match the chrome beside it exactly. Both are described in
 
 ## The new tab page
 
-`newtab.rs` draws it: cards on a twelve-column grid, arranged by dragging them
-in edit mode and remembered in the settings. `grid.rs` holds the arithmetic —
-where a card of a given size and position lands, what it collides with, which
-cell the pointer is over, and where the first free space is. The navigation
-bar's shelf still carries its own copy of the same sums in `dashboard.rs`; it
-could adopt `grid.rs`, and should.
-
-Behind the cards it can put a photograph. `wallpaper.rs` fetches one from
-Wikimedia Commons or Openverse on a thread of its own, decodes and downscales
-it there too, and hands back an `egui::ColorImage`; `main.rs` uploads that as a
-texture, because making one needs a context the thread does not have. The
-transport is `net.rs`, which is HTTP/1.1 over the rustls Zervo already links —
-GET, redirects, a counted or chunked body, a hard byte ceiling, and nothing
-else. Everything a wallpaper needs to say about its licence travels with it and
-is drawn under the page.
+`newtab.rs` draws a centered search pill over Grid, Frosted, or Liquid Glass.
+Clicking the pill sends its bounds with `UiAction::OpenCommandFrom`.
+`ui/command.rs` uses those bounds to animate the search field into place and
+keeps the results scrollable when the window is short.
 
 ## State and events
 
@@ -185,8 +173,7 @@ It used to say `ui.rs` was *pure* — that it drew from state and returned a lis
 of actions. That half was never quite true. `ChromeContext` hands it `&mut
 BrowserState`, `&mut Settings`, `&mut Library`, `&mut Vault` and `&mut
 Controls`, and it writes through all of them: some two dozen assignments
-straight into `chrome.settings.*` and `chrome.browser.*`, plus `newtab::apply`
-rewriting the tile arrangement wholesale. `UiAction::SettingsChanged` does not
+straight into `chrome.settings.*` and `chrome.browser.*`. `UiAction::SettingsChanged` does not
 mean "please change this"; it means "I have changed it — write the file and
 re-apply the theme."
 

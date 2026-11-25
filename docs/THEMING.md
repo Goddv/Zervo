@@ -1,6 +1,6 @@
 # The theme engine
 
-The goal is that somebody can make Zervo look like Windows, like GTK or Qt,
+The goal is that somebody can make Heion look like Windows, like GTK or Qt,
 like Android's Material, or like Apple's Liquid Glass, without touching any
 drawing code. The engine is organised around that goal rather than around the
 one theme that happens to be in it.
@@ -96,7 +96,7 @@ It controls the window backdrop, chrome and overlay materials:
 - the tint on everything the material draws over that chrome,
 - the use of AppKit glass for dialogs, menus, popovers, and floating controls
   with `LiquidGlass` on macOS 26 and later. Earlier macOS versions and other
-  operating systems use Zervo’s frosted material.
+  operating systems use Heion’s frosted material.
 
 A material can opt out (`translucency: false`) and then the setting does
 nothing, which is what a flat desktop toolkit wants.
@@ -170,7 +170,7 @@ be.
 
 ## The arrangement
 
-`Appearance` is every value the reader can set about how Zervo is built, in one
+`Appearance` is every value the reader can set about how Heion is built, in one
 place. `Appearance::material` turns it into a [`Material`], which is what the
 drawing code has always asked. It uses `Material::ZERVO` as its base rather
 than a blank one: the fields the panel does not offer — how much heavier a
@@ -197,7 +197,7 @@ Linux and Windows offer five named arrangements. `Preset::appearance` defines ea
 
 | Preset | What it is |
 | --- | --- |
-| `Zervo` | The one that is finished: the chrome laid on the page, favicons down the spine, every motion on, and the accent taken from the space you are in. **The colours are still the ones that shipped** — `candy` is the only field the palette reads for them and it has not moved — and there is a test pinning them for all ten accents in both themes. |
+| **Heion** | The one that is finished: the chrome laid on the page, favicons down the spine, every motion on, and the accent taken from the space you are in. **The colours are still the ones that shipped** — `candy` is the only field the palette reads for them and it has not moved — and there is a test pinning them for all ten accents in both themes. |
 | `Candy` | The accent as a light source, no seam, everything glowing. The default. |
 | `Flat` | Solid, a small radius, no sheen — a flat desktop toolkit. |
 | `Liquid Glass` | Native AppKit glass for dialogs, menus and floating chrome on macOS 26 and later, with restrained borders, a card seam and a frosted fallback. |
@@ -280,7 +280,7 @@ same place, so nothing jumps when the kind of page changes.
 ## macOS-specific pieces
 
 The docked sidebar uses AppKit’s `NSVisualEffectView.Material.sidebar` for
-translucency and its active-window tint. Zervo uses
+translucency and its active-window tint. Heion uses
 AppKit’s regular glass for dialogs, menus, popovers, the revealed sidebar, and
 the docked address field. Menus and dialogs use neutral tints for contrast on
 busy pages. Each floating surface places egui’s controls inside an

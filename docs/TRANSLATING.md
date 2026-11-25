@@ -1,6 +1,6 @@
-# Translate Zervo
+# Translate Heion
 
-Zervo uses [Fluent](https://projectfluent.org/fluent/guide/) for its interface.
+Heion uses [Fluent](https://projectfluent.org/fluent/guide/) for its interface.
 Translations are ordinary UTF-8 text files in
 [`zervo-core/locales/`](../zervo-core/locales/). English is the reference
 catalogue. Japanese is a starter translation open to corrections and additions.
@@ -14,7 +14,7 @@ incomplete translation safely falls back to English.
 2. Copy the entries you want to translate from `en-US.ftl`. Change only the
    text after the equals sign. Keep each message ID and every variable such as
    `{ $title }`. A message may move its variables or use the language’s own
-   plural forms. Leave unfinished entries out. Zervo displays those in English.
+   plural forms. Leave unfinished entries out. Heion displays those in English.
 3. Try the language in first-run setup or **Settings → General → Language**.
    Check that longer labels still fit at a narrow window size.
 
@@ -34,7 +34,7 @@ with New Tab, History, Downloads, site prompts, error pages, and software
 updates. Settings and New Tab share the same city and calendar labels. A
 language can give each site permission prompt its own wording and word order.
 
-Zervo supplies the copy on its Updates page and in its own update reminders.
+Heion supplies the copy on its Updates page and in its own update reminders.
 Sparkle supplies the installer dialogs. macOS supplies system permission
 dialog controls. Website text, saved names, external diagnostics, and release
 notes use the text supplied by their authors.
@@ -45,11 +45,11 @@ A recent build can preview a catalogue without compiling the browser. Put
 your `.ftl` file in a separate folder and use an absolute path to that folder.
 
 ```sh
-# macOS, after dragging Zervo.app to Applications
+# macOS, after installing Heion in Applications
 ZERVO_LOCALES_DIR=/absolute/path/to/catalogues /Applications/Zervo.app/Contents/MacOS/Zervo
 ```
 
-Quit Zervo before launching the preview. Restart it after editing the file.
+Quit Heion before launching the preview. Restart it after editing the file.
 If you already contribute code, `cargo test -p zervo-core --locked l10n`
 checks catalogue syntax, duplicate IDs, placeholders, formatting, and English
 fallback.
@@ -80,7 +80,7 @@ feed.
 1. Create a branch and add only the new or corrected `.ftl` file under
    `zervo-core/locales/`.
 2. In the pull request, name the language and regional variant, for example
-   `Portuguese (Brazil) — pt-BR`, and say whether you previewed it in Zervo.
+   `Portuguese (Brazil) — pt-BR`, and say whether you previewed it in Heion.
 3. Keep message IDs, variable names, URLs, and shortcut keys unchanged.
    Translate the text in each plural form and keep the Fluent syntax intact.
 4. Run `cargo test -p zervo-core --locked l10n` when the Rust toolchain is
@@ -90,7 +90,7 @@ Small pull requests are welcome. You can add a single missing sentence,
 correct an existing translation, or submit a complete catalogue. Native
 speakers reviewing wording are especially helpful.
 
-Zervo includes [Noto Sans JP](https://github.com/google/fonts/tree/66a36c8c94b1a5d992ee4e7f392fccfe4945767c/ofl/notosansjp)
+Heion includes [Noto Sans JP](https://github.com/google/fonts/tree/66a36c8c94b1a5d992ee4e7f392fccfe4945767c/ofl/notosansjp)
 under the [SIL Open Font License](../assets/licenses/NotoSansJP-OFL.txt).
 A translation for another script may need an additional font or right-to-left
 layout work.

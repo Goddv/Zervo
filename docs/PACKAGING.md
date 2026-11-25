@@ -52,7 +52,7 @@ framework. The plist used to say 13.0, typed in beside the compiler rather than
 derived from it, which turned away macOS 11 and 12 at launch from a binary that
 would have run.
 
-Updater-enabled bundles require macOS 12 or later and a Zervo Ed25519 public
+Updater-enabled bundles require macOS 12 or later and a Heion Ed25519 public
 key. The workflow can publish ad-hoc or notarized update-enabled releases.
 See [macOS updates](UPDATES.md) for release setup.
 
@@ -73,7 +73,7 @@ component. It verifies the resulting signatures recursively.
 Gatekeeper's verdict turns entirely on one thing: whether the app carries
 `com.apple.quarantine`. Apple's own `gktool scan Zervo.app` says *"Scan
 completed and software is allowed by system policy"* for an unquarantined build
-of Zervo, and *"failed because the software is not signed by a distributor that
+of Heion, and *"failed because the software is not signed by a distributor that
 meets the system Gatekeeper requirements"* once the flag is on. The bundle is
 fine either way; the flag is the whole story.
 
@@ -91,7 +91,7 @@ afterwards:
 xattr -dr com.apple.quarantine /Applications/Zervo.app
 ```
 
-Without that, macOS says *"Zervo is damaged and can't be opened"*, which reads
+Without that, macOS can report that the app is damaged and cannot be opened, which reads
 like a corrupt download and is not what has happened.
 
 **That command is now the only way.** Do not tell users to Control-click →
@@ -199,7 +199,7 @@ Expect the bundle to grow by roughly 100 MB — 150 MB before thinning.
 
 That pin is old. Servo has not moved off 1.22.3, released in June 2023, and the
 release it downloads from has not been touched since August 2023, while upstream
-GStreamer is on 1.28. Zervo cannot get ahead of the engine here.
+GStreamer is on 1.28. Heion cannot get ahead of the engine here.
 
 ---
 
@@ -228,7 +228,7 @@ and `rpmbuild` derive the package's requirements from the binary itself, which
 means those requirements have to be that distribution's sonames.
 
 Neither package carries a hand-written library list. What they *do* carry, and
-did not before, is the list of programs Zervo shells out to — `zenity` for the
+did not before, is the list of programs Heion shells out to — `zenity` for the
 file chooser, `xdg-utils` for opening a download, `libsecret` for the keyring.
 None of those are linked, so no dependency generator finds them, and without
 them the feature silently does nothing.
@@ -353,10 +353,10 @@ layout means media silently stops working with no error to point at.
 Per-user, into `%LOCALAPPDATA%\Programs\Zervo`, registered under `HKCU`, with
 `RequestExecutionLevel user`. That is deliberate: the build is unsigned, and an
 unsigned installer asking for administrator rights is the combination Windows
-objects to most loudly. Nothing in Zervo needs to live outside the user's
+objects to most loudly. Nothing in Heion needs to live outside the user's
 profile.
 
-It registers Zervo's *capability* to handle `http` and `https`, which is what
+It registers Heion's *capability* to handle `http` and `https`, which is what
 puts it in Settings → Default apps. It does not make itself the default; an
 installer may not, and should not.
 

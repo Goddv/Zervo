@@ -1,6 +1,6 @@
 # Native Linux frontends
 
-Zervo can share browser behavior, profile data and visual identity across the
+Heion can share browser behavior, profile data and visual identity across the
 current macOS app and Linux frontends. Native widgets should own each Linux
 window, the browser chrome, input, dialogs and accessibility. Servo should
 render the page in the space provided by the toolkit.
@@ -11,12 +11,12 @@ render the page in the space provided by the toolkit.
   OpenGL rendering, HiDPI, keyboard and navigation support, and native dialogs.
   Its Servo runner re-executes the host binary in a subprocess. Its current
   [Servo pin](https://raw.githubusercontent.com/nacho/servo-gtk/main/Cargo.toml)
-  differs from Zervo's. The first prototype needs one shared Servo revision and
-  a decision about where Zervo's download and notification delegates run.
+  differs from Heion's. The first prototype needs one shared Servo revision and
+  a decision about where Heion's download and notification delegates run.
 - [KDAB's Qt demo](https://github.com/KDABLabs/cxx-qt-servo-webview) gives us
   the shape of the QML item, CXX-Qt bindings and frame handoff. Its documented
   setup targets Wayland and uses a 2024 Rust nightly. The rendering path uses
-  `QQuickFramebufferObject` and OpenGL. Port the viewport to Zervo's current
+  `QQuickFramebufferObject` and OpenGL. Port the viewport to Heion's current
   Servo API and test Qt's render thread and frame lifetime before wiring the
   rest of the browser. [KDAB integration walkthrough](https://www.kdab.com/embedding-servo-in-qt/)
 
@@ -33,7 +33,7 @@ render the page in the space provided by the toolkit.
    the page back to CPU memory each frame. Publish a Linux build once this
    slice is reliable on a real desktop.
 4. Add Qt Quick for KDE against the same contracts. Ship toolkit-specific
-   Linux artifacts under the Zervo name with compatible profiles. The macOS
+   Linux artifacts under the Heion name with compatible profiles. The macOS
    app can keep AppKit controls and Liquid Glass.
 
 Use shared labels, sizing, semantic colours and navigation behavior to give

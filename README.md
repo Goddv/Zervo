@@ -18,9 +18,8 @@
 
 ---
 
-Heion (平穏) means a steady, untroubled state of peace. Formerly Zervo, it is a
-macOS browser powered by Servo, an independent web engine written
-in Rust. Organise tabs with Spaces and folders in a docked sidebar or browse
+Heion (平穏) means a steady, untroubled state of peace. Heion is a macOS
+browser powered by Servo, an independent web engine written in Rust. Organise tabs with Spaces and folders in a docked sidebar or browse
 in Full Page mode with the sidebar available on hover.
 
 Existing installs keep their profiles, saved logins, and signed update channel.
