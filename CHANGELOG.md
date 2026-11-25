@@ -12,8 +12,8 @@
 
 ## 0.6.1.2 — 25 November 2026
 
-This is the first macOS release that can receive in-app updates. Install this
-DMG once. Future releases can update it through **Settings → About**.
+This is the first macOS release that can receive in-app updates. Install the
+**0.6.1.3** DMG once. Future releases can update it through **Settings → About**.
 
 ### Updates
 
