@@ -372,6 +372,24 @@ if [ -n "$UPDATER_FRAMEWORK" ]; then
     zervo_bundle_updater "$UPDATER_FRAMEWORK" "$APP" "$UPDATE_FEED" "$ZERVO_SPARKLE_PUBLIC_KEY" "$UPDATE_ARCH"
 fi
 
+# Image Playground is an optional, Apple Silicon-only framework on macOS 15.1
+# and newer. Load this bridge on demand so the browser's deployment floor stays
+# independent of the wallpaper generator.
+case " $(lipo -archs "$BIN") " in
+    *" arm64 "*)
+        SDK="$(xcrun --sdk macosx --show-sdk-path)"
+        if [ -d "$SDK/System/Library/Frameworks/ImagePlayground.framework" ]; then
+            mkdir -p "$APP/Contents/Frameworks"
+            PLAYGROUND="$APP/Contents/Frameworks/HeionImagePlayground.dylib"
+            xcrun --sdk macosx swiftc -sdk "$SDK" -target arm64-apple-macosx15.1 \
+                -parse-as-library -emit-library -O -framework AppKit -framework ImagePlayground \
+                -Xlinker -install_name -Xlinker '@rpath/HeionImagePlayground.dylib' \
+                platform/macos/HeionImagePlayground.swift -o "$PLAYGROUND"
+            sign_or_fail "$PLAYGROUND"
+        fi
+        ;;
+esac
+
 if [ "$STRICT_SIGNATURES" = 0 ]; then
     codesign "${BUNDLE_SIGN_ARGS[@]}" "$APP" || warn "codesign failed on the bundle"
 else

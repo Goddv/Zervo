@@ -154,6 +154,10 @@ pub enum UiAction {
     RenameFavourite(String, String),
     ForgetVisit(usize),
     ClearHistory,
+    ImportWallpaper,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    GenerateWallpaper,
+    ClearBrowsingData(crate::browsing_data::Selection),
     AddWidget(crate::dashboard::WidgetKind),
     RemoveWidget(usize),
     SwapWidgets(usize, usize),
@@ -240,6 +244,8 @@ pub struct ChromeContext<'a> {
     pub device_pixels_per_css_pixel: f32,
     pub native_glass: NativeGlass,
     pub favicons: &'a HashMap<TabId, TextureHandle>,
+    pub saved_favicons: &'a crate::favicons::Store,
+    pub wallpaper: &'a crate::newtab_wallpaper::State,
     pub downloads: &'a crate::downloads::DownloadManager,
     pub updates: &'a crate::updates::Snapshot,
     /// Where to take the blurred copy of the page, when one is due this frame.
@@ -1038,6 +1044,27 @@ fn sidebar_body(
     chrome.palette = original_palette;
 }
 
+/// Paint a cached icon in a visible row and let the caller choose its fallback.
+pub(crate) fn paint_site_icon(
+    ui: &Ui,
+    cache: &crate::favicons::Store,
+    url: &str,
+    rect: Rect,
+) -> bool {
+    if ui.is_rect_visible(rect)
+        && let Some(texture) = cache.get(ui.ctx(), url)
+    {
+        ui.painter().image(
+            texture.id(),
+            rect,
+            Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        return true;
+    }
+    false
+}
+
 /// zervo://history — everything visited, newest first, grouped by how long ago
 /// and searchable.
 fn draw_history_page(
@@ -1127,15 +1154,13 @@ fn draw_history_page(
                         let (row, response) =
                             ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
                         let ink = crate::widgets::button_ink(ui, &response, row, &palette, false);
-                        icons::draw_icon(
-                            ui.painter(),
-                            Rect::from_center_size(
-                                pos2(row.min.x + 16.0, row.center().y),
-                                vec2(14.0, 14.0),
-                            ),
-                            Icon::Globe,
-                            ink,
+                        let icon_rect = Rect::from_center_size(
+                            pos2(row.min.x + 16.0, row.center().y),
+                            vec2(15.0, 15.0),
                         );
+                        if !paint_site_icon(ui, chrome.saved_favicons, &visit.url, icon_rect) {
+                            icons::draw_icon(ui.painter(), icon_rect, Icon::Globe, ink);
+                        }
                         let title = if visit.title.is_empty() {
                             visit.url.as_str()
                         } else {
@@ -1518,7 +1543,6 @@ fn draw_favourites_card(
                                 palette.surface_hover,
                             );
                         }
-                        // No favicon store yet, so the initial stands in for one.
                         let badge = Rect::from_center_size(
                             pos2(tile.center().x, tile.min.y + 20.0),
                             vec2(26.0, 26.0),
@@ -1528,13 +1552,15 @@ fn draw_favourites_card(
                             palette.corner(Tier::Control),
                             palette.accent.gamma_multiply(0.22),
                         );
-                        ui.painter().text(
-                            badge.center(),
-                            Align2::CENTER_CENTER,
-                            initial(title, url),
-                            FontId::proportional(13.0),
-                            palette.accent,
-                        );
+                        if !paint_site_icon(ui, chrome.saved_favicons, url, badge.shrink(4.0)) {
+                            ui.painter().text(
+                                badge.center(),
+                                Align2::CENTER_CENTER,
+                                initial(title, url),
+                                FontId::proportional(13.0),
+                                palette.accent,
+                            );
+                        }
                         ui.painter().text(
                             pos2(tile.center().x, tile.max.y - 12.0),
                             Align2::CENTER_CENTER,
@@ -1589,15 +1615,13 @@ fn draw_favourites_card(
                             palette.surface_hover,
                         );
                     }
-                    icons::draw_icon(
-                        ui.painter(),
-                        Rect::from_center_size(
-                            pos2(row.min.x + 14.0, row.center().y),
-                            vec2(13.0, 13.0),
-                        ),
-                        Icon::Globe,
-                        palette.text_muted,
+                    let icon_rect = Rect::from_center_size(
+                        pos2(row.min.x + 14.0, row.center().y),
+                        vec2(14.0, 14.0),
                     );
+                    if !paint_site_icon(ui, chrome.saved_favicons, url, icon_rect) {
+                        icons::draw_icon(ui.painter(), icon_rect, Icon::Globe, palette.text_muted);
+                    }
 
                     if being_edited {
                         let mut draft = editing

@@ -1349,6 +1349,8 @@ pub(crate) fn settings_general(
         );
     });
 
+    browsing_data_settings(ui, chrome, palette, actions);
+
     settings_section(ui, palette, tr("settings-compatibility"), |ui| {
         if widgets::toggle(
             ui,
@@ -1386,6 +1388,70 @@ pub(crate) fn settings_general(
             chrome.settings.new_tab_page = pages[index];
             actions.push(UiAction::SettingsChanged);
         }
+    });
+}
+
+fn browsing_data_settings(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    palette: &Palette,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::browsing_data::Selection;
+    let selection_id = Id::unique("browsing_data_selection");
+    let confirm_id = Id::unique("browsing_data_confirmation");
+    let ctx = ui.ctx().clone();
+    let mut selection = ctx
+        .data(|data| data.get_temp::<Selection>(selection_id))
+        .unwrap_or_default();
+    let mut confirm = ctx
+        .data(|data| data.get_temp::<bool>(confirm_id))
+        .unwrap_or_default();
+    settings_section(ui, palette, tr("browsing-data-title"), |ui| {
+        note(ui, palette, tr("browsing-data-description"));
+        egui::ComboBox::from_id_salt("site_data_type")
+            .selected_text(selection.label())
+            .show_glass(ui, |ui| {
+                for choice in Selection::ALL {
+                    if ui
+                        .selectable_value(&mut selection, choice, choice.label())
+                        .changed()
+                    {
+                        chrome.browser.browsing_data_cleared = false;
+                    }
+                }
+            });
+        if ui.button(tr("browsing-data-clear")).clicked() {
+            confirm = true;
+            chrome.browser.browsing_data_cleared = false;
+        }
+        if chrome.browser.browsing_data_cleared {
+            note(ui, palette, tr("browsing-data-cleared"));
+        }
+    });
+
+    if confirm {
+        let modal = egui::Modal::new(confirm_id).show(&ctx, |ui| {
+            ui.set_max_width(340.0);
+            ui.heading(tr("browsing-data-clear"));
+            ui.label(selection.label());
+            note(ui, palette, tr("browsing-data-confirm"));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr("common-cancel")).clicked() {
+                    ui.close();
+                }
+                if ui.button(tr("browsing-data-confirm-button")).clicked() {
+                    actions.push(UiAction::ClearBrowsingData(selection));
+                    ui.close();
+                }
+            });
+        });
+        confirm = !modal.should_close();
+    }
+    ctx.data_mut(|data| {
+        data.insert_temp(selection_id, selection);
+        data.insert_temp(confirm_id, confirm);
     });
 }
 
@@ -1490,16 +1556,27 @@ pub(crate) fn settings_layout(
     );
     settings_section(ui, palette, tr("settings-new-tab-page"), |ui| {
         ui.label(tr("newtab-backdrop"));
-        if choose(
-            ui,
-            palette,
-            &mut chrome.settings.new_tab_background,
-            &NewTabBackground::ALL,
-            NewTabBackground::label,
-        ) {
-            actions.push(UiAction::PersistSettings);
-            ui.ctx().request_repaint();
-        }
+        egui::ComboBox::from_id_salt("layout-new-tab-background")
+            .selected_text(chrome.settings.new_tab_background.label())
+            .show_glass(ui, |ui| {
+                let photo = chrome
+                    .wallpaper
+                    .texture
+                    .is_some()
+                    .then_some(NewTabBackground::CustomImage);
+                for choice in NewTabBackground::ALL.into_iter().chain(photo) {
+                    if ui
+                        .selectable_value(
+                            &mut chrome.settings.new_tab_background,
+                            choice,
+                            choice.label(),
+                        )
+                        .changed()
+                    {
+                        actions.push(UiAction::PersistSettings);
+                    }
+                }
+            });
     });
 
     settings_section(ui, palette, tr("settings-trackpad"), |ui| {

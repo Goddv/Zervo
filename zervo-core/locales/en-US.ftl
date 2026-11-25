@@ -754,3 +754,30 @@ clock-city-shanghai = Shanghai
 clock-city-tokyo = Tokyo
 clock-city-sydney = Sydney
 clock-city-auckland = Auckland
+
+# Browsing data
+browsing-data-title = Browsing data
+browsing-data-description = Clear cookies or local and session storage saved by websites.
+browsing-data-cookies-and-storage = Cookies and website storage
+browsing-data-all-cookies = All cookies
+browsing-data-session-cookies = Session cookies
+browsing-data-clear = Clear browsing data…
+browsing-data-confirm = This may sign you out of websites and remove their stored preferences.
+browsing-data-confirm-button = Clear Data
+browsing-data-cleared = The selected browsing data was cleared.
+
+# New Tab customization
+newtab-customize-page = Customize New Tab
+newtab-customize-widgets = Show dashboard widgets
+newtab-wallpaper-aurora = Aurora
+newtab-wallpaper-tidelight = Tidelight
+newtab-wallpaper-afterglow = Afterglow
+newtab-wallpaper-photo = Custom image
+newtab-wallpaper-choose-file = Choose Image…
+newtab-wallpaper-generate = Create with Image Playground…
+newtab-playground-unavailable = Image Playground is unavailable on this Mac.
+newtab-wallpaper-loading = Preparing wallpaper…
+newtab-wallpaper-animate = Animate wallpapers
+newtab-wallpaper-read-error = Heion couldn’t read this image.
+newtab-wallpaper-format-error = Choose a PNG, JPEG, or WebP image under 32 MB.
+newtab-wallpaper-save-error = Heion couldn’t save the wallpaper.

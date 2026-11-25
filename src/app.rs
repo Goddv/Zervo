@@ -5,7 +5,7 @@
 //! composite around the web content; tab switching is show/focus + hide/blur.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use euclid::Scale;
@@ -74,7 +74,7 @@ pub struct AppState {
     /// Whether the chrome (and therefore the page prefers-color-scheme) is dark.
     pub dark_theme: Cell<bool>,
     /// Set when any tab's favicon changed; the UI reloads textures on redraw.
-    pub favicons_dirty: Cell<bool>,
+    pub favicons_dirty: RefCell<HashSet<servo::WebViewId>>,
     /// ⌘Q was pressed; the event loop exits once the current event is done.
     pub quit_requested: Cell<bool>,
     /// Page-initiated UI (dialogs, pickers, context menus) awaiting an answer.
@@ -221,16 +221,25 @@ impl AppState {
             self.activate_tab(tab_id);
             return;
         }
+        let address = url.to_string();
         let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
             .url(url)
             .hidpi_scale_factor(self.hidpi_scale_factor())
             .delegate(self.clone())
             .build();
         webview.notify_theme_change(engine_theme(self.dark_theme.get()));
-        if let Some(tab) = self.browser.borrow_mut().tab_mut(tab_id) {
-            tab.webview = Some(webview);
-            // A tab with an engine view is a web tab, whatever it was before.
-            tab.kind = crate::state::TabKind::Web;
+        {
+            let mut browser = self.browser.borrow_mut();
+            if let Some(tab) = browser.tab_mut(tab_id) {
+                tab.webview = Some(webview);
+                // A tab with an engine view is a web tab, whatever it was before.
+                tab.kind = crate::state::TabKind::Web;
+                if tab.url != address {
+                    tab.url = address;
+                    tab.title = tab.url.clone();
+                }
+                browser.mark_session_dirty();
+            }
         }
         self.activate_tab(tab_id);
     }
@@ -245,7 +254,7 @@ impl AppState {
         self.library.borrow_mut().save();
         {
             let mut browser = self.browser.borrow_mut();
-            browser.save_spaces();
+            browser.save_session();
             for workspace in &mut browser.workspaces {
                 for tab in &mut workspace.tabs {
                     tab.webview = None;
@@ -302,7 +311,6 @@ impl AppState {
             let Some(tab) = browser.tab_mut(tab_id) else {
                 return;
             };
-            let was_foldered = tab.folder.is_some();
             let closing = if let Some(pin) = &tab.pin_anchor {
                 tab.url.clone_from(&pin.url);
                 tab.title.clone_from(&pin.title);
@@ -320,11 +328,7 @@ impl AppState {
                 }
                 webview
             } else {
-                let webview = browser.remove_tab(tab_id);
-                if was_foldered {
-                    browser.save_spaces();
-                }
-                webview
+                browser.remove_tab(tab_id)
             };
             let next = was_active.then(|| {
                 browser.active_tab.unwrap_or_else(|| {
@@ -332,6 +336,7 @@ impl AppState {
                     browser.add_zervo_page(workspace)
                 })
             });
+            browser.mark_session_dirty();
             (closing, next)
         };
         // Release the engine view after leaving the model borrow.
@@ -391,22 +396,31 @@ impl AppState {
         }
 
         let mut browser = self.browser.borrow_mut();
+        let mut changed = false;
         for workspace in &mut browser.workspaces {
             for tab in &mut workspace.tabs {
                 let Some(webview) = tab.webview.clone() else {
                     continue;
                 };
-                if let Some(url) = webview.url() {
+                if let Some(url) = webview.url()
+                    && url.as_str() != tab.url
+                {
                     tab.url = url.to_string();
+                    changed = true;
                 }
-                tab.title = webview
-                    .page_title()
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or_else(|| tab.url.clone());
+                if let Some(title) = webview.page_title().filter(|title| !title.is_empty())
+                    && title != tab.title
+                {
+                    tab.title = title;
+                    changed = true;
+                }
                 tab.loading = webview.load_status() != LoadStatus::Complete;
                 tab.can_go_back = webview.can_go_back();
                 tab.can_go_forward = webview.can_go_forward();
             }
+        }
+        if changed {
+            browser.mark_session_dirty();
         }
         browser.address_bar = browser
             .active_tab()
@@ -622,8 +636,12 @@ impl servo::WebViewDelegate for AppState {
             .borrow_mut()
             .record(url.as_str(), &title, now());
         let mut browser = self.browser.borrow_mut();
-        if let Some(tab) = browser.tab_for_webview_mut(&webview) {
+        if let Some(tab) = browser.tab_for_webview_mut(&webview)
+            && tab.url != url.as_str()
+        {
             tab.url = url.to_string();
+            tab.title = tab.url.clone();
+            browser.mark_session_dirty();
         }
         drop(browser);
         self.window.request_redraw();
@@ -775,8 +793,8 @@ impl servo::WebViewDelegate for AppState {
         self.window.request_redraw();
     }
 
-    fn notify_favicon_changed(&self, _webview: WebView) {
-        self.favicons_dirty.set(true);
+    fn notify_favicon_changed(&self, webview: WebView) {
+        self.favicons_dirty.borrow_mut().insert(webview.id());
         self.window.request_redraw();
     }
 
@@ -908,6 +926,7 @@ impl servo::WebViewDelegate for AppState {
         tab.loading = false;
         tab.can_go_back = false;
         tab.can_go_forward = false;
+        browser.mark_session_dirty();
         drop(browser);
         self.window.request_redraw();
     }

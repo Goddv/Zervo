@@ -542,36 +542,18 @@ pub fn over_menu(ctx: &egui::Context) -> bool {
         .is_some_and(|(rect, pos)| rect.contains(pos))
 }
 
-/// A floating list, used for every menu the chrome draws itself: the shelf's
-/// two, and the new tab page's.
-/// One line of a floating list: something to pick, or a heading over the next
-/// few things to pick.
-pub enum Row<T> {
-    Heading(&'static str),
-    Item(String, T, bool),
-}
-
-impl<T> Row<T> {
-    /// Headings are shorter than items — they carry small type and no hit
-    /// target, so giving them a whole row leaves a hole in the list.
-    fn height(&self) -> f32 {
-        match self {
-            Row::Heading(_) => 22.0,
-            Row::Item(..) => 28.0,
-        }
-    }
-}
-
-pub fn menu<T: Copy>(
+/// The shelf's floating size menu.
+fn menu<T: Copy>(
     root: &mut Ui,
     palette: &Palette,
     id: &str,
     anchor: Rect,
     width: f32,
-    rows: &[Row<T>],
+    rows: &[(String, T, bool)],
 ) -> Option<T> {
+    const ROW_HEIGHT: f32 = 28.0;
     let ctx = root.ctx().clone();
-    let height: f32 = rows.iter().map(Row::height).sum();
+    let height = rows.len() as f32 * ROW_HEIGHT;
     let rect = crate::ui::anchored_popup(
         anchor,
         vec2(width, height + 12.0),
@@ -604,60 +586,43 @@ pub fn menu<T: Copy>(
             }
             crate::overlay_glass::scroll_body(ui, rect.shrink(6.0), |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                for entry in rows {
+                for (label, value, current) in rows {
                     let (row, response) = ui.allocate_exact_size(
-                        vec2(ui.available_width(), entry.height()),
-                        if matches!(entry, Row::Heading(_)) {
-                            Sense::hover()
+                        vec2(ui.available_width(), ROW_HEIGHT),
+                        Sense::click(),
+                    );
+                    if response.hovered() {
+                        ui.painter().rect_filled(
+                            row,
+                            CornerRadius::same(palette.radius(crate::theme::Tier::Control)),
+                            palette.surface_hover,
+                        );
+                    }
+                    crate::overlay_glass::row_label(
+                        ui,
+                        row.with_min_x(row.left() + 8.0)
+                            .with_max_x(row.right() - 22.0),
+                        label,
+                        FontId::proportional(13.0),
+                        if *current {
+                            palette.accent
                         } else {
-                            Sense::click()
+                            palette.text
                         },
                     );
-                    match entry {
-                        Row::Heading(label) => {
-                            ui.painter().text(
-                                pos2(row.min.x + 8.0, row.center().y + 2.0),
-                                Align2::LEFT_CENTER,
-                                label.to_uppercase(),
-                                FontId::proportional(10.0),
-                                palette.text_muted,
-                            );
-                        },
-                        Row::Item(label, value, current) => {
-                            if response.hovered() {
-                                ui.painter().rect_filled(
-                                    row,
-                                    CornerRadius::same(palette.radius(crate::theme::Tier::Control)),
-                                    palette.surface_hover,
-                                );
-                            }
-                            crate::overlay_glass::row_label(
-                                ui,
-                                row.with_min_x(row.left() + 8.0)
-                                    .with_max_x(row.right() - 22.0),
-                                label,
-                                FontId::proportional(13.0),
-                                if *current {
-                                    palette.accent
-                                } else {
-                                    palette.text
-                                },
-                            );
-                            if *current {
-                                icons::draw_icon(
-                                    ui.painter(),
-                                    Rect::from_center_size(
-                                        pos2(row.max.x - 12.0, row.center().y),
-                                        vec2(11.0, 11.0),
-                                    ),
-                                    Icon::Check,
-                                    palette.accent,
-                                );
-                            }
-                            if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                                chosen = Some(*value);
-                            }
-                        },
+                    if *current {
+                        icons::draw_icon(
+                            ui.painter(),
+                            Rect::from_center_size(
+                                pos2(row.max.x - 12.0, row.center().y),
+                                vec2(11.0, 11.0),
+                            ),
+                            Icon::Check,
+                            palette.accent,
+                        );
+                    }
+                    if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        chosen = Some(*value);
                     }
                 }
             });
@@ -674,12 +639,12 @@ fn draw_size_menu(
     current: Size,
     max: u8,
 ) -> Option<Size> {
-    let rows: Vec<Row<Size>> = Size::CHOICES
+    let rows: Vec<_> = Size::CHOICES
         .iter()
         .take(usize::from(max))
         .enumerate()
         .map(|(index, size)| {
-            Row::Item(
+            (
                 crate::l10n::message("widgets-row-height", [("count", (index + 1).into())]),
                 *size,
                 *size == current,

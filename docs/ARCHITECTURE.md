@@ -64,11 +64,16 @@ Two consequences worth knowing:
 
 ## Tabs
 
-One live `WebView` per tab, all sharing the window's offscreen context.
-Switching is `show()` + `focus()` on the target and `hide()` + `blur()` +
-`set_throttled(true)` on the rest; hidden views drop out of WebRender's display
-list, so only the active tab costs anything to paint. A `WebView` is an
-`Rc` handle — dropping the last one closes the tab.
+The browser writes the chrome session to `spaces.json` after changes. It saves
+Spaces, tab order and URLs, a selection per Space, pins, and folder membership.
+The loader reads profiles that saved only pins and folders. The active web tab
+gets a `WebView` at launch. Other restored tabs get one the first time they
+are selected.
+
+Loaded tabs share the window’s offscreen context. Switching shows and focuses
+the selected view and hides the others. The last reference to a view closes it.
+`favicons.rs` stores small thumbnails keyed by HTTP origin. History and
+Favourites read them from disk when a visible row needs an icon.
 
 Internal pages — `zervo://settings`, `zervo://newtab`, `zervo://history`,
 `zervo://downloads`, and the four in `trouble.rs` — are tabs with no `WebView`
@@ -157,9 +162,14 @@ match the chrome beside it exactly. Both are described in
 
 ## The new tab page
 
-`newtab.rs` draws a native dashboard over Grid, Frosted, or Liquid Glass.
-The panels read history, pinned tabs, and Spaces from existing browser state.
+`newtab.rs` draws the native search capsule, optional dashboard, and wallpaper
+picker. The dashboard reads the clock, history, pinned tabs, and Spaces locally.
 The checklist persists in the profile alongside history and favourites.
+
+`newtab_wallpaper.rs` draws the procedural gradients and prepares custom images
+on a worker before uploading a texture. Imported images are resized and stored
+inside the profile. The Apple Silicon bundle loads the Swift Image Playground
+bridge only when the framework is available.
 Clicking the search capsule sends its bounds with `UiAction::OpenCommandFrom`.
 `ui/command.rs` uses those bounds to animate the search field into place and
 keeps the results scrollable when the window is short.

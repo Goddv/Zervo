@@ -27,15 +27,6 @@ people do not write it twice.
   it died reading `GL_VERSION` from a context surfman's WGL backend never made
   current — and 0.4.1 moves it to ANGLE; that fix was made from a crash log and
   has not been watched.
-- **Session restore.** Workspaces and tabs written out and read back at launch.
-  Pure chrome work, no engine involvement, and the most-missed thing after a
-  crash. `state.rs` already holds everything that needs serialising.
-- **Clearing browsing data.** Cookies persist now and there is no way to get rid
-  of them. `Servo::site_data_manager` has `clear_cookies`,
-  `clear_session_cookies` and `clear_site_data`; Settings needs to call them.
-- **A favicon store on disk.** Icons are fetched per live webview and kept in
-  memory, so history and favourites show initials instead. One small cache would
-  fix both lists.
 
 ## Soon
 

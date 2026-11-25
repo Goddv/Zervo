@@ -140,25 +140,49 @@ pub enum NewTabBackground {
     #[serde(alias = "Plain")]
     Frosted,
     LiquidGlass,
+    Aurora,
+    Tidelight,
+    Afterglow,
+    CustomImage,
     #[serde(other)]
     Grid,
 }
 
 impl NewTabBackground {
-    pub const ALL: [Self; 3] = [Self::Grid, Self::Frosted, Self::LiquidGlass];
+    pub const ALL: [Self; 6] = [
+        Self::Grid,
+        Self::Frosted,
+        Self::LiquidGlass,
+        Self::Aurora,
+        Self::Tidelight,
+        Self::Afterglow,
+    ];
+
+    pub fn animated(self) -> bool {
+        matches!(self, Self::Aurora | Self::Tidelight | Self::Afterglow)
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Grid => tr("options-grid"),
             Self::Frosted => tr("theme-frosted"),
             Self::LiquidGlass => tr("common-liquid-glass"),
+            Self::Aurora => tr("newtab-wallpaper-aurora"),
+            Self::Tidelight => tr("newtab-wallpaper-tidelight"),
+            Self::Afterglow => tr("newtab-wallpaper-afterglow"),
+            Self::CustomImage => tr("newtab-wallpaper-photo"),
         }
     }
 
     pub fn material(self) -> Translucency {
         match self {
             Self::Frosted => Translucency::Frosted,
-            Self::Grid | Self::LiquidGlass => Translucency::LiquidGlass,
+            Self::Grid
+            | Self::LiquidGlass
+            | Self::Aurora
+            | Self::Tidelight
+            | Self::Afterglow
+            | Self::CustomImage => Translucency::LiquidGlass,
         }
     }
 }
@@ -180,6 +204,8 @@ pub struct Settings {
     pub search_engine: SearchEngine,
     pub new_tab_page: NewTabPage,
     pub new_tab_background: NewTabBackground,
+    pub new_tab_animate_background: bool,
+    pub new_tab_show_widgets: bool,
     /// Show tab close buttons always, instead of only on hover.
     pub always_show_tab_close: bool,
     pub show_forward_button: bool,
@@ -332,6 +358,8 @@ impl Default for Settings {
             search_engine: SearchEngine::DuckDuckGo,
             new_tab_page: NewTabPage::ZervoPage,
             new_tab_background: NewTabBackground::Grid,
+            new_tab_animate_background: true,
+            new_tab_show_widgets: true,
             always_show_tab_close: false,
             show_forward_button: true,
             show_reload_button: true,

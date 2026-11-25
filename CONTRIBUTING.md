@@ -56,11 +56,6 @@ from. The easiest starts on it:
 
 - **Translate one part of the interface.** A partial Fluent catalogue is a
   valid contribution, and untranslated messages remain in English.
-- Session restore (workspaces and tabs across launches).
-- Clearing cookies and site data from Settings — the engine calls exist.
-- A favicon cache on disk, so history and favourites show icons.
-- The link target on hover, in the usual bottom-left overlay.
-- Tab drag-to-reorder, and dragging between workspaces.
 - A new widget for the shelf: `dashboard.rs` takes any grid-placed widget.
 
 ## Engine bugs

@@ -31,7 +31,7 @@ sidebar-new-space-name = Espace { $number }
 Work down the section headings in [the English catalogue](../zervo-core/locales/en-US.ftl).
 Start with shared controls, setup, Settings, and the command bar. Continue
 with New Tab, History, Downloads, site prompts, error pages, and software
-updates. Settings and New Tab share the same city and calendar labels. A
+updates. New Tab also has labels for wallpaper selection and the dashboard. A
 language can give each site permission prompt its own wording and word order.
 
 Heion supplies the copy on its Updates page and in its own update reminders.

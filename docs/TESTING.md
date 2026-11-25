@@ -52,8 +52,15 @@ engine bump or a chrome change, walk this list.
 
 ## New Tab
 
-- [ ] Grid is the initial backdrop. Switch to Frosted and Liquid Glass under
-      Settings → Layout, then reopen New Tab and check that the choice persists.
+- [ ] Grid is the initial backdrop. Open Customize New Tab from the sliders in
+      the top-right corner and switch among all six presets. Reopen New Tab
+      and verify the selected wallpaper persists.
+- [ ] Import a local image. Remove the source file and verify the saved wallpaper
+      still loads on restart. Invalid images leave the last wallpaper intact.
+- [ ] On a Mac with Image Playground available, generate a wallpaper and apply
+      it. Cancel a second generation and verify the first wallpaper stays.
+- [ ] Turn off Animate wallpapers and enable system Reduce Motion separately.
+      Each keeps the animated presets still. Toggle the dashboard widgets.
 - [ ] Click the centered search pill. It moves into the command bar and the
       search field accepts typing immediately. Escape returns to the pill.
 - [ ] At normal window height, all seven actions are visible. At minimum
@@ -64,6 +71,19 @@ engine bump or a chrome change, walk this list.
       and a recent page from their cards.
 - [ ] Add, complete, and remove checklist items. Reopen the browser and check
       that the changes persist.
+
+## Sessions and browsing data
+
+- [ ] Open tabs in two Spaces, including a pin, a collapsed folder, and an
+      internal tab. Select a tab in each Space. Quit and relaunch, then repeat
+      after terminating a disposable instance. Check order, folder state, and
+      both selections. Launch with an explicit URL and check it opens beside
+      the restored tabs.
+- [ ] In a disposable profile, visit a page that sets both kinds of cookie,
+      local storage, and session storage. Clear session cookies alone, then
+      clear all cookies and website storage. Reload the page after each step.
+- [ ] Visit and favourite a site with a favicon. Restart and open History and
+      Favourites before opening the site. Both show the saved icon.
 
 ## The chrome's own animations
 

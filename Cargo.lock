@@ -11848,7 +11848,7 @@ dependencies = [
 
 [[package]]
 name = "zervo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cgl",
  "dirs",
@@ -11860,6 +11860,7 @@ dependencies = [
  "image",
  "jiff 1.0.2",
  "keyboard-types",
+ "libloading",
  "log",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -11870,6 +11871,7 @@ dependencies = [
  "serde",
  "serde_json",
  "servo",
+ "sha2 0.10.9",
  "url",
  "webpki-roots",
  "winit",
@@ -11878,7 +11880,7 @@ dependencies = [
 
 [[package]]
 name = "zervo-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "egui",
  "fluent-bundle",

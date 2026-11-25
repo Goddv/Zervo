@@ -1,7 +1,9 @@
 //! Native New Tab dashboard. The browser owns search, and the profile owns
 //! the cards' data so the page needs no network requests of its own.
 
-use egui::{CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use egui::{
+    Color32, CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
+};
 
 use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
@@ -21,7 +23,13 @@ pub fn draw(
     content: Rect,
     actions: &mut Vec<UiAction>,
 ) {
-    let background = chrome.settings.new_tab_background;
+    let background = if chrome.settings.new_tab_background == NewTabBackground::CustomImage
+        && chrome.wallpaper.texture.is_none()
+    {
+        NewTabBackground::Grid
+    } else {
+        chrome.settings.new_tab_background
+    };
     let material = match background.material() {
         _ if chrome.native_glass.reduce_transparency => Translucency::Solid,
         Translucency::LiquidGlass if !chrome.native_glass.window_backdrop => Translucency::Frosted,
@@ -46,12 +54,14 @@ pub fn draw(
         .show(&mut dashboard, |ui| {
             let width = ui.available_width();
             ui.add_space(chrome.window_controls_room());
-            header(ui, &palette, width, actions);
+            header(ui, chrome, &palette, width, actions);
             ui.add_space((area.height() * 0.10).clamp(20.0, 76.0));
             search(ui, chrome, &palette, width, actions);
-            ui.add_space(22.0);
-            cards(ui, chrome, &palette, width, actions);
-            ui.add_space(10.0);
+            if chrome.settings.new_tab_show_widgets {
+                ui.add_space(22.0);
+                cards(ui, chrome, &palette, width, actions);
+                ui.add_space(10.0);
+            }
         });
 }
 
@@ -71,8 +81,27 @@ fn backdrop(
         .ctx()
         .layer_painter(egui::LayerId::background())
         .with_clip_rect(page);
-    painter.rect_filled(page, theme::content_corners(palette), ground);
-    if palette.translucency.is_translucent() {
+    let corners = theme::content_corners(palette);
+    painter.rect_filled(page, corners, ground);
+    let phase = if background.animated() {
+        crate::newtab_wallpaper::phase(
+            ui,
+            chrome.settings.new_tab_animate_background && palette.material.animation > 0.0,
+        )
+    } else {
+        0.0
+    };
+    if background.animated() || background == NewTabBackground::CustomImage {
+        crate::newtab_wallpaper::paint(
+            &painter,
+            page,
+            corners,
+            palette,
+            background,
+            chrome.wallpaper.texture.as_ref(),
+            phase,
+        );
+    } else if palette.translucency.is_translucent() {
         let strength = if palette.dark { 0.28 } else { 0.16 };
         let spread = page.width().min(page.height());
         for (x, y, index, size) in [
@@ -127,7 +156,13 @@ fn glow(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::C
     painter.add(egui::Shape::mesh(mesh));
 }
 
-fn header(ui: &mut Ui, palette: &Palette, width: f32, actions: &mut Vec<UiAction>) {
+fn header(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    palette: &Palette,
+    width: f32,
+    actions: &mut Vec<UiAction>,
+) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 40.0), Sense::hover());
     let badge = Rect::from_center_size(rect.left_center() + vec2(19.0, 0.0), vec2(38.0, 38.0));
     crate::ui::paint_application_icon(ui, badge, palette.dark);
@@ -139,19 +174,197 @@ fn header(ui: &mut Ui, palette: &Palette, width: f32, actions: &mut Vec<UiAction
         palette.text,
     );
     let settings = Rect::from_center_size(rect.right_center() - vec2(19.0, 0.0), vec2(38.0, 38.0));
-    if button(
-        ui,
-        settings,
-        "newtab_settings",
-        tr("common-settings"),
-        palette,
-    )
-    .on_hover_text(tr("common-settings"))
-    .clicked()
-    {
-        actions.push(UiAction::CustomizeChrome);
-    }
+    let label = tr("newtab-customize-page");
+    let response = button(ui, settings, "newtab_settings", label, palette).on_hover_text(label);
     draw_icon(ui, settings.center(), Icon::Sliders, palette.text);
+
+    let popup = egui::Popup::menu(&response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .gap(6.0)
+        .width((width - 20.0).min(330.0));
+    let max_height = (ui.ctx().content_rect().height() - 90.0).max(140.0);
+    overlay_glass::popup(popup, ui.ctx(), |ui| {
+        egui::ScrollArea::vertical()
+            .max_height(max_height)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                wallpaper_settings(ui, chrome, palette, label, actions)
+            });
+    });
+}
+
+fn wallpaper_settings(
+    ui: &mut Ui,
+    chrome: &mut ChromeContext,
+    palette: &Palette,
+    label: &str,
+    actions: &mut Vec<UiAction>,
+) {
+    let available = ui.available_width();
+    let columns = if available >= 265.0 { 3 } else { 2 };
+    let preview_width = (available - (columns - 1) as f32 * 8.0) / columns as f32;
+    ui.label(egui::RichText::new(label).strong().color(palette.text));
+    ui.add_space(6.0);
+    let mut chosen = chrome.settings.new_tab_background;
+    for row in NewTabBackground::ALL.chunks(columns) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for &background in row {
+                if wallpaper_preview(ui, palette, background, chosen == background, preview_width) {
+                    chosen = background;
+                }
+            }
+        });
+    }
+
+    if chrome.wallpaper.texture.is_some()
+        && ui
+            .selectable_label(
+                chosen == NewTabBackground::CustomImage,
+                NewTabBackground::CustomImage.label(),
+            )
+            .clicked()
+    {
+        chosen = NewTabBackground::CustomImage;
+    }
+    ui.add_space(4.0);
+    if ui
+        .add_enabled(
+            !chrome.wallpaper.busy,
+            egui::Button::new(
+                egui::RichText::new(tr("newtab-wallpaper-choose-file")).color(palette.text),
+            ),
+        )
+        .clicked()
+    {
+        actions.push(UiAction::ImportWallpaper);
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if chrome.wallpaper.can_generate {
+        if ui
+            .add_enabled(
+                !chrome.wallpaper.busy,
+                egui::Button::new(
+                    egui::RichText::new(tr("newtab-wallpaper-generate")).color(palette.text),
+                ),
+            )
+            .clicked()
+        {
+            actions.push(UiAction::GenerateWallpaper);
+        }
+    } else {
+        ui.label(
+            egui::RichText::new(tr("newtab-playground-unavailable"))
+                .small()
+                .color(palette.text_muted),
+        );
+    }
+    if chrome.wallpaper.busy {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(tr("newtab-wallpaper-loading"));
+        });
+    } else if let Some(error) = chrome.wallpaper.error {
+        ui.label(egui::RichText::new(error.label()).color(palette.text));
+    }
+    ui.separator();
+    let motion_changed = crate::widgets::toggle(
+        ui,
+        &mut chrome.settings.new_tab_animate_background,
+        tr("newtab-wallpaper-animate"),
+        palette,
+    );
+    let widgets_changed = crate::widgets::toggle(
+        ui,
+        &mut chrome.settings.new_tab_show_widgets,
+        tr("newtab-customize-widgets"),
+        palette,
+    );
+    if chosen != chrome.settings.new_tab_background || motion_changed || widgets_changed {
+        chrome.settings.new_tab_background = chosen;
+        actions.push(UiAction::PersistSettings);
+        ui.ctx().request_repaint();
+    }
+}
+
+fn wallpaper_preview(
+    ui: &mut Ui,
+    palette: &Palette,
+    background: NewTabBackground,
+    selected: bool,
+    width: f32,
+) -> bool {
+    let (bounds, response) = ui.allocate_exact_size(vec2(width, 68.0), Sense::click());
+    let radius = egui::CornerRadius::same(8);
+    let thumbnail = bounds.with_max_y(bounds.top() + 43.0).shrink(2.0);
+    let tint = match background {
+        NewTabBackground::Frosted => palette.surface,
+        NewTabBackground::LiquidGlass => palette.active,
+        _ => theme::page_base(palette),
+    };
+    ui.painter().rect_filled(thumbnail, radius, tint);
+    if background.animated() {
+        crate::newtab_wallpaper::paint(
+            ui.painter(),
+            thumbnail,
+            radius,
+            palette,
+            background,
+            None,
+            0.5,
+        );
+    } else if background == NewTabBackground::Grid {
+        for column in 1..10 {
+            for row in 1..4 {
+                let point = pos2(
+                    thumbnail.left() + thumbnail.width() * column as f32 / 10.0,
+                    thumbnail.top() + thumbnail.height() * row as f32 / 4.0,
+                );
+                ui.painter()
+                    .circle_filled(point, 0.75, palette.accent.gamma_multiply(0.5));
+            }
+        }
+    }
+    if selected || response.has_focus() || response.hovered() {
+        ui.painter().rect_stroke(
+            thumbnail.expand(1.0),
+            radius,
+            Stroke::new(
+                if selected { 2.0 } else { 1.0 },
+                if selected || response.has_focus() {
+                    palette.accent
+                } else {
+                    palette.border
+                },
+            ),
+            StrokeKind::Inside,
+        );
+    }
+    if selected {
+        let center = thumbnail.right_top() + vec2(-10.0, 10.0);
+        ui.painter().circle_filled(center, 7.5, palette.accent);
+        icons::draw_icon(
+            ui.painter(),
+            Rect::from_center_size(center, vec2(11.0, 11.0)),
+            Icon::Check,
+            Color32::WHITE,
+        );
+    }
+    let label = background.label();
+    text(
+        ui,
+        bounds
+            .with_min_y(thumbnail.bottom())
+            .shrink2(vec2(3.0, 0.0)),
+        label,
+        12.0,
+        palette.text,
+    );
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+    response
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text(label)
+        .clicked()
 }
 
 fn search(
@@ -377,12 +590,11 @@ fn recent(
         {
             actions.push(UiAction::Navigate(visit.url.clone()));
         }
-        draw_icon(
-            ui,
-            row.left_center() + vec2(13.0, 0.0),
-            Icon::Globe,
-            palette.text_muted,
-        );
+        let icon_rect =
+            Rect::from_center_size(row.left_center() + vec2(13.0, 0.0), vec2(15.0, 15.0));
+        if !crate::ui::paint_site_icon(ui, chrome.saved_favicons, &visit.url, icon_rect) {
+            icons::draw_icon(ui.painter(), icon_rect, Icon::Globe, palette.text_muted);
+        }
         let labels = row
             .with_min_x(row.left() + 30.0)
             .with_max_x(row.right() - 4.0);

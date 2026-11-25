@@ -57,7 +57,12 @@ this engine version reports — there is still no load-failure callback and no
 certificate hook, which is why the other four pages in `src/trouble.rs` are
 reachable by address and nothing else.
 
-Tier 0 is done. What is left is the list below.
+As of 0.1.1: Spaces and tabs restore their order and selection. History and
+Favourites reuse a bounded on-disk favicon cache. **Settings → General →
+Browsing data** clears cookies, local storage, and session storage using
+Servo’s site-data manager.
+
+The remaining gaps are below.
 
 ## Streaming video does not work
 
@@ -89,9 +94,6 @@ Each of these is a delegate method or a `WebView` call away.
   camera or microphone in the first place and the prompt will never appear for
   them. `navigator.permissions.query` and notifications do reach it. Removing
   this entry needs engine work, not embedder work.
-- **Clearing browsing data.** `Servo::site_data_manager` offers `clear_cookies`,
-  `clear_session_cookies` and `clear_site_data`, and nothing in Settings calls
-  them. Now that cookies persist, there is no way to get rid of them.
 - **Dropped files.** Dragging a file onto the window should open it.
 - **Extensions.** Servo has no extension support.
 - **`screen.availWidth`/`availHeight`** report the whole display rather than
@@ -108,11 +110,6 @@ Each of these is a delegate method or a `WebView` call away.
 - **The page's accessibility tree.** `notify_accessibility_tree_update` is a
   delegate method and is not implemented, so VoiceOver sees the chrome — which
   has its own AccessKit tree as of 0.4.0 — and nothing inside the page.
-- **Session restore.** Pure chrome work, no engine involvement: workspaces and
-  tabs written out and read back at launch.
-- **Favicons for history and favourites.** They are fetched per live webview and
-  kept in memory, so a saved page has no icon until it is open. A small on-disk
-  icon store would fix both lists at once.
 
 ## Tier 2 — needs engine work, or is genuinely expensive
 

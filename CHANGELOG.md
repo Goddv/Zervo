@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1
+
+- Customize wallpapers and choose which dashboard layout to show directly
+  from New Tab. Import PNG, JPEG, or WebP images, or create a wallpaper with
+  Image Playground on supported Macs.
+- Added Aurora, Tidelight, and Afterglow. These animated wallpapers follow
+  Reduce Motion and can also be paused in New Tab.
+- Moved the search engine selector to the left side of the search capsule.
+  The expanded address field keeps its text vertically centered.
+- Restore Spaces, tabs, pins, folders, and the last selected tab in each Space
+  after closing or restarting Heion.
+- Clear cookies, session cookies, or cookies and website storage from
+  Settings → General → Browsing data.
+- Cache favicons locally so History, Favourites, and New Tab can show website
+  icons across launches.
+
 ## 0.1.0 — Heion
 
 - Renamed the browser to Heion. The Refraction icon adapts to light and dark

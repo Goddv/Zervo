@@ -34,12 +34,14 @@ mod discrete_gpu {
 
 mod app;
 mod backdrop;
+mod browsing_data;
 mod compositor;
 mod controls;
 mod dashboard;
 #[cfg(target_os = "macos")]
 mod display_link;
 mod downloads;
+mod favicons;
 // The engine-independent half of the browser, in its own crate so that clippy
 // and the tests can run on a pull request without compiling Servo first.
 // Re-exported at the root rather than referred to by its own name, so every
@@ -55,6 +57,7 @@ mod library;
 mod macos_appearance;
 mod morphicons;
 mod newtab;
+mod newtab_wallpaper;
 mod notifications;
 mod overlay_glass;
 mod passwords;
@@ -62,6 +65,8 @@ mod phosphor;
 mod transition;
 mod trouble;
 mod updates;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod wallpaper_playground;
 // macOS has its own paths inline, using the AppKit bindings it already has.
 #[cfg(not(target_os = "macos"))]
 mod platform;
@@ -202,6 +207,8 @@ struct RunningApp {
     space: usize,
     /// Favicon textures by tab, rebuilt when the engine reports changes.
     favicons: HashMap<TabId, egui::TextureHandle>,
+    saved_favicons: favicons::Store,
+    wallpaper: newtab_wallpaper::State,
     /// Whether the settings page currently covers the content area.
     settings_open: bool,
     modifiers: ModifiersState,
@@ -584,7 +591,7 @@ impl ApplicationHandler<WakerEvent> for App {
             pending_closes: RefCell::new(Vec::new()),
             pending_keyboard_events: RefCell::new(HashMap::new()),
             dark_theme: Cell::new(resolved_dark),
-            favicons_dirty: Cell::new(false),
+            favicons_dirty: RefCell::default(),
             quit_requested: Cell::new(false),
             controls: RefCell::new(controls::Controls::default()),
             library: RefCell::new(library::Library::load()),
@@ -632,6 +639,14 @@ impl ApplicationHandler<WakerEvent> for App {
             .unwrap_or_default();
         #[cfg(not(target_os = "macos"))]
         let update_snapshot = updates::Snapshot::default();
+        let mut wallpaper = newtab_wallpaper::State::default();
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            wallpaper.can_generate = wallpaper_playground::available();
+        }
+        if let Some(path) = newtab_wallpaper::saved_path().filter(|path| path.is_file()) {
+            wallpaper.load(newtab_wallpaper::Input::Restore(path), waker.0.clone());
+        }
         *self = Self::Running(RunningApp {
             state,
             egui_glow,
@@ -643,6 +658,8 @@ impl ApplicationHandler<WakerEvent> for App {
             updater,
             update_snapshot,
             favicons: HashMap::new(),
+            saved_favicons: favicons::Store::default(),
+            wallpaper,
             settings_open: false,
             modifiers: ModifiersState::default(),
             cursor: None,
@@ -742,6 +759,34 @@ impl ApplicationHandler<WakerEvent> for App {
                     }
                     app.state.window.request_redraw();
                 }
+            },
+            WakerEvent::WallpaperLoaded { result, select } => {
+                app.wallpaper.busy = false;
+                match result {
+                    Ok(image) => {
+                        app.wallpaper.upload(&app.egui_glow.egui_ctx, image);
+                        if select {
+                            app.settings.new_tab_background =
+                                settings::NewTabBackground::CustomImage;
+                            app.settings.save();
+                        }
+                    },
+                    Err(error) => app.wallpaper.error = Some(error),
+                }
+                app.state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            WakerEvent::WallpaperGenerated(result) => {
+                app.wallpaper.busy = false;
+                match result {
+                    Ok(Some(bytes)) => app.wallpaper.load(
+                        newtab_wallpaper::Input::Generated(bytes),
+                        app.animation_waker.0.clone(),
+                    ),
+                    Ok(None) => {},
+                    Err(error) => app.wallpaper.error = Some(error),
+                }
+                app.state.window.request_redraw();
             },
             WakerEvent::AnimationFrame => {
                 app.animation_pending = false;
@@ -1313,8 +1358,9 @@ impl RunningApp {
             }
         }
 
-        if state.favicons_dirty.take() {
-            self.refresh_favicons();
+        let changed_icons = state.favicons_dirty.take();
+        if !changed_icons.is_empty() {
+            self.refresh_favicons(changed_icons);
         }
 
         // Read once, before anything borrows the browser: the accent follows
@@ -1495,6 +1541,8 @@ impl RunningApp {
                     ..Default::default()
                 },
                 favicons: &self.favicons,
+                saved_favicons: &self.saved_favicons,
+                wallpaper: &self.wallpaper,
                 downloads: &self.downloads,
                 updates: &self.update_snapshot,
                 capture: capture.clone(),
@@ -1766,6 +1814,9 @@ impl RunningApp {
                         .map_or(deadline, |at| at.min(deadline)),
                 );
             }
+        }
+        if !state.browser.borrow_mut().save_session() {
+            self.repaint_at.request(std::time::Duration::from_secs(1));
         }
         if state.library.borrow().needs_save()
             && self.library_saved_at.elapsed() > std::time::Duration::from_secs(10)
@@ -2231,6 +2282,29 @@ impl RunningApp {
                 };
                 state.window.request_redraw();
             },
+            UiAction::ImportWallpaper => {
+                if !self.wallpaper.busy
+                    && let Some(path) = state.pick_file()
+                {
+                    self.wallpaper.load(
+                        newtab_wallpaper::Input::File(path),
+                        self.animation_waker.0.clone(),
+                    );
+                }
+                state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            UiAction::GenerateWallpaper => {
+                if !self.wallpaper.busy {
+                    self.wallpaper.error = None;
+                    self.wallpaper.busy =
+                        wallpaper_playground::open(&state.window, self.animation_waker.0.clone());
+                    if !self.wallpaper.busy {
+                        self.wallpaper.error = Some(newtab_wallpaper::Error::Unavailable);
+                    }
+                }
+                state.window.request_redraw();
+            },
             UiAction::ImportPasswords => {
                 let picked = state.pick_file();
                 let notice = match picked {
@@ -2323,8 +2397,16 @@ impl RunningApp {
                 state.library.borrow_mut().forget(index);
                 state.window.request_redraw();
             },
+            UiAction::ClearBrowsingData(selection) => {
+                selection.clear(state.servo.site_data_manager());
+                state.browser.borrow_mut().browsing_data_cleared = true;
+                state.window.request_redraw();
+            },
             UiAction::ClearHistory => {
-                state.library.borrow_mut().clear_history();
+                let mut library = state.library.borrow_mut();
+                library.clear_history();
+                library.save();
+                self.saved_favicons.clear();
                 state.window.request_redraw();
             },
             UiAction::OpenDownloads => {
@@ -2436,7 +2518,10 @@ impl RunningApp {
                 *state.status_text.borrow_mut() = Some(notice);
                 state.window.request_redraw();
             },
-            UiAction::CloseTab(tab_id) => state.close_tab(tab_id),
+            UiAction::CloseTab(tab_id) => {
+                self.favicons.remove(&tab_id);
+                state.close_tab(tab_id);
+            },
             UiAction::TogglePin(tab_id) => {
                 let mut browser = state.browser.borrow_mut();
                 if let Some(tab) = browser
@@ -2448,7 +2533,7 @@ impl RunningApp {
                         url: tab.url.clone(),
                         title: tab.title.clone(),
                     });
-                    browser.save_spaces();
+                    browser.mark_session_dirty();
                 }
                 state.window.request_redraw();
             },
@@ -2464,7 +2549,6 @@ impl RunningApp {
                     .move_tab(tab, workspace, index, folder);
                 if moved {
                     self.apply_action(UiAction::SelectTab(tab));
-                    state.browser.borrow().save_spaces();
                 }
             },
             UiAction::GroupTabs { onto, dragged } => {
@@ -2481,7 +2565,6 @@ impl RunningApp {
                 };
                 if grouped {
                     self.apply_action(UiAction::SelectTab(dragged));
-                    state.browser.borrow().save_spaces();
                     state.window.request_redraw();
                 }
             },
@@ -2501,7 +2584,6 @@ impl RunningApp {
                 }
                 browser.workspace_edit = None;
                 browser.folder_edit = Some((folder, name));
-                browser.save_spaces();
                 state.window.request_redraw();
             },
             UiAction::RenameFolder(id, name) => {
@@ -2511,7 +2593,7 @@ impl RunningApp {
                     && let Some(folder) = browser.folder_mut(id)
                 {
                     folder.name = name.to_owned();
-                    browser.save_spaces();
+                    browser.mark_session_dirty();
                     state.window.request_redraw();
                 }
             },
@@ -2519,14 +2601,14 @@ impl RunningApp {
                 let mut browser = state.browser.borrow_mut();
                 if let Some(folder) = browser.folder_mut(id) {
                     folder.collapsed = !folder.collapsed;
-                    browser.save_spaces();
+                    browser.mark_session_dirty();
                     state.window.request_redraw();
                 }
             },
             UiAction::RemoveFolder(id) => {
                 let mut browser = state.browser.borrow_mut();
                 if browser.remove_folder(id) {
-                    browser.save_spaces();
+                    browser.mark_session_dirty();
                     state.window.request_redraw();
                 }
             },
@@ -2538,7 +2620,7 @@ impl RunningApp {
                         workspace.name = name.to_owned();
                     }
                 }
-                browser.save_spaces();
+                browser.mark_session_dirty();
                 state.window.request_redraw();
             },
             UiAction::NewWorkspace => {
@@ -2642,7 +2724,6 @@ impl RunningApp {
             );
         }
         self.apply_action(UiAction::SelectTab(tab));
-        state.browser.borrow().save_spaces();
     }
 
     /// Run a bound swipe. Dispatched from the event handler rather than from a
@@ -2795,42 +2876,55 @@ impl RunningApp {
         }
     }
 
-    /// Rebuild favicon textures from the engine's cached favicon images.
-    fn refresh_favicons(&mut self) {
-        let state = self.state.clone();
-        let browser = state.browser.borrow();
-        for workspace in &browser.workspaces {
-            for tab in &workspace.tabs {
-                let Some(webview) = &tab.webview else {
-                    continue;
-                };
-                let Some(favicon) = webview.favicon() else {
-                    continue;
-                };
-                let (width, height) = (favicon.width as usize, favicon.height as usize);
-                let bytes = favicon.data();
-                if width == 0 || height == 0 || bytes.len() < width * height * 4 {
-                    continue;
-                }
-                let rgba: Vec<u8> = match favicon.format {
-                    servo::PixelFormat::RGBA8 => bytes[..width * height * 4].to_vec(),
-                    servo::PixelFormat::BGRA8 => bytes[..width * height * 4]
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .flat_map(|px| [px[2], px[1], px[0], px[3]])
-                        .collect(),
-                    _ => continue,
-                };
-                drop(favicon);
-                let image = egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba);
-                let texture = self.egui_glow.egui_ctx.load_texture(
-                    format!("favicon-{}", tab.id),
-                    image,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.favicons.insert(tab.id, texture);
+    /// Cache each favicon when Servo publishes it for a live page.
+    fn refresh_favicons(&mut self, changed: std::collections::HashSet<WebViewId>) {
+        let browser = self.state.browser.borrow();
+        self.favicons
+            .retain(|id, _| browser.tab(*id).is_some_and(|tab| tab.webview.is_some()));
+        for tab in browser.workspaces.iter().flat_map(|space| &space.tabs) {
+            let Some(webview) = &tab.webview else {
+                continue;
+            };
+            if !changed.contains(&webview.id()) {
+                continue;
             }
+            let Some(favicon) = webview.favicon() else {
+                self.favicons.remove(&tab.id);
+                continue;
+            };
+            let (width, height) = (favicon.width, favicon.height);
+            let Some(length) = width
+                .checked_mul(height)
+                .and_then(|pixels| pixels.checked_mul(4))
+            else {
+                continue;
+            };
+            if length == 0 || length > 16 * 1024 * 1024 {
+                continue;
+            }
+            let Some(bytes) = favicon.data().get(..length as usize) else {
+                continue;
+            };
+            let rgba = match favicon.format {
+                servo::PixelFormat::RGBA8 => bytes.to_vec(),
+                servo::PixelFormat::BGRA8 => bytes
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|px| [px[2], px[1], px[0], px[3]])
+                    .collect(),
+                _ => continue,
+            };
+            drop(favicon);
+            let Some(image) = favicons::thumbnail(width, height, rgba) else {
+                continue;
+            };
+            let texture = favicons::upload(&self.egui_glow.egui_ctx, &image);
+            if let Some(url) = webview.url() {
+                self.saved_favicons
+                    .remember(url.as_str(), &image, texture.clone());
+            }
+            self.favicons.insert(tab.id, texture);
         }
     }
 }
@@ -2930,6 +3024,12 @@ struct Waker(winit::event_loop::EventLoopProxy<WakerEvent>);
 enum WakerEvent {
     /// The engine has something to do; spin its event loop.
     Engine,
+    WallpaperLoaded {
+        result: Result<image::RgbaImage, newtab_wallpaper::Error>,
+        select: bool,
+    },
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    WallpaperGenerated(Result<Option<Vec<u8>>, newtab_wallpaper::Error>),
     /// The window's display is ready for the next animation frame.
     AnimationFrame,
     /// AppKit's application appearance changed.

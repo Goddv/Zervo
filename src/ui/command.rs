@@ -202,7 +202,7 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                     .font(query_font.clone())
                     .text_color(palette.text)
                     .hint_text(RichText::new(tr("command-search-placeholder")).font(query_font))
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::LEFT_CENTER)
                     .desired_width(width)
                     .min_size(vec2(0.0, field.height()))
                     .margin(Margin::symmetric(12, 11))

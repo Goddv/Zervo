@@ -18,53 +18,48 @@
 
 ---
 
-Heion (平穏) means a steady, untroubled state of peace. Heion is a macOS
-browser powered by Servo, an independent web engine written in Rust. Organise tabs with Spaces and folders in a docked sidebar or browse
-in Full Page mode with the sidebar available on hover.
+Heion (平穏) means a steady, untroubled state of peace. It is a macOS browser
+built on Servo, an independent web engine written in Rust.
 
-Existing installs keep their profiles, saved logins, and signed update channel.
+## Get Heion
 
-## What it looks like
+Download the disk image for Apple Silicon or Intel from the
+[latest release](https://github.com/Goddv/Heion/releases/latest). Existing
+updater-enabled installs can update from **Settings → About → Check for
+Updates**. Signed incremental updates keep your profile and saved logins.
+See [Installation and updates](docs/UPDATES.md).
 
-### The window
+## Browse with Spaces
 
-- **Spaces.** Each Space has its own tabs and folders. Swipe across the sidebar
-  to switch Spaces. Right-click a tab to pin it or move it. Favourites are
-  shared across Spaces.
-- **Command bar.** Press ⌘T for a new tab or ⌘L to edit the address. Search tabs,
-  favourites, and history, or start with `>` to find browser actions.
-- **Full Page.** Press ⌘S to dock or hide the sidebar. Move the pointer to the
-  left edge to reveal it temporarily.
-- **Native macOS chrome.** The sidebar, page surround, popovers, and dialogs
-  use AppKit Liquid Glass on macOS 26 and later. Heion follows the macOS glass
-  appearance and Reduce Transparency settings.
-- **Customizable chrome.** Open Settings → Layout or click the sliders in the
-  sidebar. Show or hide sections and reorder them by dragging or using the
-  arrow buttons. Toggle sidebar tools and the widget shelf, or restore the
-  sidebar defaults.
-- **Favourites and history.** The star saves a page and hovering it opens the
-  list; history is searchable and grouped by how long ago.
-- **Saved logins**, kept in the system keychain.
+- **Spaces and folders.** Give each project its own tabs. Pin pages you keep
+  coming back to, drag tabs between Spaces, or swipe the sidebar to switch.
+  Heion restores the tabs, folders, and selection in each Space when it starts.
+- **Command bar.** Press ⌘L to search or edit the address. Press ⌘T for a new
+  tab. Type `>` to find browser actions.
+- **Sidebar.** Press ⌘S to dock or hide it. In Full Page mode, reveal it by
+  moving the pointer to the left edge. **Settings → Layout** controls its
+  sections, tools, and widget shelf.
+- **Favourites and History.** Star a page to save it. Search History by
+  title or address. Both lists reuse locally cached website icons.
+- **Browsing data.** **Settings → General → Browsing data** clears cookies,
+  session cookies, or cookies and website storage. Use History to clear visits.
 
-### The new tab page
+## Make New Tab yours
 
-Click the glass search capsule to expand it into the browser command bar.
-The dashboard shows a local clock, recent pages, pinned tabs, a saved checklist,
-and Space counts. Choose Grid, Frosted, or Liquid Glass under
-**Settings → Layout → New Tab**.
+The search capsule expands into the command bar. Pick a search engine on its
+left, or use the sliders in the upper right to open **Customize New Tab**.
 
-### How it is put together
+- Choose Grid, Frosted, Liquid Glass, or one of three animated wallpapers
+  named Aurora, Tidelight, and Afterglow. Animation follows Reduce Motion and
+  can also be paused here.
+- Choose a PNG, JPEG, or WebP image, or create a wallpaper with Apple’s
+  Image Playground on a supported Apple Silicon Mac.
+- Show or hide the dashboard with its clock, recent pages, pinned tabs,
+  checklist, and Space counts.
 
-- **Portable surfaces share a material system.** Corner radii, fills, sheen,
-  shadow reach and how far glass frosts are decided in one place and reach the
-  whole application without a call site knowing a number. Surfaces have a class
-  — card, menu, input — the way an element has one in CSS.
-- **Appearance.** Choose a theme and accent, or let the active Space provide the
-  accent. New profiles start with classic Apple blue at 0.10 tint strength.
-- **Page frame.** In Sidebar mode, inset the page in a rounded card or place it
-  flush against the window edges. Outline and shadow are configurable.
-
-See [docs/THEMING.md](docs/THEMING.md) for the material system.
+**Settings → Appearance** controls the window theme, accent, and page frame.
+AppKit Liquid Glass is available on macOS 26 and later. See the
+[material guide](docs/THEMING.md).
 
 ## Building
 
@@ -87,7 +82,7 @@ components, install it explicitly:
 rustup toolchain install 1.100.0 --profile minimal --component clippy,rustfmt
 ```
 
-### Downloads
+### Build with file downloads
 
 Heion's patched Servo engine includes support for file downloads. Prepare
 the engine as described in [docs/SERVO.md](docs/SERVO.md), then enable the
@@ -115,12 +110,13 @@ See [Packaging and distribution](docs/PACKAGING.md).
 |------|------------------|
 | `src/main.rs` | winit shell, the frame pipeline, input routing, shortcuts |
 | `src/app.rs` | engine glue — owns Servo, implements `WebViewDelegate` |
-| `src/state.rs` | workspaces, tabs, chrome state |
+| `src/state.rs` | Spaces, tabs, folders, and session restore |
 | `src/ui/` | the whole chrome, drawn with egui; emits `UiAction`s |
 | `zervo-core/src/theme.rs` | palettes, accents, and the material every surface is built from |
 | `zervo-core/src/glass.rs` | the one place a surface is drawn |
 | `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
-| `src/newtab.rs` | the New Tab search pill and backdrop |
+| `src/newtab.rs`, `src/newtab_wallpaper.rs` | New Tab controls, dashboard, and wallpapers |
+| `src/favicons.rs`, `src/browsing_data.rs` | Local website icons and site-data controls |
 | `src/widgets.rs` | toggles, sliders, segmented controls |
 | `src/icons.rs`, `src/phosphor.rs` | [Phosphor][phosphor] icon rendering |
 | `src/downloads.rs` | download manager |
@@ -132,39 +128,23 @@ including how the chrome and the engine share a graphics context.
 
 ## Platform support
 
-Active builds target macOS on Apple Silicon and Intel. Native Liquid Glass
-requires macOS 26 or later. Linux and Windows builds are paused.
+Heion releases target macOS on Apple Silicon and Intel. Image Playground
+requires Apple Intelligence support and availability. Linux and Windows
+release builds are paused.
 
-## Limitations
-
-- **Servo is young.** Expect broken layouts, missing APIs, and sites that
-  refuse the user agent. This is a property of the engine, not of Heion — and
-  Heion says so where it happens rather than in this list: a page the engine
-  cannot render gets `zervo://unsupported`, which names what is missing and
-  hands the page to another browser, and a content process that falls over
-  gets `zervo://crashed` rather than a frozen picture of itself.
-- **Streaming video support varies.** Some services may fail to play.
-- **No extensions.** The engine has none, so neither does the button.
-- **Saved logins.** Use the browser's fill action to enter a saved login.
-- **No sync, no profiles.** Not yet.
-- **Palettes are not themeable.** How a surface is *built* is yours to set, and
-  so is how far the accent reaches into it — and an arrangement can be saved
-  under a name of your own. The colours the two themes start from are still
-  constants. See [docs/THEMING.md](docs/THEMING.md).
-- **Feedback.** [Open an issue](https://github.com/Goddv/Heion/issues) with
-  the macOS version, theme, and sidebar layout you were using.
-- **Unsigned builds.** See [docs/PACKAGING.md](docs/PACKAGING.md).
+Some sites may render incorrectly or fail to play streaming video because
+Servo is still implementing parts of the web platform. Extensions and sync
+are currently unavailable. For an app issue, include your macOS version,
+theme, and sidebar layout in the report. [Issue tracker](https://github.com/Goddv/Heion/issues)
 
 ## Contributing
 
-Yes please — see [CONTRIBUTING.md](CONTRIBUTING.md).
-[docs/TODO.md](docs/TODO.md) is what is being worked on next;
-[docs/PARITY.md](docs/PARITY.md) is the full list of what still stands between
-Heion and a browser you could use daily, in the order the gaps hurt, with where
-in the code each one lives. Most of it is embedder work, not engine work.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to get started, the
+[roadmap](docs/TODO.md) for planned work, and the [engine and app gaps](docs/PARITY.md)
+for the specific features still missing.
 
-If you want to improve the *engine*, contribute to [Servo][servo] directly.
-Note that Servo does not accept AI-generated contributions.
+Engine contributions go to [Servo][servo], which does not accept AI-generated
+contributions.
 
 ### Help translate Heion
 
@@ -178,9 +158,7 @@ local previewing, checks, and the pull-request checklist.
 
 - [Servo][servo] — the engine, MPL-2.0.
 - [Phosphor Icons][phosphor] — the icon set, MIT. Vendored in `assets/fonts/`.
-- [Zen Browser][zen] — the interaction design Heion's chrome is modelled on.
-  Heion shares no code with Zen; it is a separate implementation on a
-  different engine, and is not affiliated with or endorsed by it.
+- [Zen Browser][zen] — design inspiration for the sidebar and tab workflow.
 
 ## License
 
