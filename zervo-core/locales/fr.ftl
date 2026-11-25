@@ -306,7 +306,15 @@ downloads-size-terabytes = { $amount } To
 
 ## Page de nouvel onglet
 
-newtab-clock = Horloge
+newtab-clock = Heure locale
+newtab-checklist = Liste de tâches
+newtab-checklist-empty = Aucune tâche
+newtab-add-task = Ajouter une tâche
+newtab-delete-task = Supprimer la tâche
+newtab-pinned-empty = Épinglez des onglets pour les retrouver ici.
+newtab-workspace-pulse = Aperçu des espaces
+newtab-stat-tabs = Onglets
+newtab-stat-pinned = Épinglés
 newtab-quick-links = Raccourcis
 newtab-recent = Activité récente
 newtab-note = Note

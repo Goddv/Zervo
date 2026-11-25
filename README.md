@@ -48,8 +48,10 @@ Existing installs keep their profiles, saved logins, and signed update channel.
 
 ### The new tab page
 
-Click the centered search pill to expand it into the browser command bar.
-Choose Grid, Frosted, or Liquid Glass under **Settings → Layout → New Tab**.
+Click the glass search capsule to expand it into the browser command bar.
+The dashboard shows a local clock, recent pages, pinned tabs, a saved checklist,
+and Space counts. Choose Grid, Frosted, or Liquid Glass under
+**Settings → Layout → New Tab**.
 
 ### How it is put together
 

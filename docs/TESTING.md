@@ -58,7 +58,12 @@ engine bump or a chrome change, walk this list.
       search field accepts typing immediately. Escape returns to the pill.
 - [ ] At normal window height, all seven actions are visible. At minimum
       height, scroll the list and use the arrow keys to reach the last action.
-- [ ] Check the search pill and app icon in light and dark modes.
+- [ ] Check the dashboard and app icon in light and dark modes. Resize the
+      window and scroll to reach all five cards.
+- [ ] Choose a search engine, then search from the capsule. Open a pinned tab
+      and a recent page from their cards.
+- [ ] Add, complete, and remove checklist items. Reopen the browser and check
+      that the changes persist.
 
 ## The chrome's own animations
 

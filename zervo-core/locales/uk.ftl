@@ -308,7 +308,15 @@ downloads-size-terabytes = { $amount } ТБ
 
 ## Сторінка нової вкладки
 
-newtab-clock = Годинник
+newtab-clock = Місцевий час
+newtab-checklist = Список завдань
+newtab-checklist-empty = Завдань поки немає
+newtab-add-task = Додати завдання
+newtab-delete-task = Видалити завдання
+newtab-pinned-empty = Закріплені вкладки з’являться тут.
+newtab-workspace-pulse = Огляд просторів
+newtab-stat-tabs = Вкладки
+newtab-stat-pinned = Закріплено
 newtab-quick-links = Швидкі посилання
 newtab-recent = Нещодавнє
 newtab-note = Нотатка

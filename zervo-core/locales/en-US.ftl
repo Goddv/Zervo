@@ -306,7 +306,15 @@ downloads-size-terabytes = { $amount } TB
 
 ## New tab page
 
-newtab-clock = Clock
+newtab-clock = Local time
+newtab-checklist = Checklist
+newtab-checklist-empty = No tasks yet
+newtab-add-task = Add task
+newtab-delete-task = Delete task
+newtab-pinned-empty = Pin tabs to keep them here.
+newtab-workspace-pulse = Workspace pulse
+newtab-stat-tabs = Tabs
+newtab-stat-pinned = Pinned
 newtab-quick-links = Quick links
 newtab-recent = Recent
 newtab-note = Note

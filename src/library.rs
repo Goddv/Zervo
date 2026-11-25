@@ -298,6 +298,30 @@ impl Library {
         }
     }
 
+    pub fn add_task(&mut self, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() {
+            return false;
+        }
+        self.tasks.push(Task {
+            text: text.to_owned(),
+            done: false,
+        });
+        self.dirty = true;
+        true
+    }
+
+    pub fn edit_task(&mut self, index: usize, remove: bool) {
+        if let Some(task) = self.tasks.get_mut(index) {
+            if remove {
+                self.tasks.remove(index);
+            } else {
+                task.done = !task.done;
+            }
+            self.dirty = true;
+        }
+    }
+
     pub fn remove_favourite(&mut self, url: &str) {
         self.favourites.retain(|entry| entry.url != url);
         self.dirty = true;

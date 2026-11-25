@@ -157,8 +157,10 @@ match the chrome beside it exactly. Both are described in
 
 ## The new tab page
 
-`newtab.rs` draws a centered search pill over Grid, Frosted, or Liquid Glass.
-Clicking the pill sends its bounds with `UiAction::OpenCommandFrom`.
+`newtab.rs` draws a native dashboard over Grid, Frosted, or Liquid Glass.
+The panels read history, pinned tabs, and Spaces from existing browser state.
+The checklist persists in the profile alongside history and favourites.
+Clicking the search capsule sends its bounds with `UiAction::OpenCommandFrom`.
 `ui/command.rs` uses those bounds to animate the search field into place and
 keeps the results scrollable when the window is short.
 

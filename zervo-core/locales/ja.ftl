@@ -161,7 +161,15 @@ chrome-notification-count = { $count } 件の通知
 
 ## 新しいタブ
 
-newtab-clock = 時計
+newtab-clock = 現地時刻
+newtab-checklist = チェックリスト
+newtab-checklist-empty = タスクはありません
+newtab-add-task = タスクを追加
+newtab-delete-task = タスクを削除
+newtab-pinned-empty = ピン留めしたタブがここに表示されます。
+newtab-workspace-pulse = スペースの概要
+newtab-stat-tabs = タブ
+newtab-stat-pinned = ピン留め
 newtab-quick-links = クイックリンク
 newtab-recent = 最近の履歴
 newtab-note = メモ
