@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Zervo
+Name=Heion
 GenericName=Web Browser
 Comment=A sidebar-first browser built on the Servo engine
 Exec=zervo %u

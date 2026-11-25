@@ -774,7 +774,7 @@ impl Material {
     /// only where an arrangement asks it to, and asking is what `Candy` is
     /// for.
     pub const ZERVO: Material = Material {
-        name: "Zervo",
+        name: crate::APP_NAME,
         fill: 0.55,
         fill_strength: 0.4,
         translucency: true,
@@ -859,7 +859,7 @@ impl Preset {
 
     pub fn label(self) -> &'static str {
         match self {
-            Preset::Zervo => "Zervo",
+            Preset::Zervo => crate::APP_NAME,
             Preset::Candy => tr("theme-candy"),
             Preset::Flat => tr("theme-flat"),
             Preset::LiquidGlass => tr("common-liquid-glass"),

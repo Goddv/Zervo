@@ -199,6 +199,7 @@ pub enum UiAction {
 #[derive(Default)]
 pub struct NativeGlass {
     pub vibrancy_available: bool,
+    pub reduce_transparency: bool,
     pub window_backdrop: bool,
     pub sidebar: Option<Rect>,
     pub address: Option<(Rect, f32)>,
@@ -383,7 +384,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         && chrome.palette.appearance.seam.chrome_floats()
         && matches!(active_kind, Some(TabKind::NewTab));
     let native_sidebar = chrome.uses_native_sidebar() && present >= 1.0;
-    let chrome_tint = window_chrome_tint(&chrome.palette, chrome.native_glass.window_backdrop);
+    let new_tab_glass = matches!(active_kind, Some(TabKind::NewTab))
+        && chrome.native_glass.vibrancy_available
+        && chrome.settings.newtab_material.is_translucent();
+    let chrome_tint = if new_tab_glass && !chrome.native_glass.window_backdrop {
+        0.20
+    } else {
+        window_chrome_tint(&chrome.palette, chrome.native_glass.window_backdrop)
+    };
     if !native_sidebar || chrome.native_glass.window_backdrop {
         paint_chrome_base(root, &chrome.palette, chrome_tint, None);
     }

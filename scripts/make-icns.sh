@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Build assets/icon/Zervo.icns from the committed 1024x1024 PNG.
 #
-# The artwork is authored in Apple's Icon Composer (assets/icon/Zervo.icon);
-# zervo-1024.png is that document's default variant rendered flat, committed so
-# a release can be built with stock tools only — sips and iconutil, both of
-# which ship with macOS — and no Xcode. Re-export it from Icon Composer after
-# editing the layers.
+# The flat fallback is rendered from assets/icon/zervo-icon-default.svg and
+# committed so sips and iconutil can build the ICNS without Xcode. The native
+# layered artwork is in assets/icon/Heion.icon.
 set -euo pipefail
 
 # shellcheck source=scripts/lib/common.sh

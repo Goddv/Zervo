@@ -61,7 +61,8 @@ pub(super) fn draw(
                             );
                             ui.label(
                                 RichText::new(format!(
-                                    "Zervo {}",
+                                    "{} {}",
+                                    zervo_core::APP_NAME,
                                     crate::updates::installed_version()
                                 ))
                                 .size(20.0)

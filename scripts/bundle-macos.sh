@@ -220,8 +220,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>                  <string>Zervo</string>
-    <key>CFBundleDisplayName</key>           <string>Zervo</string>
+    <key>CFBundleName</key>                  <string>Heion</string>
+    <key>CFBundleDisplayName</key>           <string>Heion</string>
     <key>CFBundleIdentifier</key>            <string>app.zervo.browser</string>
     <key>CFBundleExecutable</key>            <string>Zervo</string>
     <key>CFBundleIconFile</key>              <string>Zervo</string>
@@ -280,13 +280,13 @@ PLIST
 # active Xcode toolchain supports Icon Composer. Keep the flat ICNS fallback.
 if xcrun --find actool >/dev/null 2>&1; then
     ICON_BUILD="$(mktemp -d)"
-    if xcrun --sdk macosx actool assets/icon/Zervo.icon \
-        --compile "$ICON_BUILD" --app-icon Zervo --platform macosx \
+    if xcrun --sdk macosx actool assets/icon/Heion.icon \
+        --compile "$ICON_BUILD" --app-icon Heion --platform macosx \
         --target-device mac --minimum-deployment-target 26.0 \
         --output-partial-info-plist "$ICON_BUILD/Icon.plist" --errors --warnings \
         && [ -s "$ICON_BUILD/Assets.car" ]; then
         cp "$ICON_BUILD/Assets.car" "$RES_DIR/Assets.car"
-        plutil -insert CFBundleIconName -string Zervo "$APP/Contents/Info.plist"
+        plutil -insert CFBundleIconName -string Heion "$APP/Contents/Info.plist"
     else
         note "Icon Composer compilation unavailable. Using Zervo.icns."
     fi

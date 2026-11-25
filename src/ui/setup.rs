@@ -141,7 +141,11 @@ fn welcome(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>,
         ui.image((icon.id(), vec2(112.0, 112.0)));
     }
     ui.add_space(30.0);
-    ui.label(RichText::new("Zervo").size(52.0).color(palette.text));
+    ui.label(
+        RichText::new(zervo_core::APP_NAME)
+            .size(52.0)
+            .color(palette.text),
+    );
     ui.add_space(16.0);
     ui.allocate_ui_with_layout(
         vec2(440.0, 0.0),

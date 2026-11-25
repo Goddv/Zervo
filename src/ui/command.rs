@@ -89,7 +89,6 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
     let window = ctx.content_rect();
     let top = (window.height() * 0.12).clamp(24.0, 56.0);
     let width = (window.width() - 64.0).clamp(1.0, 520.0);
-    let max_height = (window.height() - top - 24.0).max(0.0);
     let now = ctx.input(|input| input.time);
     let duration = palette.material.animation;
     let mut progress = 1.0;
@@ -238,22 +237,35 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                     (_, true) => (bar.selection + max - 1) % max,
                     _ => bar.selection.min(max - 1),
                 };
-                let used = ui.cursor().top() - ui.min_rect().top();
-                let full_list = MAX_ROWS as f32 * (ROW_HEIGHT + ROW_GAP) - ROW_GAP;
-                let results_height = (max_height - used - 28.0).clamp(ROW_HEIGHT, full_list);
                 let mut chosen = None;
                 let reveal = ((eased - 0.22) / 0.78).clamp(0.0, 1.0);
-                if reveal == 0.0 {
+                let available = window.bottom() - ui.cursor().top() - f32::from(padding) - 16.0;
+                let natural_height =
+                    max.max(1) as f32 * ROW_HEIGHT + max.saturating_sub(1) as f32 * spacing;
+                let results_height = natural_height.min(available.max(0.0)) * reveal;
+                if results_height <= 0.0 {
                     return if enter && editor.response.has_focus() {
                         rows.into_iter().nth(bar.selection).map(|row| row.action)
                     } else {
                         None
                     };
                 }
+                // An Area starts with its last frame's size. Give the list
+                // its own bounds so the folded field cannot cap its height.
+                let (bounds, _) =
+                    ui.allocate_exact_size(vec2(width, results_height), Sense::hover());
+                let mut list = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt("results")
+                        .max_rect(bounds)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                list.set_clip_rect(ui.clip_rect().intersect(bounds));
                 egui::ScrollArea::vertical()
-                    .max_height(results_height * reveal)
+                    .max_height(results_height)
+                    .min_scrolled_height(0.0)
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                    .show(&mut list, |ui| {
                         ui.multiply_opacity(reveal);
                         if rows.is_empty() {
                             ui.label(

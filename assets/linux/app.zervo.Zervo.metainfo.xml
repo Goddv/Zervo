@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   AppStream metadata. This is what GNOME Software, KDE Discover and the AppImage
-  tooling read; without it Zervo appears in a software centre as a bare name with
+  tooling read; without it Heion appears in a software centre as a bare name with
   no description, no screenshots and no licence.
 
   The component id matches the desktop file's basename, which is what ties the
@@ -13,7 +13,7 @@
 -->
 <component type="desktop-application">
   <id>app.zervo.Zervo</id>
-  <name>Zervo</name>
+  <name>Heion</name>
   <summary>A sidebar-first browser built on the Servo engine</summary>
   <developer id="io.github.goddv">
     <name>Goddv</name>
@@ -24,7 +24,7 @@
 
   <description>
     <p>
-      Zervo is a browser chrome — sidebar, workspaces, tabs, settings — wrapped
+      Heion is a browser chrome — sidebar, workspaces, tabs, settings — wrapped
       around Servo, the independent web engine written in Rust. There is no
       Chromium and no Gecko underneath.
     </p>

@@ -419,12 +419,12 @@ impl AppState {
             .active_tab()
             .map(|tab| {
                 if tab.title.is_empty() {
-                    "Zervo".to_owned()
+                    zervo_core::APP_NAME.to_owned()
                 } else {
-                    format!("{} — Zervo", tab.title)
+                    format!("{} — {}", tab.title, zervo_core::APP_NAME)
                 }
             })
-            .unwrap_or_else(|| "Zervo".to_owned());
+            .unwrap_or_else(|| zervo_core::APP_NAME.to_owned());
         drop(browser);
         if *self.last_window_title.borrow() != title {
             self.window.set_title(&title);

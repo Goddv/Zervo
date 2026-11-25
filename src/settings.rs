@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::theme::{AccentColor, ThemeMode};
+use crate::theme::{AccentColor, ThemeMode, Translucency};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchEngine {
@@ -303,9 +303,11 @@ pub struct Settings {
     pub gestures: crate::gestures::Gestures,
 
     // ── The new tab page.
-    /// Visible widgets in display order. Missing means the default dashboard.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub newtab_widgets: Option<Vec<crate::newtab::Widget>>,
+    pub newtab_grid: Option<Vec<crate::newtab::layout::Tile>>,
+    #[serde(rename = "newtab_widgets", skip_serializing)]
+    legacy_newtab_widgets: Option<Vec<crate::newtab::Widget>>,
+    pub newtab_material: Translucency,
     #[serde(rename = "newtab_tiles", skip_serializing)]
     legacy_newtab_tiles: Option<Vec<crate::newtab::LegacyTile>>,
     /// The cities on the world-clocks card.
@@ -411,7 +413,9 @@ impl Default for Settings {
             appearance: sidebar_default_appearance(),
             legacy_translucency: None,
             gestures: crate::gestures::Gestures::default(),
-            newtab_widgets: None,
+            newtab_grid: None,
+            legacy_newtab_widgets: None,
+            newtab_material: Translucency::LiquidGlass,
             legacy_newtab_tiles: None,
             newtab_world_clocks: crate::newtab::Zone::defaults(),
             newtab_message: String::new(),
@@ -438,10 +442,10 @@ impl Settings {
         }
     }
 
-    pub fn visible_newtab_widgets(&self) -> &[crate::newtab::Widget] {
-        self.newtab_widgets
+    pub fn newtab_tiles(&self) -> &[crate::newtab::layout::Tile] {
+        self.newtab_grid
             .as_deref()
-            .unwrap_or(&crate::newtab::Widget::DEFAULT)
+            .unwrap_or(&crate::newtab::layout::DEFAULT)
     }
 
     pub fn reset_sidebar_sections(&mut self) {
@@ -488,10 +492,17 @@ pub fn load() -> Settings {
 
 /// Update built-in presets and carry forward older translucency settings.
 fn migrate(settings: &mut Settings) {
-    if let Some(tiles) = settings.legacy_newtab_tiles.take()
-        && settings.newtab_widgets.is_none()
-    {
-        settings.newtab_widgets = Some(crate::newtab::migrate_widgets(tiles));
+    let previous_order = settings.legacy_newtab_widgets.take().or_else(|| {
+        settings
+            .legacy_newtab_tiles
+            .take()
+            .map(crate::newtab::migrate_widgets)
+    });
+    if settings.newtab_grid.is_none() {
+        settings.newtab_grid = previous_order.map(crate::newtab::layout::from_order);
+    }
+    if let Some(tiles) = &mut settings.newtab_grid {
+        crate::newtab::layout::normalize(tiles);
     }
 
     use crate::theme::{Preset, Translucency};
@@ -556,16 +567,17 @@ mod tests {
         .unwrap();
         migrate(&mut settings);
         assert_eq!(
-            settings.visible_newtab_widgets(),
+            settings
+                .newtab_tiles()
+                .iter()
+                .map(|tile| tile.widget)
+                .collect::<Vec<_>>(),
             &[Widget::Downloads, Widget::Writing]
         );
         let saved = serde_json::to_value(&settings).unwrap();
         assert!(saved.get("newtab_home").is_none() && saved.get("newtab_tiles").is_none());
         let loaded: Settings = serde_json::from_value(saved).unwrap();
-        assert_eq!(
-            loaded.visible_newtab_widgets(),
-            settings.visible_newtab_widgets()
-        );
+        assert_eq!(loaded.newtab_tiles(), settings.newtab_tiles());
     }
 
     #[test]

@@ -13,7 +13,7 @@ use egui::{
 use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
 use crate::settings::{MAX_ACCENT_STRENGTH, NewTabBackground, NewTabPage, SearchEngine};
-use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier};
+use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier, Translucency};
 use crate::widgets;
 
 use super::*;
@@ -1489,6 +1489,17 @@ pub(crate) fn settings_layout(
         },
     );
     settings_section(ui, palette, tr("settings-new-tab-page"), |ui| {
+        ui.label(tr("newtab-backdrop-material"));
+        if choose(
+            ui,
+            palette,
+            &mut chrome.settings.newtab_material,
+            &Translucency::ALL,
+            Translucency::label,
+        ) {
+            actions.push(UiAction::PersistSettings);
+        }
+        ui.add_space(8.0);
         ui.label(
             RichText::new(tr("settings-custom-greeting"))
                 .size(12.0)
@@ -1588,7 +1599,7 @@ pub(crate) fn settings_layout(
             chrome.settings.new_tab_background = if wants_photo {
                 NewTabBackground::Photo
             } else {
-                NewTabBackground::Aurora
+                NewTabBackground::Grid
             };
             actions.push(UiAction::PersistSettings);
         }
@@ -1923,7 +1934,7 @@ fn settings_about(
                 ui.image((icon.id(), vec2(50.0, 50.0)));
             }
             ui.vertical(|ui| {
-                ui.label(RichText::new("Zervo").size(20.0).strong());
+                ui.label(RichText::new(zervo_core::APP_NAME).size(20.0).strong());
                 ui.label(
                     RichText::new(crate::l10n::message(
                         "settings-version",

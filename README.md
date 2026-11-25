@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/icon/zervo-1024.png" width="128" alt="Zervo">
+<img src="assets/icon/zervo-1024.png" width="128" alt="Heion">
 
-# Zervo
+# Heion
 
 **A calm, workspace-oriented browser built on the [Servo][servo] engine.**
 
@@ -18,9 +18,12 @@
 
 ---
 
-Zervo is a macOS browser powered by Servo, an independent web engine written
+Heion (平穏) means a steady, untroubled state of peace. Formerly Zervo, it is a
+macOS browser powered by Servo, an independent web engine written
 in Rust. Organise tabs with Spaces and folders in a docked sidebar or browse
 in Full Page mode with the sidebar available on hover.
+
+Existing installs keep their profiles, saved logins, and signed update channel.
 
 ## What it looks like
 
@@ -34,7 +37,7 @@ in Full Page mode with the sidebar available on hover.
 - **Full Page.** Press ⌘S to dock or hide the sidebar. Move the pointer to the
   left edge to reveal it temporarily.
 - **Native macOS chrome.** The sidebar, page surround, popovers, and dialogs
-  use AppKit Liquid Glass on macOS 26 and later. Zervo follows the macOS glass
+  use AppKit Liquid Glass on macOS 26 and later. Heion follows the macOS glass
   appearance and Reduce Transparency settings.
 - **Customizable chrome.** Open Settings → Layout or click the sliders in the
   sidebar. Show or hide sections and reorder them by dragging or using the
@@ -42,23 +45,17 @@ in Full Page mode with the sidebar available on hover.
   sidebar defaults.
 - **Favourites and history.** The star saves a page and hovering it opens the
   list; history is searchable and grouped by how long ago.
-- **Saved logins**, kept in the system keychain rather than in Zervo's own files.
+- **Saved logins**, kept in the system keychain.
 
 ### The new tab page
 
-- **New Tab.** The search page and optional icon card use the same Zervo artwork
-  as first-run setup and About.
-- **A customizable board of thirteen cards on a twelve-column grid** — clock, world
-  clocks, search, pinned tabs, most-visited, recent, favourites, downloads, now
-  playing, a note, a to-do list, spaces, and the Zervo icon. One press away, and
-  every card can be dragged, resized and taken off.
-- **Eight backdrops**, chosen from the page's own header: Plain, Gradient, Grid,
-  Mesh, Aurora, Waves, Particles, or a photograph fetched from Wikimedia Commons
-  or Openverse and credited as its licence asks.
-- **Text that reads either way.** Cards, the greeting, the clock and the photo
-  credit each ask about their own patch of the picture rather than taking one
-  answer for the page — a photograph is dark sky at the top and bright water at
-  the bottom, and pale text set for the sky disappears into the water.
+- **Search.** Click the search field to expand it into the browser command bar.
+- **Widgets.** Click **Customise** to arrange widgets on a six-column grid.
+  Drag a widget’s top handle to move it or its bottom-right corner to resize
+  it. Each widget’s menu also offers move, resize, and remove commands.
+- **Backdrop.** Grid is the default and Empty clears the pattern. Choose a
+  photograph, a static pattern, or an animated backdrop from the page header.
+  Choose Liquid Glass, Frosted, or Solid for the backdrop material.
 
 ### How it is put together
 
@@ -75,7 +72,7 @@ See [docs/THEMING.md](docs/THEMING.md) for the material system.
 
 ## Building
 
-Zervo builds the Servo engine from source, so the first build is long
+Heion builds the Servo engine from source, so the first build is long
 (roughly an hour) and needs a lot of disk. Subsequent builds are incremental.
 
 ```bash
@@ -96,7 +93,7 @@ rustup toolchain install 1.100.0 --profile minimal --component clippy,rustfmt
 
 ### Downloads
 
-Zervo's patched Servo engine includes support for file downloads. Prepare
+Heion's patched Servo engine includes support for file downloads. Prepare
 the engine as described in [docs/SERVO.md](docs/SERVO.md), then enable the
 download prompt when building:
 
@@ -133,7 +130,7 @@ See [Packaging and distribution](docs/PACKAGING.md).
 | `src/icons.rs`, `src/phosphor.rs` | [Phosphor][phosphor] icon rendering |
 | `src/downloads.rs` | download manager |
 | `src/vibrancy.rs` | macOS `NSVisualEffectView` backdrop |
-| `patches/servo/` | engine patches Zervo can build against |
+| `patches/servo/` | engine patches Heion can build against |
 
 There is a longer tour in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 including how the chrome and the engine share a graphics context.
@@ -146,8 +143,8 @@ requires macOS 26 or later. Linux and Windows builds are paused.
 ## Limitations
 
 - **Servo is young.** Expect broken layouts, missing APIs, and sites that
-  refuse the user agent. This is a property of the engine, not of Zervo — and
-  Zervo says so where it happens rather than in this list: a page the engine
+  refuse the user agent. This is a property of the engine, not of Heion — and
+  Heion says so where it happens rather than in this list: a page the engine
   cannot render gets `zervo://unsupported`, which names what is missing and
   hands the page to another browser, and a content process that falls over
   gets `zervo://crashed` rather than a frozen picture of itself.
@@ -168,13 +165,13 @@ requires macOS 26 or later. Linux and Windows builds are paused.
 Yes please — see [CONTRIBUTING.md](CONTRIBUTING.md).
 [docs/TODO.md](docs/TODO.md) is what is being worked on next;
 [docs/PARITY.md](docs/PARITY.md) is the full list of what still stands between
-Zervo and a browser you could use daily, in the order the gaps hurt, with where
+Heion and a browser you could use daily, in the order the gaps hurt, with where
 in the code each one lives. Most of it is embedder work, not engine work.
 
 If you want to improve the *engine*, contribute to [Servo][servo] directly.
 Note that Servo does not accept AI-generated contributions.
 
-### Help translate Zervo
+### Help translate Heion
 
 The interface uses Fluent catalogues. Copy the English catalogue, translate as
 much as you can, and open a pull request — incomplete catalogues fall back to
@@ -186,8 +183,8 @@ local previewing, checks, and the pull-request checklist.
 
 - [Servo][servo] — the engine, MPL-2.0.
 - [Phosphor Icons][phosphor] — the icon set, MIT. Vendored in `assets/fonts/`.
-- [Zen Browser][zen] — the interaction design Zervo's chrome is modelled on.
-  Zervo shares no code with Zen; it is a separate implementation on a
+- [Zen Browser][zen] — the interaction design Heion's chrome is modelled on.
+  Heion shares no code with Zen; it is a separate implementation on a
   different engine, and is not affiliated with or endorsed by it.
 
 ## License

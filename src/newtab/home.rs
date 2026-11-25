@@ -7,19 +7,19 @@ use egui::{
 
 use crate::dashboard::{self, Row};
 use crate::glass::{self, Glass};
+use crate::grid::{Cell, Metrics, Span};
 use crate::icons::{self, Icon};
 use crate::l10n::{message, text as tr};
 use crate::overlay_glass::{Role, Surface};
 use crate::settings::SearchEngine;
-use crate::theme::{self, Palette, Tier};
+use crate::theme::{self, Palette, Tier, Translucency};
 use crate::ui::{ChromeContext, UiAction};
 
+use super::layout::{self, COLUMNS, MAX_HEIGHT, MIN_SPAN, ROW_HEIGHT, ROWS, Tile};
 use super::{Widget, calendar_date, fit, widgets};
 
 const GAP: f32 = 14.0;
 const SEARCH_HEIGHT: f32 = 54.0;
-const SHORTCUTS_HEIGHT: f32 = 144.0;
-const ACTIVITY_HEIGHT: f32 = 204.0;
 const WIDE: f32 = 640.0;
 
 pub(super) fn draw(
@@ -42,8 +42,18 @@ pub(super) fn draw(
     view.set_clip_rect(root.clip_rect().intersect(viewport));
 
     let editing = super::editing(chrome);
-    let mut layout = chrome.settings.visible_newtab_widgets().to_vec();
-    let columns = if width < WIDE { 1 } else { 2 };
+    let narrow = width < WIDE;
+    let mut tiles = chrome.settings.newtab_tiles().to_vec();
+    tiles.sort_by_key(|tile| (tile.at.row, tile.at.col));
+    let mut display = tiles.clone();
+    if narrow {
+        layout::narrow(&mut display);
+    }
+    let rows = display
+        .iter()
+        .map(|tile| tile.at.row + tile.span.h)
+        .max()
+        .unwrap_or(0);
     let mut edit = None;
     egui::ScrollArea::vertical()
         .id_salt("newtab_dashboard")
@@ -51,10 +61,7 @@ pub(super) fn draw(
         .auto_shrink([false, false])
         .show(&mut view, |ui| {
             let width = ui.available_width();
-            let height = layout
-                .chunks(columns)
-                .map(|row| row_height(row) + GAP)
-                .sum::<f32>();
+            let height = rows as f32 * (ROW_HEIGHT + GAP);
             let inset = ((viewport.height() - SEARCH_HEIGHT - height - GAP) * 0.34).max(0.0);
             ui.add_space(inset);
             let (search_box, _) =
@@ -62,105 +69,103 @@ pub(super) fn draw(
             search(ui, chrome, search_box, actions);
             ui.add_space(GAP);
             if editing {
-                edit = layout_controls(ui, &chrome.palette, &layout);
+                edit = layout_controls(ui, &chrome.palette, &tiles);
                 ui.add_space(GAP);
             }
 
-            for (row_index, row) in layout.chunks(columns).enumerate() {
-                let toolbar_height = if editing { 32.0 } else { 0.0 };
-                let height = row_height(row) + toolbar_height;
-                let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-                let bounds = match *row {
-                    [left, right] => {
-                        let (a, b) = split(rect, width_fraction(left, right));
-                        [a, b]
-                    },
-                    _ => [rect, Rect::NOTHING],
-                };
-                for (column, (&widget, rect)) in row.iter().zip(bounds).enumerate() {
-                    if editing {
-                        let index = row_index * columns + column;
-                        let toolbar = rect.with_max_y(rect.top() + 27.0);
-                        edit = widget_controls(
-                            ui,
-                            &chrome.palette,
-                            toolbar,
-                            widget,
-                            index,
-                            layout.len(),
-                        )
-                        .or(edit);
-                    }
-                    draw_widget(
-                        ui,
-                        chrome,
-                        widget,
-                        rect.with_min_y(rect.top() + toolbar_height),
-                        actions,
-                    );
+            let visible_rows = if editing && !narrow {
+                rows.saturating_add(3).min(ROWS)
+            } else {
+                rows
+            };
+            let (board, _) = ui.allocate_exact_size(
+                vec2(width, f32::from(visible_rows) * (ROW_HEIGHT + GAP)),
+                Sense::hover(),
+            );
+            let canvas = Rect::from_min_size(
+                board.min,
+                vec2(board.width(), f32::from(ROWS) * (ROW_HEIGHT + GAP) - GAP),
+            );
+            let metrics = Metrics::new(canvas, COLUMNS, ROW_HEIGHT, GAP);
+            if editing && !narrow {
+                draw_guides(ui, &chrome.palette, &metrics, visible_rows);
+            }
+            let mut preview = None;
+            for (tile, shown) in tiles.iter().zip(&display) {
+                let rect = metrics.rect(shown.at, shown.span);
+                if !ui.is_rect_visible(rect) {
+                    continue;
                 }
-                ui.add_space(GAP);
+                let surface = material(ui, &chrome.palette, rect, Role::Widget);
+                let mut card = ui.new_child(UiBuilder::new().max_rect(rect).id_salt(tile.widget));
+                card.set_clip_rect(ui.clip_rect().intersect(rect));
+                if editing {
+                    card.disable();
+                    card.set_opacity(1.0);
+                }
+                draw_widget(&mut card, chrome, tile.widget, rect, actions);
+                if editing {
+                    edit = widget_controls(ui, &chrome.palette, rect, *tile, &tiles).or(edit);
+                    if !narrow {
+                        let (outline, changed) =
+                            handles(ui, &chrome.palette, &metrics, &tiles, *tile, rect);
+                        preview = outline.or(preview);
+                        edit = changed.or(edit);
+                    }
+                }
+                surface.finish(ui, rect, Role::Widget);
+            }
+            if let Some((target, valid)) = preview {
+                let colour = if valid {
+                    chrome.palette.accent
+                } else {
+                    chrome.palette.danger
+                };
+                ui.painter()
+                    .rect_filled(target, 14, colour.gamma_multiply(0.12));
+                ui.painter()
+                    .rect_stroke(target, 14, Stroke::new(1.5, colour), StrokeKind::Inside);
             }
         });
 
     if let Some(edit) = edit {
         match edit {
-            Edit::Add(widget) => layout.push(widget),
-            Edit::Remove(index) => {
-                layout.remove(index);
+            Edit::Add(widget) => layout::add(&mut tiles, widget),
+            Edit::Remove(widget) => tiles.retain(|tile| tile.widget != widget),
+            Edit::Place(updated) => {
+                if let Some(tile) = tiles.iter_mut().find(|tile| tile.widget == updated.widget) {
+                    *tile = updated;
+                }
             },
-            Edit::Move(from, to) => layout.swap(from, to),
-            Edit::Reset => layout = Widget::DEFAULT.to_vec(),
+            Edit::Reset => tiles = layout::DEFAULT.to_vec(),
         }
-        chrome.settings.newtab_widgets = Some(layout);
+        chrome.settings.newtab_grid = Some(tiles);
         actions.push(UiAction::PersistSettings);
+        root.ctx().request_repaint();
     }
 }
 
 #[derive(Clone, Copy)]
 enum Edit {
     Add(Widget),
-    Remove(usize),
-    Move(usize, usize),
+    Remove(Widget),
+    Place(Tile),
     Reset,
 }
 
-fn row_height(widgets: &[Widget]) -> f32 {
-    if widgets.iter().any(|widget| {
-        !matches!(
-            widget,
-            Widget::Clock | Widget::QuickLinks | Widget::NowPlaying
-        )
-    }) {
-        ACTIVITY_HEIGHT
-    } else {
-        SHORTCUTS_HEIGHT
-    }
-}
-
-fn width_fraction(left: Widget, right: Widget) -> f32 {
-    match (left, right) {
-        (Widget::Clock, _) => 0.33,
-        (_, Widget::Clock) => 0.67,
-        (Widget::Recent, _) => 0.60,
-        (_, Widget::Recent) => 0.40,
-        _ => 0.50,
-    }
-}
-
-fn layout_controls(ui: &mut Ui, palette: &Palette, layout: &[Widget]) -> Option<Edit> {
+fn layout_controls(ui: &mut Ui, palette: &Palette, tiles: &[Tile]) -> Option<Edit> {
     let available: Vec<_> = Widget::ALL
         .into_iter()
-        .filter(|widget| !layout.contains(widget))
+        .filter(|widget| tiles.iter().all(|tile| tile.widget != *widget))
         .map(|widget| Row::Item(widget.label().to_owned(), widget, false))
         .collect();
     let (add, reset) = ui
         .horizontal(|ui| {
             let add = (!available.is_empty()).then(|| {
-                crate::widgets::label_button(ui, palette, tr("newtab-add-card"), 28.0, 22.0, false)
+                crate::widgets::label_button(ui, palette, tr("newtab-add-card"), 30.0, 22.0, false)
             });
             let reset =
-                crate::widgets::label_button(ui, palette, tr("newtab-reset"), 28.0, 22.0, false)
+                crate::widgets::label_button(ui, palette, tr("newtab-reset"), 30.0, 22.0, false)
                     .clicked();
             (add, reset)
         })
@@ -171,59 +176,173 @@ fn layout_controls(ui: &mut Ui, palette: &Palette, layout: &[Widget]) -> Option<
     popup(ui, palette, "newtab_available_widgets", add?, &available).map(Edit::Add)
 }
 
-fn widget_controls(
-    ui: &Ui,
-    palette: &Palette,
-    rect: Rect,
-    widget: Widget,
-    index: usize,
-    count: usize,
-) -> Option<Edit> {
-    let name = widget.label();
-    label(
-        ui,
-        rect.left_center() + vec2(5.0, 0.0),
-        name,
-        rect.width() - 87.0,
-        12.0,
-        palette.text,
-    );
-    let controls = [
-        (
-            Icon::Close,
-            tr("newtab-take-this-card-off").to_owned(),
-            Some(Edit::Remove(index)),
-        ),
-        (
-            Icon::Forward,
-            message("layout-move-down", [("name", name.into())]),
-            (index + 1 < count).then_some(Edit::Move(index, index + 1)),
-        ),
-        (
-            Icon::Back,
-            message("layout-move-up", [("name", name.into())]),
-            index.checked_sub(1).map(|before| Edit::Move(index, before)),
-        ),
-    ];
-    let mut result = None;
-    for (i, (glyph, label, edit)) in controls.into_iter().enumerate() {
-        if let Some(edit) = edit {
-            let x = rect.right() - 13.0 - i as f32 * 25.0;
-            let slot = Rect::from_center_size(pos2(x, rect.center().y), vec2(24.0, 24.0));
-            let response = button(
-                ui,
-                Id::unique(("newtab_widget_control", widget, i)),
-                slot,
-                &label,
-                palette,
-            );
-            icon(ui, x, rect.center().y, 13.0, glyph, palette.text);
-            if crate::overlay_glass::tooltip(response, palette, &label).clicked() {
-                result = Some(edit);
+fn draw_guides(ui: &Ui, palette: &Palette, metrics: &Metrics, rows: u8) {
+    let ink = palette.accent.gamma_multiply(0.28);
+    for row in 0..rows {
+        for col in 0..COLUMNS {
+            let cell = metrics.rect(Cell::new(col, row), Span::new(1, 1));
+            if ui.is_rect_visible(cell) {
+                ui.painter()
+                    .rect_stroke(cell, 8, Stroke::new(1.0, ink), StrokeKind::Inside);
             }
         }
     }
-    result
+}
+
+fn widget_controls(
+    ui: &mut Ui,
+    palette: &Palette,
+    rect: Rect,
+    tile: Tile,
+    tiles: &[Tile],
+) -> Option<Edit> {
+    let bounds = Rect::from_center_size(rect.right_top() + vec2(-16.0, 16.0), vec2(28.0, 28.0));
+    let menu = format!("newtab_widget_{:?}", tile.widget);
+    let trigger = ui.interact(bounds, Id::unique(&menu), Sense::click());
+    trigger.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, tr("newtab-widget-options"))
+    });
+    let ink = crate::widgets::button_ink(ui, &trigger, bounds, palette, false);
+    icon(
+        ui,
+        bounds.center().x,
+        bounds.center().y,
+        13.0,
+        Icon::Sliders,
+        ink,
+    );
+
+    let choices = [
+        ("newtab-move-left", -1, 0, 0, 0),
+        ("newtab-move-right", 1, 0, 0, 0),
+        ("newtab-move-up", 0, -1, 0, 0),
+        ("newtab-move-down", 0, 1, 0, 0),
+        ("newtab-narrower", 0, 0, -1, 0),
+        ("newtab-wider", 0, 0, 1, 0),
+        ("newtab-shorter", 0, 0, 0, -1),
+        ("newtab-taller", 0, 0, 0, 1),
+    ];
+    let mut rows: Vec<_> = choices
+        .into_iter()
+        .filter_map(|(name, col, row, width, height)| {
+            let at = Cell::new(
+                tile.at.col.checked_add_signed(col)?,
+                tile.at.row.checked_add_signed(row)?,
+            );
+            let span = Span::new(
+                tile.span.w.checked_add_signed(width)?,
+                tile.span.h.checked_add_signed(height)?,
+            );
+            let target = Tile { at, span, ..tile };
+            layout::can_place(tiles, target)
+                .then(|| Row::Item(tr(name).to_owned(), Edit::Place(target), false))
+        })
+        .collect();
+    rows.push(Row::Item(
+        tr("newtab-take-this-card-off").to_owned(),
+        Edit::Remove(tile.widget),
+        false,
+    ));
+    popup(ui, palette, &menu, trigger, &rows)
+}
+
+fn handles(
+    ui: &Ui,
+    palette: &Palette,
+    metrics: &Metrics,
+    tiles: &[Tile],
+    tile: Tile,
+    rect: Rect,
+) -> (Option<(Rect, bool)>, Option<Edit>) {
+    let handles = [
+        (
+            false,
+            pos2(rect.right() - 50.0, rect.top() + 16.0),
+            Icon::DragHandle,
+            tr("newtab-drag-widget"),
+        ),
+        (
+            true,
+            rect.right_bottom() - vec2(15.0, 15.0),
+            Icon::Resize,
+            tr("newtab-resize-widget"),
+        ),
+    ];
+    for (resize, centre, glyph, label) in handles {
+        let size = if resize {
+            vec2(28.0, 28.0)
+        } else {
+            vec2(38.0, 26.0)
+        };
+        let slot = Rect::from_center_size(centre, size);
+        let id = Id::unique(("newtab_grid_handle", tile.widget, resize));
+        let response = ui.interact(slot, id, Sense::drag());
+        let colour = if response.dragged() || response.hovered() {
+            palette.accent
+        } else {
+            palette.text
+        };
+        ui.painter()
+            .rect_filled(slot, palette.corner(Tier::Control), palette.button_fill());
+        icon(ui, centre.x, centre.y, 14.0, glyph, colour);
+        let cursor = if resize {
+            CursorIcon::ResizeNwSe
+        } else {
+            CursorIcon::Grab
+        };
+        let response =
+            crate::overlay_glass::tooltip(response.on_hover_cursor(cursor), palette, label);
+
+        if ui.input(|input| input.key_pressed(Key::Escape)) {
+            ui.ctx().data_mut(|data| {
+                data.remove::<Option<Tile>>(id);
+                data.insert_temp(id.with("cancelled"), true);
+            });
+        }
+        if response.drag_started() {
+            ui.ctx().data_mut(|data| {
+                data.remove::<Option<Tile>>(id);
+                data.remove::<bool>(id.with("cancelled"));
+            });
+        }
+        if let Some(delta) = response.total_drag_delta()
+            && !ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(id.with("cancelled")))
+                .unwrap_or(false)
+        {
+            let mut target = tile;
+            if resize {
+                let stride = metrics.cell + vec2(metrics.gap, metrics.gap);
+                let w = (f32::from(tile.span.w) + delta.x / stride.x).round();
+                let h = (f32::from(tile.span.h) + delta.y / stride.y).round();
+                target.span = Span::new(
+                    (w as u8).clamp(MIN_SPAN.w, COLUMNS - tile.at.col),
+                    (h as u8).clamp(MIN_SPAN.h, MAX_HEIGHT.min(ROWS - tile.at.row)),
+                );
+            } else {
+                target.at = metrics.cell_at(rect.min + delta, tile.span);
+            }
+            ui.ctx().data_mut(|data| data.insert_temp(id, Some(target)));
+            return (
+                Some((
+                    metrics.rect(target.at, target.span),
+                    layout::can_place(tiles, target),
+                )),
+                None,
+            );
+        }
+        if response.drag_stopped()
+            && let Some(target) = ui
+                .ctx()
+                .data_mut(|data| data.remove_temp::<Option<Tile>>(id).flatten())
+            && target != tile
+            && layout::can_place(tiles, target)
+        {
+            return (None, Some(Edit::Place(target)));
+        }
+    }
+    (None, None)
 }
 
 fn draw_widget(
@@ -249,7 +368,6 @@ fn draw_widget(
         Widget::Spaces => Icon::Stack,
     };
     let palette = chrome.palette;
-    let surface = material(ui, &palette, rect, Role::Widget);
     let inner = rect.shrink(16.0);
     heading(ui, inner, glyph, widget.label(), &palette);
     let body = inner.with_min_y(inner.top() + 23.0);
@@ -263,7 +381,6 @@ fn draw_widget(
         Widget::Spaces => widgets::draw_workspaces(ui, chrome, body, id, actions),
         _ => unreachable!(),
     }
-    surface.finish(ui, rect, Role::Widget);
 }
 
 pub(super) fn compact(
@@ -279,14 +396,18 @@ pub(super) fn compact(
     }
 }
 
-fn split(row: Rect, fraction: f32) -> (Rect, Rect) {
-    let x = row.left() + (row.width() - GAP) * fraction;
-    (row.with_max_x(x), row.with_min_x(x + GAP))
-}
-
 fn material(ui: &Ui, palette: &Palette, rect: Rect, role: Role) -> Surface {
-    let surface = Surface::begin(ui);
-    if !surface.is_native() {
+    let surface = Surface::begin_if(ui, palette.translucency == Translucency::LiquidGlass);
+    if palette.translucency == Translucency::Solid {
+        let fill = theme::page_veil(palette, if palette.dark { 0.86 } else { 0.92 });
+        ui.painter().rect(
+            rect,
+            role.radius(),
+            fill,
+            Stroke::new(1.0, palette.border),
+            StrokeKind::Inside,
+        );
+    } else if !surface.is_native() {
         glass::paint(
             ui.painter(),
             rect,
@@ -500,7 +621,6 @@ fn clock_card(ui: &Ui, chrome: &ChromeContext, rect: Rect) {
         return;
     }
     let palette = &chrome.palette;
-    let surface = material(ui, palette, rect, Role::Widget);
     let body = rect.shrink(16.0);
     let now = jiff::ZonedDateTime::now();
     let subtitle = chrome.settings.newtab_message.trim();
@@ -543,7 +663,6 @@ fn clock_card(ui: &Ui, chrome: &ChromeContext, rect: Rect) {
         );
     }
 
-    surface.finish(ui, rect, Role::Widget);
     let next_minute = 60 - now.second() as u64;
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_secs(next_minute));
@@ -559,7 +678,6 @@ fn shortcuts(ui: &mut Ui, chrome: &mut ChromeContext, rect: Rect, actions: &mut 
         return;
     }
     let palette = chrome.palette;
-    let surface = material(ui, &palette, rect, Role::Widget);
     let body = rect.shrink(16.0);
     heading(ui, body, Icon::Apps, tr("newtab-quick-links"), &palette);
     let columns = ((body.width() / 78.0) as usize).clamp(2, 6);
@@ -627,7 +745,6 @@ fn shortcuts(ui: &mut Ui, chrome: &mut ChromeContext, rect: Rect, actions: &mut 
         palette.text,
     );
     centered_title(ui, plus, pin_label, &palette);
-    surface.finish(ui, rect, Role::Widget);
 
     let menu = "newtab_shortcut_pin_menu";
     let open = ui
@@ -716,11 +833,12 @@ fn recent(ui: &mut Ui, chrome: &ChromeContext, rect: Rect, actions: &mut Vec<UiA
         return;
     }
     let palette = &chrome.palette;
-    let surface = material(ui, palette, rect, Role::Widget);
     let body = rect.shrink(16.0);
     heading(ui, body, Icon::Recent, tr("newtab-recent"), palette);
 
-    let visits = chrome.library.recent(3);
+    let visits = chrome
+        .library
+        .recent(((body.height() - 21.0) / 49.0) as usize);
     let now = jiff::Timestamp::now().as_second();
     for (index, visit) in visits.iter().enumerate() {
         let row = Rect::from_min_size(
@@ -730,7 +848,7 @@ fn recent(ui: &mut Ui, chrome: &ChromeContext, rect: Rect, actions: &mut Vec<UiA
         let title = crate::ui::display_name(&visit.title, &visit.url);
         if button(
             ui,
-            Id::unique("newtab_recent").with(&visit.url),
+            Id::unique("newtab_recent").with((&visit.url, index)),
             row,
             title,
             palette,
@@ -772,7 +890,6 @@ fn recent(ui: &mut Ui, chrome: &ChromeContext, rect: Rect, actions: &mut Vec<UiA
             palette.text_muted,
         );
     }
-    surface.finish(ui, rect, Role::Widget);
 }
 
 fn writing(ui: &mut Ui, chrome: &mut ChromeContext, rect: Rect) {
@@ -780,7 +897,6 @@ fn writing(ui: &mut Ui, chrome: &mut ChromeContext, rect: Rect) {
         return;
     }
     let palette = chrome.palette;
-    let surface = material(ui, &palette, rect, Role::Widget);
     let body = rect.shrink(16.0);
     let mut controls = ui.new_child(
         UiBuilder::new()
@@ -825,7 +941,6 @@ fn writing(ui: &mut Ui, chrome: &mut ChromeContext, rect: Rect) {
     } else {
         widgets::draw_notes(ui, chrome, text, mode.with("notes"));
     }
-    surface.finish(ui, rect, Role::Widget);
 }
 
 fn ago(seconds: i64) -> String {

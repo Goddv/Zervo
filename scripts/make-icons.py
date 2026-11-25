@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render every raster icon Zervo ships from the one 1024x1024 master.
+"""Render launcher raster icons from Heion's 1024x1024 master.
 
     ./scripts/make-icons.py
 
@@ -13,9 +13,8 @@ Produces, all committed so a release needs no image tooling:
 `assets/icon/Zervo.icns` is built separately by scripts/make-icns.sh, which
 uses stock macOS tools and so cannot run anywhere else.
 
-The master itself, assets/icon/zervo-1024.png, is the Icon Composer document
-in assets/icon/Zervo.icon rendered flat; re-export it from there after editing
-the layers.
+Render assets/icon/zervo-icon-default.svg to assets/icon/zervo-1024.png
+after editing the artwork.
 
 Needs Pillow. This is the one script in the tree with a dependency outside the
 standard library, which is why its output is committed rather than generated at

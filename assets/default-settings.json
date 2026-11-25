@@ -12,6 +12,7 @@
   "search_engine": "Google",
   "new_tab_page": "ZervoPage",
   "new_tab_background": "Grid",
+  "newtab_material": "LiquidGlass",
   "always_show_tab_close": false,
   "show_forward_button": true,
   "show_reload_button": true,

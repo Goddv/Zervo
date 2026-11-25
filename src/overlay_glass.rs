@@ -48,10 +48,18 @@ pub(crate) struct Surface {
 
 impl Surface {
     pub(crate) fn begin(ui: &Ui) -> Self {
-        let _ = ui;
+        Self::begin_if(ui, true)
+    }
+
+    pub(crate) fn begin_if(ui: &Ui, capture: bool) -> Self {
+        let _ = (ui, capture);
         Self {
             #[cfg(target_os = "macos")]
-            capture: macos::Capture::begin(ui),
+            capture: if capture {
+                macos::Capture::begin(ui)
+            } else {
+                None
+            },
         }
     }
 

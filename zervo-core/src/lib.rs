@@ -15,6 +15,9 @@
 //! The binary re-exports every module below at its own root, so a call site
 //! still writes `crate::theme::Palette` and nothing had to move for this.
 
+/// Product name shown in the browser and its window title.
+pub const APP_NAME: &str = "Heion";
+
 pub mod gestures;
 pub mod glass;
 pub mod grid;

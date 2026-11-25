@@ -1,0 +1,37 @@
+{
+  "fill": "system-light",
+  "groups": [
+    {
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "03 Sun.svg",
+          "name": "Sun"
+        }
+      ]
+    },
+    {
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "02 Horizon lines.svg",
+          "name": "Horizon lines"
+        }
+      ]
+    },
+    {
+      "layers": [
+        {
+          "glass": false,
+          "image-name": "01 Horizon field.svg",
+          "name": "Indigo field"
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

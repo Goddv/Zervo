@@ -5,24 +5,28 @@ Notes** opens `zervo://updates`, which shows the installed version, update
 status, the size and notes of an available patch, and the bundled changelog.
 Updater-enabled builds check daily by default. In About you can choose hourly,
 six-hourly, daily, or weekly checks and independently enable installation on
-quit. Update notices appear inside Zervo. To receive macOS alerts, enable
+quit. Update notices appear inside Heion. To receive macOS alerts, enable
 **Show macOS update notifications** and allow them when prompted. **Remind Me
 Tomorrow** schedules a reminder for the available release.
 
 ## What an update changes
 
-Zervo publishes a separate signed feed for Apple Silicon and Intel. Sparkle
+Heion publishes a separate signed feed for Apple Silicon and Intel. Sparkle
 builds a binary delta from each supported prior app bundle. An update downloads
 that delta and reconstructs the new bundle in staging. The signed delta
 includes the expected SHA-256 of the staged executable. For ad-hoc builds,
-Zervo also verifies the sealed bundle, nested code, app identifier, target
+Heion also verifies the sealed bundle, nested code, app identifier, target
 version, and embedded update key. Developer ID builds verify the staged app
 against the installed app's Apple code-signing requirement. An atomic
 filesystem swap replaces the app at its existing path. The browser profile
 stays outside the bundle.
 
+The Heion branding update uses the existing executable name, bundle identifier,
+profile directory, keychain service, and signed feeds. The updater installs
+the new bundle at the existing app path.
+
 An absent, invalid, or interrupted patch leaves the installed app in place.
-Zervo requires signatures on both the feed and patch, and disables Sparkle's
+Heion requires signatures on both the feed and patch, and disables Sparkle's
 full-download and two-step installation fallbacks. If no delta matches, use
 the GitHub installer linked from the Updates page. A regression discovered
 after a successful installation can be recovered with the previous release's
@@ -30,7 +34,7 @@ DMG.
 
 ## Enable the GitHub release pipeline
 
-1. Use Sparkle's `generate_keys` to create a dedicated Zervo Ed25519 key.
+1. Use Sparkle's `generate_keys` to create a dedicated Heion Ed25519 key.
    Save the public key as the repository variable `ZERVO_SPARKLE_PUBLIC_KEY`.
    Export the seed into the repository secret `SPARKLE_PRIVATE_ED_KEY` and keep
    an offline backup. If the key is lost, distributing a new trusted key
@@ -71,7 +75,7 @@ release history and offer the manual installer link.
 
 ## Smoke test a release
 
-Install a copy of the previous updater-enabled Zervo in a disposable location. Check that
+Install a copy of the previous updater-enabled Heion in a disposable location. Check that
 the Updates page reports the target release and patch size. Check manually and
 also try the background install-on-quit path. After quitting, confirm the app
 at the original path has the new bundle version and starts with the same

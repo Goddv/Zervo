@@ -1,6 +1,7 @@
 //! New Tab backdrop, navigation, and saved widget configuration.
 
 mod home;
+pub(crate) mod layout;
 mod widgets;
 
 use crate::l10n::text as tr;
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::glass;
 use crate::grid::{Cell, Span};
 use crate::icons::{self, Icon};
-use crate::theme::{self, Palette};
+use crate::theme::{self, Palette, Translucency};
 use crate::ui::{ChromeContext, UiAction};
 
 const PAGE_PAD: f32 = 26.0;
@@ -210,22 +211,26 @@ pub fn draw(
     content_rect: Rect,
     actions: &mut Vec<UiAction>,
 ) -> bool {
-    let palette = chrome.palette;
-    // What the page lays down under itself, and what a procedural backdrop is
-    // drawn against. They are not the same once the seam closes: the page
-    // stops painting a base and shows the window's backdrop through a veil,
-    // but a gradient still has to be a gradient *of* something.
-    let native_frost =
-        chrome.native_glass.vibrancy_available && palette.translucency.is_translucent();
+    let restore = chrome.palette;
+    let material = match chrome.settings.newtab_material {
+        _ if chrome.native_glass.reduce_transparency => Translucency::Solid,
+        Translucency::LiquidGlass if !chrome.native_glass.window_backdrop => Translucency::Frosted,
+        material => material,
+    };
+    let mut palette = restore.with_translucency(material);
+    palette.material.animation = restore.material.animation;
+    chrome.palette = palette;
+
+    let native_frost = chrome.native_glass.vibrancy_available && material.is_translucent();
     let ground = if native_frost {
-        let strength = match chrome.settings.new_tab_background {
-            crate::settings::NewTabBackground::Plain => theme::MIN_VEIL,
+        let veil = match material {
+            Translucency::LiquidGlass => 0.38,
             _ if palette.dark => 0.58,
-            _ => 0.78,
+            _ => 0.66,
         };
-        theme::page_veil(&palette, strength)
+        theme::page_veil(&palette, veil)
     } else {
-        theme::page_ground(&palette)
+        theme::page_base(&palette)
     };
     let base = theme::page_base(&palette);
     let radius = theme::content_corners(&palette);
@@ -250,9 +255,8 @@ pub fn draw(
     // until the page is finished, every glass surface inside the content rect
     // frosts itself against it — the cards, the search box, the header pills,
     // and anything anyone adds later — without one of them being told to.
-    let restore = chrome.palette;
     if let (Some((uv, arrival)), Some(frost)) = (painted, chrome.wallpaper.frost)
-        && chrome.palette.translucency.is_translucent()
+        && material.is_translucent()
     {
         chrome.palette = chrome.palette.with_backdrop(Some(theme::Backdrop {
             texture: frost.id(),
@@ -487,9 +491,9 @@ fn paint_photo(
     *ambient |= fade < 1.0;
 
     let uv = cover(texture.resolution_vec2(), content_rect);
-    let frosted = chrome.native_glass.vibrancy_available && palette.translucency.is_translucent();
-    let (background, opacity) = match (frosted, chrome.wallpaper.frost) {
-        (true, Some(frost)) => (frost.id(), 0.88),
+    let (background, opacity) = match (palette.translucency, chrome.wallpaper.frost) {
+        (Translucency::Frosted, Some(frost)) => (frost.id(), 0.88),
+        (Translucency::LiquidGlass, Some(frost)) => (frost.id(), 0.78),
         _ => (texture.id(), 1.0),
     };
     backdrop.add(
@@ -585,7 +589,7 @@ fn draw_header(
             root.painter(),
             pos2(mark.right() + 10.0, header.center().y),
             Align2::LEFT_CENTER,
-            "Zervo",
+            zervo_core::APP_NAME,
             FontId::proportional(18.0),
             ink.text,
         );
@@ -707,6 +711,7 @@ fn draw_backdrop_menu(
 
     #[derive(Clone, Copy, PartialEq)]
     enum Pick {
+        Material(Translucency),
         Generated(NewTabBackground),
         Commons,
         Subject(Subject),
@@ -728,7 +733,15 @@ fn draw_backdrop_menu(
     // Grouped off the variants themselves rather than off a list written out
     // here, so a backdrop added later turns up in the right group without
     // anyone remembering to add it to two places.
-    let mut rows: Vec<Row<Pick>> = vec![Row::Heading(tr("newtab-static"))];
+    let mut rows = vec![Row::Heading(tr("settings-material"))];
+    rows.extend(Translucency::ALL.map(|material| {
+        Row::Item(
+            material.label().to_owned(),
+            Pick::Material(material),
+            chrome.settings.newtab_material == material,
+        )
+    }));
+    rows.push(Row::Heading(tr("newtab-static")));
     rows.extend(
         NewTabBackground::ALL
             .into_iter()
@@ -779,7 +792,12 @@ fn draw_backdrop_menu(
     ) {
         Some(pick) => {
             root.ctx().data_mut(|data| data.insert_temp(menu_id, false));
+            root.ctx().request_repaint();
             match pick {
+                Pick::Material(material) => {
+                    chrome.settings.newtab_material = material;
+                    actions.push(UiAction::PersistSettings);
+                },
                 Pick::Generated(kind) => {
                     chrome.settings.new_tab_background = kind;
                     actions.push(UiAction::PersistSettings);

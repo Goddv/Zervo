@@ -26,7 +26,7 @@ ManifestDPIAware true
   !define OUTFILE "Zervo-${VERSION}-windows-${ARCH}-setup.exe"
 !endif
 
-!define APPNAME    "Zervo"
+!define APPNAME    "Heion"
 !define PUBLISHER  "Goddv"
 !define HOMEPAGE   "https://github.com/Goddv/Zervo"
 !define REGKEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\Zervo"
@@ -40,7 +40,7 @@ SetCompressor /SOLID lzma
 
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName"     "${APPNAME}"
-VIAddVersionKey "FileDescription" "Zervo installer"
+VIAddVersionKey "FileDescription" "Heion installer"
 VIAddVersionKey "FileVersion"     "${VERSION}"
 VIAddVersionKey "ProductVersion"  "${VERSION}"
 VIAddVersionKey "CompanyName"     "${PUBLISHER}"

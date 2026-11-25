@@ -339,7 +339,7 @@ impl ApplicationHandler<WakerEvent> for App {
         };
 
         let attributes = Window::default_attributes()
-            .with_title("Zervo")
+            .with_title(zervo_core::APP_NAME)
             .with_inner_size(LogicalSize::new(1200.0, 800.0))
             .with_min_inner_size(LogicalSize::new(600.0, 400.0))
             // Shown further down, once the AccessKit adapter exists — it
@@ -1368,7 +1368,7 @@ impl RunningApp {
 
         let palette = self.palette();
         #[cfg(target_os = "macos")]
-        let (palette, native_available, window_glass) = {
+        let (palette, native_available, reduce_transparency, window_glass) = {
             let (reduce_transparency, reduce_motion) = vibrancy::accessibility_preferences();
             let mut palette = if reduce_transparency {
                 palette.with_translucency(theme::Translucency::Solid)
@@ -1379,15 +1379,27 @@ impl RunningApp {
                 palette.material.animation = 0.0;
             }
             let native_available = self._vibrancy.is_some() && !reduce_transparency;
-            let window_glass = palette.translucency == theme::Translucency::LiquidGlass
+            let new_tab = self
+                .state
+                .browser
+                .borrow()
+                .active_tab()
+                .is_some_and(|tab| tab.kind == TabKind::NewTab);
+            let material = if new_tab {
+                self.settings.newtab_material
+            } else {
+                palette.translucency
+            };
+            let window_glass = native_available
+                && material == theme::Translucency::LiquidGlass
                 && self
                     ._vibrancy
                     .as_ref()
                     .is_some_and(vibrancy::Vibrancy::has_window_glass);
-            (palette, native_available, window_glass)
+            (palette, native_available, reduce_transparency, window_glass)
         };
         #[cfg(not(target_os = "macos"))]
-        let (native_available, window_glass) = (false, false);
+        let (native_available, reduce_transparency, window_glass) = (false, false, false);
         #[cfg(target_os = "macos")]
         let (window_controls, fullscreen) =
             self._vibrancy.as_ref().map_or((None, false), |backdrop| {
@@ -1535,6 +1547,7 @@ impl RunningApp {
                 device_pixels_per_css_pixel,
                 native_glass: ui::NativeGlass {
                     vibrancy_available: native_available,
+                    reduce_transparency,
                     window_backdrop: window_glass,
                     ..Default::default()
                 },
@@ -2466,7 +2479,7 @@ impl RunningApp {
                 let settings = &mut self.settings;
                 settings.sidebar_widgets = dashboard::Placed::defaults();
                 settings.reset_sidebar_sections();
-                settings.newtab_widgets = None;
+                settings.newtab_grid = None;
                 settings.newtab_world_clocks = newtab::Zone::defaults();
                 settings.sidebar_width = ui::SIDEBAR_DEFAULT_WIDTH;
                 settings.save();
