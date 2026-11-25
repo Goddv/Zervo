@@ -52,13 +52,12 @@ pub use text::{
 };
 
 pub(crate) fn application_icon(ui: &Ui, dark: bool) -> Option<TextureHandle> {
-    let dark_icon = cfg!(target_os = "macos") && dark;
-    let icon_id = Id::unique(("application_icon", dark_icon));
+    let icon_id = Id::unique(("application_icon", dark));
     let icon = ui
         .ctx()
         .data(|data| data.get_temp::<TextureHandle>(icon_id));
     icon.or_else(|| {
-        let png = if dark_icon {
+        let png = if dark {
             include_bytes!("../../assets/icon/zervo-macos-dark-512.png").as_slice()
         } else {
             include_bytes!("../../assets/icon/zervo-128.png").as_slice()
@@ -70,7 +69,7 @@ pub(crate) fn application_icon(ui: &Ui, dark: bool) -> Option<TextureHandle> {
         );
         let texture = ui
             .ctx()
-            .load_texture("Zervo icon", color, egui::TextureOptions::LINEAR);
+            .load_texture("Heion icon", color, egui::TextureOptions::LINEAR);
         ui.ctx()
             .data_mut(|data| data.insert_temp(icon_id, texture.clone()));
         Some(texture)

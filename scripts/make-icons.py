@@ -13,8 +13,8 @@ Produces, all committed so a release needs no image tooling:
 `assets/icon/Zervo.icns` is built separately by scripts/make-icns.sh, which
 uses stock macOS tools and so cannot run anywhere else.
 
-Render assets/icon/zervo-icon-default.svg to assets/icon/zervo-1024.png
-after editing the artwork.
+Export the Default appearance of assets/icon/Heion.icon to
+assets/icon/zervo-1024.png after editing the artwork.
 
 Needs Pillow. This is the one script in the tree with a dependency outside the
 standard library, which is why its output is committed rather than generated at

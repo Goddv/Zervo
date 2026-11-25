@@ -1,30 +1,71 @@
 {
-  "fill": "system-light",
   "groups": [
     {
       "layers": [
         {
           "glass": true,
-          "image-name": "03 Sun.svg",
-          "name": "Sun"
+          "image-name": "05 Violet rail.svg",
+          "name": "Violet rail"
         }
-      ]
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.2
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.16
+      }
     },
     {
       "layers": [
         {
           "glass": true,
-          "image-name": "02 Horizon lines.svg",
-          "name": "Horizon lines"
+          "image-name": "04 Mint rail.svg",
+          "name": "Mint rail"
         }
-      ]
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.2
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.16
+      }
+    },
+    {
+      "layers": [
+        {
+          "glass": true,
+          "image-name": "03 Bridge.svg",
+          "name": "Frosted bridge"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.2
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.16
+      }
     },
     {
       "layers": [
         {
           "glass": false,
-          "image-name": "01 Horizon field.svg",
-          "name": "Indigo field"
+          "image-name": "02 Ambient light.svg",
+          "name": "Ambient light",
+          "opacity-specializations": [
+            {
+              "value": 0.28
+            },
+            {
+              "appearance": "dark",
+              "value": 1
+            }
+          ]
         }
       ]
     }
@@ -33,5 +74,24 @@
     "squares": [
       "macOS"
     ]
-  }
+  },
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:1.000000,1.000000,1.000000,1.000000",
+          "srgb:0.909804,0.937255,0.972549,1.000000"
+        ]
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.086275,0.164706,0.250980,1.000000",
+          "srgb:0.031373,0.058824,0.117647,1.000000"
+        ]
+      }
+    }
+  ]
 }

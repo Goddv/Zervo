@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 180 180">
-<defs>
-      <linearGradient id="horizon" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
-        <stop stop-color="#222e4f"/><stop offset="1" stop-color="#3c4d6d"/>
-      </linearGradient>
-    </defs>
-<rect width="180" height="180" fill="url(#horizon)"/>
-</svg>

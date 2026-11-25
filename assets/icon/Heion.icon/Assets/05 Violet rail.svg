@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+  <linearGradient id="right-glass" x1="90%" y1="0%" x2="8%" y2="100%">
+    <stop stop-color="#a0e6ff"/>
+    <stop offset=".30" stop-color="#689de6"/>
+    <stop offset=".65" stop-color="#6d83e7"/>
+    <stop offset="1" stop-color="#a79afb"/>
+  </linearGradient>
+  <linearGradient id="right-edge" x1="85%" y1="3%" x2="25%" y2="99%">
+    <stop stop-color="#d8f8ff" stop-opacity=".92"/>
+    <stop offset=".54" stop-color="#9dbeff" stop-opacity=".35"/>
+    <stop offset="1" stop-color="#cdc1ff" stop-opacity=".83"/>
+  </linearGradient>
+  <linearGradient id="right-plane" x1="8%" y1="5%" x2="99%" y2="95%">
+    <stop stop-color="#d6f6ff" stop-opacity=".17"/>
+    <stop offset="1" stop-color="#f3e6ff" stop-opacity=".50"/>
+  </linearGradient>
+</defs>
+<path d="M772 260L680 205Q655 190 635 211L614 233Q607 241 607 253V759Q607 780 627 789L711 824Q732 833 746 817L780 777Q792 763 792 745V296Q792 273 772 260Z"
+      fill="url(#right-glass)" stroke="url(#right-edge)" stroke-width="4"/>
+<path d="M772 265L680 210Q661 198 647 206L684 252L750 292V739L726 781L729 823Q737 820 743 810L777 773Q788 762 788 742V299Q788 276 772 265Z"
+      fill="url(#right-plane)"/>
+<path d="M613 239L635 215Q642 209 647 206L684 252L671 748L726 781L729 822Q719 825 711 820L629 785Q612 777 612 759Z"
+      fill="#243a8e" fill-opacity=".24"/>
+</svg>

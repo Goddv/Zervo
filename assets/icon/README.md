@@ -1,16 +1,14 @@
 # Heion app icon
 
-Horizon depicts a sun above two level lines. The
-[scalable icon](zervo-icon-default.svg) is the artwork for Linux and the
-portable app icon. The [Icon Composer document](Heion.icon) contains the
-sun, horizon lines, and indigo field as separate layers for macOS.
+Refraction forms an H with two glass rails and a frosted bridge. The
+[Icon Composer document](Heion.icon) contains editable layers and separate
+white and midnight backgrounds for the Default and Dark appearances.
 
-Render the scalable icon at 1024 pixels to `zervo-1024.png`. Run
-`./scripts/make-icons.py` to update the launcher PNGs and Windows ICO.
-The macOS bundler turns the export into
-`Zervo.icns` with the command-line tools. With an Icon Composer-compatible
-Xcode toolchain, it also compiles `Heion.icon` into the bundle's asset catalog
-so macOS can apply the selected icon appearance. The darker
-`zervo-macos-dark-512.png` variant is used in dark mode in the app.
+Export Default and Dark from Icon Composer with transparent padding, at 1024
+and 512 pixels respectively. Save them as `zervo-1024.png` and
+`zervo-macos-dark-512.png`. Run `./scripts/make-icons.py` to update the
+launcher PNGs and Windows ICO. The macOS bundler compiles both appearances
+into the asset catalog and provides a default ICNS as a fallback.
 
-The filenames are used by existing packaging and update scripts.
+The [scalable light icon](zervo-icon-default.svg) is used by Linux launchers.
+Existing packaging and update scripts use the historical filenames.

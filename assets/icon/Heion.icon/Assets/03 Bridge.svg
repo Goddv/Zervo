@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+  <linearGradient id="ice" x1="0%" y1="17%" x2="100%" y2="85%">
+    <stop stop-color="#9de5f2"/>
+    <stop offset=".40" stop-color="#d4eefb"/>
+    <stop offset=".65" stop-color="#ccdcf9"/>
+    <stop offset="1" stop-color="#9eaeee"/>
+  </linearGradient>
+  <linearGradient id="bridge-face" x1="0%" y1="20%" x2="95%" y2="80%">
+    <stop stop-color="#ffffff" stop-opacity=".58"/>
+    <stop offset="1" stop-color="#ffffff" stop-opacity=".04"/>
+  </linearGradient>
+</defs>
+<path d="M372 478C432 478 484 430 544 430C587 430 621 457 657 457V582C611 582 583 555 544 555C482 555 432 603 372 603Z"
+      fill="url(#ice)" stroke="#effcff" stroke-opacity=".84" stroke-width="3"/>
+<path d="M374 483C432 481 483 435 544 435C589 435 618 459 655 461L655 480C608 480 582 456 545 456C488 456 437 499 374 505Z"
+      fill="url(#bridge-face)"/>
+</svg>

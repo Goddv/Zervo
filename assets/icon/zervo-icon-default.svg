@@ -1,11 +1,92 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><defs>
-      <linearGradient id="horizon" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
-        <stop stop-color="#222e4f"/><stop offset="1" stop-color="#3c4d6d"/>
-      </linearGradient>
-    </defs>
-    <rect x="8" y="8" width="164" height="164" rx="37" fill="url(#horizon)"/>
-    <rect x="8.5" y="8.5" width="163" height="163" rx="36.5" fill="none" stroke="#ffffff" stroke-opacity=".14"/>
-
-        <path d="M66 88a24 24 0 0 1 48 0" fill="#f8c99c"/>
-        <path d="M49 99h82 M60 116h60" stroke="#fff0d9" stroke-width="9" stroke-linecap="round"/>
-        </svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>Heion Refraction</title>
+<defs>
+  <clipPath id="icon-tile"><rect x="50" y="50" width="924" height="924" rx="211"/></clipPath>
+  <linearGradient id="pearl" x1="10%" y1="0%" x2="85%" y2="100%">
+    <stop stop-color="#ffffff"/>
+    <stop offset="1" stop-color="#e8eff8"/>
+  </linearGradient>
+</defs>
+<g clip-path="url(#icon-tile)">
+  <rect width="1024" height="1024" fill="url(#pearl)"/>
+  <g opacity=".28">
+<defs>
+  <radialGradient id="mint-glow">
+    <stop stop-color="#53f4d6" stop-opacity=".34"/>
+    <stop offset=".53" stop-color="#279f9f" stop-opacity=".16"/>
+    <stop offset="1" stop-color="#176266" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="blue-glow">
+    <stop stop-color="#6593ff" stop-opacity=".46"/>
+    <stop offset=".54" stop-color="#3f64ea" stop-opacity=".18"/>
+    <stop offset="1" stop-color="#253eb5" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+<ellipse cx="358" cy="346" rx="418" ry="338" fill="url(#mint-glow)"/>
+<ellipse cx="647" cy="693" rx="421" ry="354" fill="url(#blue-glow)"/>
+  </g>
+<defs>
+  <linearGradient id="ice" x1="0%" y1="17%" x2="100%" y2="85%">
+    <stop stop-color="#9de5f2"/>
+    <stop offset=".40" stop-color="#d4eefb"/>
+    <stop offset=".65" stop-color="#ccdcf9"/>
+    <stop offset="1" stop-color="#9eaeee"/>
+  </linearGradient>
+  <linearGradient id="bridge-face" x1="0%" y1="20%" x2="95%" y2="80%">
+    <stop stop-color="#ffffff" stop-opacity=".58"/>
+    <stop offset="1" stop-color="#ffffff" stop-opacity=".04"/>
+  </linearGradient>
+</defs>
+<path d="M372 478C432 478 484 430 544 430C587 430 621 457 657 457V582C611 582 583 555 544 555C482 555 432 603 372 603Z"
+      fill="url(#ice)" stroke="#effcff" stroke-opacity=".84" stroke-width="3"/>
+<path d="M374 483C432 481 483 435 544 435C589 435 618 459 655 461L655 480C608 480 582 456 545 456C488 456 437 499 374 505Z"
+      fill="url(#bridge-face)"/>
+<defs>
+  <linearGradient id="left-glass" x1="4%" y1="5%" x2="90%" y2="100%">
+    <stop stop-color="#b2ffe3"/>
+    <stop offset=".26" stop-color="#64dfd8"/>
+    <stop offset=".59" stop-color="#36afce"/>
+    <stop offset="1" stop-color="#467ce0"/>
+  </linearGradient>
+  <linearGradient id="left-edge" x1="14%" y1="4%" x2="72%" y2="100%">
+    <stop stop-color="#e3fff4" stop-opacity=".89"/>
+    <stop offset=".57" stop-color="#8ddef5" stop-opacity=".24"/>
+    <stop offset="1" stop-color="#a6ceff" stop-opacity=".70"/>
+  </linearGradient>
+  <linearGradient id="left-plane" x1="0%" y1="2%" x2="95%" y2="95%">
+    <stop stop-color="#fbfffc" stop-opacity=".48"/>
+    <stop offset="1" stop-color="#d6ffff" stop-opacity=".06"/>
+  </linearGradient>
+</defs>
+<path d="M252 260L344 205Q369 190 389 211L410 233Q417 241 417 253V759Q417 780 397 789L313 824Q292 833 278 817L244 777Q232 763 232 745V296Q232 273 252 260Z"
+      fill="url(#left-glass)" stroke="url(#left-edge)" stroke-width="4"/>
+<path d="M253 265L347 209Q369 195 385 213L409 239L355 279L272 310V749L294 819L245 774Q236 763 236 742V298Q236 277 253 265Z"
+      fill="url(#left-plane)"/>
+<path d="M355 279L409 239Q414 245 414 255V758Q414 775 395 784L314 819Q300 825 294 819L333 774L369 752Z"
+      fill="#234fa3" fill-opacity=".20"/>
+<defs>
+  <linearGradient id="right-glass" x1="90%" y1="0%" x2="8%" y2="100%">
+    <stop stop-color="#a0e6ff"/>
+    <stop offset=".30" stop-color="#689de6"/>
+    <stop offset=".65" stop-color="#6d83e7"/>
+    <stop offset="1" stop-color="#a79afb"/>
+  </linearGradient>
+  <linearGradient id="right-edge" x1="85%" y1="3%" x2="25%" y2="99%">
+    <stop stop-color="#d8f8ff" stop-opacity=".92"/>
+    <stop offset=".54" stop-color="#9dbeff" stop-opacity=".35"/>
+    <stop offset="1" stop-color="#cdc1ff" stop-opacity=".83"/>
+  </linearGradient>
+  <linearGradient id="right-plane" x1="8%" y1="5%" x2="99%" y2="95%">
+    <stop stop-color="#d6f6ff" stop-opacity=".17"/>
+    <stop offset="1" stop-color="#f3e6ff" stop-opacity=".50"/>
+  </linearGradient>
+</defs>
+<path d="M772 260L680 205Q655 190 635 211L614 233Q607 241 607 253V759Q607 780 627 789L711 824Q732 833 746 817L780 777Q792 763 792 745V296Q792 273 772 260Z"
+      fill="url(#right-glass)" stroke="url(#right-edge)" stroke-width="4"/>
+<path d="M772 265L680 210Q661 198 647 206L684 252L750 292V739L726 781L729 823Q737 820 743 810L777 773Q788 762 788 742V299Q788 276 772 265Z"
+      fill="url(#right-plane)"/>
+<path d="M613 239L635 215Q642 209 647 206L684 252L671 748L726 781L729 822Q719 825 711 820L629 785Q612 777 612 759Z"
+      fill="#243a8e" fill-opacity=".24"/>
+  <rect x="52" y="52" width="920" height="920" rx="209" fill="none" stroke="#90a9c2" stroke-opacity=".28" stroke-width="4"/>
+</g>
+</svg>
