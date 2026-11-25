@@ -91,7 +91,10 @@ REVISION=0
 if [[ "$VERSION" =~ \+([0-9]{1,2})$ ]]; then
     REVISION="${BASH_REMATCH[1]}"
 fi
-BUILD_VERSION="${RELEASE_VERSION%.*}.$(( ${RELEASE_VERSION##*.} * 100 + 10#$REVISION ))"
+# Increment the public major component so the Heion version reset sorts
+# above existing Zervo builds in Sparkle.
+IFS=. read -r MAJOR MINOR PATCH <<< "$RELEASE_VERSION"
+BUILD_VERSION="$((MAJOR + 1)).$MINOR.$((PATCH * 100 + 10#$REVISION))"
 # Read out of .cargo/config.toml rather than written down a second time. The
 # bundle's LSMinimumSystemVersion and the compiler's deployment target have to
 # be the same number, and the way that goes wrong is somebody changing one of
@@ -365,7 +368,7 @@ if [ -n "$UPDATER_FRAMEWORK" ]; then
     esac
     # shellcheck source=scripts/lib/bundle-updater.sh
     . scripts/lib/bundle-updater.sh
-    UPDATE_FEED="https://github.com/Goddv/Zervo/releases/latest/download/zervo-appcast-$UPDATE_ARCH.xml"
+    UPDATE_FEED="https://github.com/Goddv/Heion/releases/latest/download/zervo-appcast-$UPDATE_ARCH.xml"
     zervo_bundle_updater "$UPDATER_FRAMEWORK" "$APP" "$UPDATE_FEED" "$ZERVO_SPARKLE_PUBLIC_KEY" "$UPDATE_ARCH"
 fi
 
@@ -398,7 +401,7 @@ if [ "$MAKE_DMG" = 1 ]; then
     # "Intel and Apple Silicon", via a placeholder so the substitution for the
     # separator cannot fire inside a name it has already written.
     ARCH_HUMAN="$(printf '%s' "$ARCH_LIST" | sed -e 's/ /+/g' -e 's/arm64/Apple Silicon/g' -e 's/x86_64/Intel/g' -e 's/+/ and /g')"
-    DMG="$OUTPUT/Zervo-$ARTIFACT_VERSION-$ARCH_SLUG.dmg"
+    DMG="$OUTPUT/Heion-$ARTIFACT_VERSION-$ARCH_SLUG.dmg"
     STAGE="$(mktemp -d)"
     zervo_cleanup_on_exit "$STAGE"
 
@@ -432,29 +435,29 @@ if [ "$MAKE_DMG" = 1 ]; then
     # would also try to expand the "$99/year" below.
     if [ "$NOTARIZE" = 1 ]; then
         cat > "$STAGE/READ ME FIRST.txt" <<'README_SIGNED'
-Zervo @VERSION@
+Heion @VERSION@
 
-Drag Zervo into Applications, then open it normally.
+Drag the app into Applications, then open it normally.
 Requires macOS @MINMACOS@ or later and runs on @ARCHS@.
 README_SIGNED
     else
         cat > "$STAGE/READ ME FIRST.txt" <<'README'
-Zervo @VERSION@
+Heion @VERSION@
 ==============
 
-1. Drag Zervo onto the Applications folder here.
+1. Drag the app onto the Applications folder here.
 
 2. Open Terminal and run:
 
        xattr -dr com.apple.quarantine /Applications/Zervo.app
 
-3. Open Zervo normally.
+3. Open Heion normally.
 
 Why step 2?
 -----------
 macOS quarantines everything downloaded from the internet, and refuses to
 open a quarantined app unless it is signed with a paid Apple Developer ID
-($99/year) and notarised by Apple. Zervo is not, so without step 2 macOS
+($99/year) and notarised by Apple. This build is ad-hoc signed, so without step 2 macOS
 tells you the app "is damaged and can't be opened", which is not true —
 it just means Apple has not been paid to vouch for it.
 
@@ -470,11 +473,11 @@ Requirements
 - macOS @MINMACOS@ or later.
 - This build runs on @ARCHS@.
 
-Zervo runs on Servo, an independent web engine that is still young, so
+Heion runs on Servo, an independent web engine that is still young, so
 expect sites to render badly or not at all. It is something to try, not a
 browser to depend on.
 
-https://github.com/Goddv/Zervo
+https://github.com/Goddv/Heion
 README
     fi
     MIN_MACOS="$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")"
@@ -489,10 +492,10 @@ README
     # in 22s on a 338 MB Zervo.app. It still mounts in the kernel, unlike ULMO,
     # which saves another 27 MB and costs two minutes and a helper process. It
     # needs macOS 10.11, comfortably below this bundle's own floor.
-    if ! hdiutil create -volname "Zervo $ARTIFACT_VERSION" -srcfolder "$STAGE" -ov \
+    if ! hdiutil create -volname "Heion $ARTIFACT_VERSION" -srcfolder "$STAGE" -ov \
             -format ULFO "$DMG" > /dev/null 2>&1; then
         warn "ULFO unavailable; falling back to UDZO"
-        hdiutil create -volname "Zervo $ARTIFACT_VERSION" -srcfolder "$STAGE" -ov \
+        hdiutil create -volname "Heion $ARTIFACT_VERSION" -srcfolder "$STAGE" -ov \
             -format UDZO "$DMG" > /dev/null
     fi
 

@@ -8,7 +8,7 @@ use crate::updates::Status;
 
 use super::frame::{builtin_card, builtin_page_rect, centre_builtin_column, paint_builtin_page};
 
-const GITHUB_RELEASES: &str = "https://github.com/Goddv/Zervo/releases";
+const GITHUB_RELEASES: &str = "https://github.com/Goddv/Heion/releases";
 const HISTORY: &str = include_str!("../../CHANGELOG.md");
 
 pub(super) fn draw(

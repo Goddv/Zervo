@@ -6,12 +6,12 @@
 
 **A calm, workspace-oriented browser built on the [Servo][servo] engine.**
 
-[![Release](https://img.shields.io/github/v/tag/Goddv/Zervo?label=release&sort=semver)](https://github.com/Goddv/Zervo/releases)
+[![Release](https://img.shields.io/github/v/release/Goddv/Heion?label=release)](https://github.com/Goddv/Heion/releases)
 [![License](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE)
 [![Engine](https://img.shields.io/badge/engine-Servo-informational)](https://servo.org)
 ![Rust](https://img.shields.io/badge/rust-1.100-orange)
 
-[macOS downloads](https://github.com/Goddv/Zervo/releases) · [Latest preview builds](https://github.com/Goddv/Zervo/actions/workflows/release.yml)
+[macOS downloads](https://github.com/Goddv/Heion/releases) · [Latest preview builds](https://github.com/Goddv/Heion/actions/workflows/release.yml)
 · [Changelog](CHANGELOG.md)
 
 </div>
@@ -49,13 +49,8 @@ Existing installs keep their profiles, saved logins, and signed update channel.
 
 ### The new tab page
 
-- **Search.** Click the search field to expand it into the browser command bar.
-- **Widgets.** Click **Customise** to arrange widgets on a six-column grid.
-  Drag a widget’s top handle to move it or its bottom-right corner to resize
-  it. Each widget’s menu also offers move, resize, and remove commands.
-- **Backdrop.** Grid is the default and Empty clears the pattern. Choose a
-  photograph, a static pattern, or an animated backdrop from the page header.
-  Choose Liquid Glass, Frosted, or Solid for the backdrop material.
+Click the centered search pill to expand it into the browser command bar.
+Choose Grid, Frosted, or Liquid Glass under **Settings → Layout → New Tab**.
 
 ### How it is put together
 
@@ -76,8 +71,8 @@ Heion builds the Servo engine from source, so the first build is long
 (roughly an hour) and needs a lot of disk. Subsequent builds are incremental.
 
 ```bash
-git clone https://github.com/goddv/zervo
-cd zervo
+git clone https://github.com/Goddv/Heion
+cd Heion
 # Prepare the sibling Servo checkout as described in docs/SERVO.md.
 cargo build --profile dev-fast
 ./target/dev-fast/zervo
@@ -124,8 +119,7 @@ See [Packaging and distribution](docs/PACKAGING.md).
 | `zervo-core/src/theme.rs` | palettes, accents, and the material every surface is built from |
 | `zervo-core/src/glass.rs` | the one place a surface is drawn |
 | `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
-| `src/newtab.rs` | the new tab page: cards, grid, backdrops |
-| `src/wallpaper.rs`, `zervo-core/src/net.rs` | wallpapers from Commons and Openverse |
+| `src/newtab.rs` | the New Tab search pill and backdrop |
 | `src/widgets.rs` | toggles, sliders, segmented controls |
 | `src/icons.rs`, `src/phosphor.rs` | [Phosphor][phosphor] icon rendering |
 | `src/downloads.rs` | download manager |
@@ -156,7 +150,7 @@ requires macOS 26 or later. Linux and Windows builds are paused.
   so is how far the accent reaches into it — and an arrangement can be saved
   under a name of your own. The colours the two themes start from are still
   constants. See [docs/THEMING.md](docs/THEMING.md).
-- **Feedback.** [Open an issue](https://github.com/Goddv/Zervo/issues) with
+- **Feedback.** [Open an issue](https://github.com/Goddv/Heion/issues) with
   the macOS version, theme, and sidebar layout you were using.
 - **Unsigned builds.** See [docs/PACKAGING.md](docs/PACKAGING.md).
 

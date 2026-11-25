@@ -792,7 +792,7 @@ fn draw_widget(
                         rect.center().y + if roomy { 16.0 } else { 12.0 },
                     ),
                     Align2::CENTER_CENTER,
-                    crate::newtab::calendar_date(&now, true),
+                    calendar_date(&now, true),
                     FontId::proportional(11.5),
                     palette.text_muted,
                 );
@@ -956,4 +956,71 @@ mod tests {
         assert_eq!(migrated, widgets);
         assert_eq!(free_row(&migrated), Some(3));
     }
+}
+
+fn weekday(date: &jiff::ZonedDateTime, short: bool) -> &'static str {
+    const LONG: [&str; 7] = [
+        "clock-weekday-monday",
+        "clock-weekday-tuesday",
+        "clock-weekday-wednesday",
+        "clock-weekday-thursday",
+        "clock-weekday-friday",
+        "clock-weekday-saturday",
+        "clock-weekday-sunday",
+    ];
+    const SHORT: [&str; 7] = [
+        "clock-weekday-monday-short",
+        "clock-weekday-tuesday-short",
+        "clock-weekday-wednesday-short",
+        "clock-weekday-thursday-short",
+        "clock-weekday-friday-short",
+        "clock-weekday-saturday-short",
+        "clock-weekday-sunday-short",
+    ];
+    let labels = if short { SHORT } else { LONG };
+    tr(labels[date.weekday().to_monday_zero_offset() as usize])
+}
+
+pub(crate) fn calendar_date(date: &jiff::ZonedDateTime, short: bool) -> String {
+    const LONG: [&str; 12] = [
+        "clock-month-january",
+        "clock-month-february",
+        "clock-month-march",
+        "clock-month-april",
+        "clock-month-may",
+        "clock-month-june",
+        "clock-month-july",
+        "clock-month-august",
+        "clock-month-september",
+        "clock-month-october",
+        "clock-month-november",
+        "clock-month-december",
+    ];
+    const SHORT: [&str; 12] = [
+        "clock-month-january-short",
+        "clock-month-february-short",
+        "clock-month-march-short",
+        "clock-month-april-short",
+        "clock-month-may-short",
+        "clock-month-june-short",
+        "clock-month-july-short",
+        "clock-month-august-short",
+        "clock-month-september-short",
+        "clock-month-october-short",
+        "clock-month-november-short",
+        "clock-month-december-short",
+    ];
+    let labels = if short { SHORT } else { LONG };
+    crate::l10n::message(
+        if short {
+            "clock-date-short"
+        } else {
+            "clock-date"
+        },
+        [
+            ("weekday", weekday(date, short).into()),
+            ("day", date.day().into()),
+            ("month", tr(labels[(date.month() - 1) as usize]).into()),
+        ],
+    )
 }

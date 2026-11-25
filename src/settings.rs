@@ -137,63 +137,32 @@ pub enum NewTabPage {
 /// Background treatment of the zervo://newtab page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NewTabBackground {
-    /// A photograph, from whichever source `wallpaper_source` names.
-    Photo,
-    /// Slow ambient drift of accent-tinted light blobs.
-    Aurora,
-    /// Flowing sine bands.
-    Waves,
-    /// Drifting points of light.
-    Particles,
-    /// Static multi-point colour wash.
-    Mesh,
-    /// Faint geometric grid.
+    #[serde(alias = "Plain")]
+    Frosted,
+    LiquidGlass,
+    #[serde(other)]
     Grid,
-    /// Simple vertical fade.
-    Gradient,
-    Plain,
 }
 
 impl NewTabBackground {
-    pub const ALL: [NewTabBackground; 8] = [
-        NewTabBackground::Photo,
-        NewTabBackground::Aurora,
-        NewTabBackground::Waves,
-        NewTabBackground::Particles,
-        NewTabBackground::Mesh,
-        NewTabBackground::Grid,
-        NewTabBackground::Gradient,
-        NewTabBackground::Plain,
-    ];
+    pub const ALL: [Self; 3] = [Self::Grid, Self::Frosted, Self::LiquidGlass];
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            NewTabBackground::Photo => tr("options-photo"),
-            NewTabBackground::Aurora => tr("options-aurora"),
-            NewTabBackground::Waves => tr("options-waves"),
-            NewTabBackground::Particles => tr("options-particles"),
-            NewTabBackground::Mesh => tr("options-mesh"),
-            NewTabBackground::Grid => tr("options-grid"),
-            NewTabBackground::Gradient => tr("options-gradient"),
-            NewTabBackground::Plain => tr("options-plain"),
+            Self::Grid => tr("options-grid"),
+            Self::Frosted => tr("theme-frosted"),
+            Self::LiquidGlass => tr("common-liquid-glass"),
         }
     }
 
-    /// True for backgrounds that animate and therefore need timed repaints.
-    pub fn animated(&self) -> bool {
-        matches!(
-            self,
-            NewTabBackground::Aurora | NewTabBackground::Waves | NewTabBackground::Particles
-        )
+    pub fn material(self) -> Translucency {
+        match self {
+            Self::Frosted => Translucency::Frosted,
+            Self::Grid | Self::LiquidGlass => Translucency::LiquidGlass,
+        }
     }
 }
 
-/// An arrangement somebody kept, under a name of their own.
-///
-/// The five presets are constants and always will be — they are the ones the
-/// study argues for. This is the other half of the answer to "a theme is a
-/// Rust constant": not only is every value settable, an arrangement can be put
-/// somewhere and come back.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Saved {
     pub name: String,
@@ -301,27 +270,6 @@ pub struct Settings {
     /// cannot see is a fault rather than a look.
     /// Trackpad swipes bound to chrome actions.
     pub gestures: crate::gestures::Gestures,
-
-    // ── The new tab page.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub newtab_grid: Option<Vec<crate::newtab::layout::Tile>>,
-    #[serde(rename = "newtab_widgets", skip_serializing)]
-    legacy_newtab_widgets: Option<Vec<crate::newtab::Widget>>,
-    pub newtab_material: Translucency,
-    #[serde(rename = "newtab_tiles", skip_serializing)]
-    legacy_newtab_tiles: Option<Vec<crate::newtab::LegacyTile>>,
-    /// The cities on the world-clocks card.
-    pub newtab_world_clocks: Vec<crate::newtab::Zone>,
-    /// Optional line shown beneath the New Tab clock.
-    pub newtab_message: String,
-    /// Where the page's photograph comes from.
-    pub wallpaper_source: crate::wallpaper::Source,
-    /// How often a new one is fetched.
-    pub wallpaper_cadence: crate::wallpaper::Cadence,
-    /// How far the photograph is veiled so the cards read on it, 0..=1. Never
-    /// zero: a card on a bright photograph with no veil under it cannot be
-    /// read, whatever the photograph.
-    pub wallpaper_dim: f32,
 }
 
 pub const MAX_ACCENT_STRENGTH: f32 = 0.4;
@@ -413,15 +361,6 @@ impl Default for Settings {
             appearance: sidebar_default_appearance(),
             legacy_translucency: None,
             gestures: crate::gestures::Gestures::default(),
-            newtab_grid: None,
-            legacy_newtab_widgets: None,
-            newtab_material: Translucency::LiquidGlass,
-            legacy_newtab_tiles: None,
-            newtab_world_clocks: crate::newtab::Zone::defaults(),
-            newtab_message: String::new(),
-            wallpaper_source: crate::wallpaper::Source::Commons,
-            wallpaper_cadence: crate::wallpaper::Cadence::Daily,
-            wallpaper_dim: 0.55,
         }
     }
 }
@@ -440,12 +379,6 @@ impl Settings {
                 ..Self::default()
             }
         }
-    }
-
-    pub fn newtab_tiles(&self) -> &[crate::newtab::layout::Tile] {
-        self.newtab_grid
-            .as_deref()
-            .unwrap_or(&crate::newtab::layout::DEFAULT)
     }
 
     pub fn reset_sidebar_sections(&mut self) {
@@ -492,19 +425,6 @@ pub fn load() -> Settings {
 
 /// Update built-in presets and carry forward older translucency settings.
 fn migrate(settings: &mut Settings) {
-    let previous_order = settings.legacy_newtab_widgets.take().or_else(|| {
-        settings
-            .legacy_newtab_tiles
-            .take()
-            .map(crate::newtab::migrate_widgets)
-    });
-    if settings.newtab_grid.is_none() {
-        settings.newtab_grid = previous_order.map(crate::newtab::layout::from_order);
-    }
-    if let Some(tiles) = &mut settings.newtab_grid {
-        crate::newtab::layout::normalize(tiles);
-    }
-
     use crate::theme::{Preset, Translucency};
 
     if !SidebarSection::ALL
@@ -548,36 +468,16 @@ mod tests {
     use super::*;
     use crate::theme::{Preset, Translucency};
 
-    /// The one field that changed address. A settings file written before
-    /// every value about how Zervo is built moved into one arrangement still
-    /// carries `translucency` at the top level, and the reader's choice there
-    /// has to survive the move.
     #[test]
-    fn legacy_new_tab_widgets_keep_their_order_and_are_saved_once() {
-        use crate::newtab::Widget;
-
-        let mut settings: Settings = serde_json::from_value(serde_json::json!({
-            "newtab_home": "Board",
-            "newtab_tiles": [
-                {"card":"Notes", "at":{"col":6,"row":1}, "span":{"w":6,"h":2}},
-                {"card":"Tasks", "at":{"col":0,"row":2}, "span":{"w":4,"h":2}},
-                {"card":"Downloads", "at":{"col":0,"row":1}, "span":{"w":6,"h":2}}
-            ]
+    fn obsolete_new_tab_background_keeps_the_rest_of_the_profile() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "new_tab_background": "Photo",
+            "search_engine": "Bing",
+            "newtab_widgets": ["Clock", "Recent"]
         }))
         .unwrap();
-        migrate(&mut settings);
-        assert_eq!(
-            settings
-                .newtab_tiles()
-                .iter()
-                .map(|tile| tile.widget)
-                .collect::<Vec<_>>(),
-            &[Widget::Downloads, Widget::Writing]
-        );
-        let saved = serde_json::to_value(&settings).unwrap();
-        assert!(saved.get("newtab_home").is_none() && saved.get("newtab_tiles").is_none());
-        let loaded: Settings = serde_json::from_value(saved).unwrap();
-        assert_eq!(loaded.newtab_tiles(), settings.newtab_tiles());
+        assert_eq!(settings.new_tab_background, NewTabBackground::Grid);
+        assert_eq!(settings.search_engine, SearchEngine::Bing);
     }
 
     #[test]

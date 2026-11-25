@@ -42,13 +42,13 @@ verify_mounted_app() {
         die "unexpected app bundle identifier"
     [ "$(plutil -extract SUPublicEDKey raw "$plist")" = "$ZERVO_SPARKLE_PUBLIC_KEY" ] ||
         die "app does not contain the configured Sparkle key"
-    [ "$(plutil -extract SUFeedURL raw "$plist")" = "https://github.com/Goddv/Zervo/releases/latest/download/zervo-appcast-$arch.xml" ] ||
+    [ "$(plutil -extract SUFeedURL raw "$plist")" = "https://github.com/Goddv/$1/releases/latest/download/zervo-appcast-$arch.xml" ] ||
         die "app contains an unexpected feed URL"
 }
 
 hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$candidate" >&2
 mode="$(signature_kind)"
-verify_mounted_app
+verify_mounted_app Heion
 if [ "$mode" = developer-id ]; then
     team_requirement="$(codesign -dr - "$app" 2>&1 | sed -n 's/^designated => //p')"
     [ -n "$team_requirement" ] || die "candidate is missing a designated requirement"
@@ -56,26 +56,44 @@ fi
 shasum -a 256 "$executable" | cut -d ' ' -f 1 > "$stage/target-executable.sha256"
 plutil -extract CFBundleVersion raw "$plist"
 hdiutil detach "$mount" >&2
-cp "$candidate" "$stage/Zervo-${tag#v}-$arch-sparkle.dmg"
+cp "$candidate" "$stage/Zervo-${tag#heion-v}-$arch-sparkle.dmg"
 
-# Only published releases with a feed had updater-enabled installers.
+# Retain exact, signed Zervo bundles for users who skip the first Heion release.
+for version in 0.6.1.2 0.6.1.3; do
+    baseline="$stage/Zervo-$version-$arch-sparkle.dmg"
+    if [ "$tag" = heion-v0.1.0 ]; then
+        gh release download "v$version" --pattern "Zervo-$version-$arch.dmg" --output "$baseline" >&2
+    else
+        gh release download heion-v0.1.0 --pattern "Legacy-Zervo-$version-$arch.dmg" --output "$baseline" >&2
+    fi
+    hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$baseline" >&2
+    [ "$(signature_kind)" = "$mode" ] || die "Zervo $version uses a different signature type"
+    verify_mounted_app Zervo
+    case "$version" in
+        0.6.1.2) expected=0.6.102 ;;
+        0.6.1.3) expected=0.6.103 ;;
+    esac
+    [ "$(plutil -extract CFBundleVersion raw "$plist")" = "$expected" ] || die "unexpected Zervo $version build number"
+    hdiutil detach "$mount" >&2
+done
+
 previous_tags="$(gh release list --limit 20 --exclude-drafts --exclude-pre-releases \
     --json tagName --jq '.[].tagName')"
 count=0
 while IFS= read -r prior; do
-    [[ "$prior" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$prior" != "$tag" ]] || continue
+    [[ "$prior" =~ ^heion-v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$prior" != "$tag" ]] || continue
     names="$(gh release view "$prior" --json assets --jq '.assets[].name')"
     grep -Fxq "zervo-appcast-$arch.xml" <<<"$names" || continue
-    archive="Zervo-${prior#v}-$arch.dmg"
-    baseline="$stage/Zervo-${prior#v}-$arch-sparkle.dmg"
-    gh release download "$prior" --pattern "$archive" --output "$baseline" >&2
+    version="${prior#heion-v}"
+    baseline="$stage/Zervo-$version-$arch-sparkle.dmg"
+    gh release download "$prior" --pattern "Heion-$version-$arch.dmg" --output "$baseline" >&2
     hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$baseline" >&2
     if [ "$(signature_kind)" != "$mode" ]; then
         hdiutil detach "$mount" >&2
         rm "$baseline"
         continue
     fi
-    verify_mounted_app
+    verify_mounted_app Heion
     hdiutil detach "$mount" >&2
     count=$((count + 1))
     [ "$count" -lt 3 ] || break

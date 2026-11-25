@@ -73,6 +73,8 @@ func verify() throws {
             targetDigest == digest, "delta has an incorrect target executable digest for \(name)")
         try FileManager.default.copyItem(at: patch, to: output.appendingPathComponent(name))
     }
+    let zervoBuilds: Set<String> = ["0.6.102", "0.6.103"]
+    try require(zervoBuilds.isSubset(of: baselines), "missing a Zervo migration delta")
     print("Verified signed feed and \(baselines.count) incremental update(s).")
 }
 

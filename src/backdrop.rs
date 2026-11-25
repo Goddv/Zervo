@@ -55,26 +55,9 @@ pub fn capture_into(painter: &egui::Painter, rect: egui::Rect, capture: &Capture
     });
 }
 
-/// The longest side of the copy.
-///
-/// This started at 220, on the reasoning that the blur removes anything finer
-/// anyway. It does — that is the problem. Shrinking a window to a fifth of its
-/// width is itself a heavy blur, and blurring *that* left a flat wash with no
-/// structure in it at all, which does not read as frosted glass. It reads as a
-/// grey rectangle, which is the exact complaint the file was written to fix.
-///
-/// What makes a surface look like glass is seeing the shapes behind it soften,
-/// not seeing them go. So this matches the wallpaper's frost, which has always
-/// looked right, at the same fraction of it.
-const SIDE: i32 = crate::wallpaper::FROST_SIDE as i32 * 3 / 4;
-/// How far it is blurred, in pixels of the copy.
-///
-/// Taken from the material at the same blur-to-size ratio the wallpaper uses,
-/// so a card over a page and a card over a photograph are the same glass. Left
-/// to itself the number means nothing: blur is only ever relative to the size
-/// of the thing being blurred.
-const BLUR: f32 =
-    crate::theme::Material::ZERVO.blur * (SIDE as f32) / (crate::wallpaper::FROST_SIDE as f32);
+/// Downsample the page before blurring to keep backdrop readback small.
+const SIDE: i32 = 480;
+const BLUR: f32 = crate::theme::Material::ZERVO.blur * 0.75;
 /// A readback stalls the pipeline, so it is worth doing only about as often as
 /// what it is copying actually changes.
 const EVERY: Duration = Duration::from_millis(120);

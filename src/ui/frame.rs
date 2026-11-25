@@ -60,18 +60,6 @@ pub(crate) fn snap_rect(rect: Rect, pixels_per_point: f32) -> Rect {
     )
 }
 
-/// A subtle vertical gradient, used to give the chrome surfaces depth.
-pub fn vertical_gradient(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(rect.left_top(), top);
-    mesh.colored_vertex(rect.right_top(), top);
-    mesh.colored_vertex(rect.right_bottom(), bottom);
-    mesh.colored_vertex(rect.left_bottom(), bottom);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(Shape::mesh(mesh));
-}
-
 /// Smoothstep falloff for a soft gradient.
 fn gradient_falloff(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);

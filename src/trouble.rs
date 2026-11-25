@@ -408,7 +408,7 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
                 label: tr("error-what-s-missing").to_owned(),
 
                 action: Deed::Read(
-                    "https://github.com/Goddv/Zervo/blob/main/docs/PARITY.md".to_owned(),
+                    "https://github.com/Goddv/Heion/blob/main/docs/PARITY.md".to_owned(),
                 ),
             });
             out

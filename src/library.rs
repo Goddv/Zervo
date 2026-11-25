@@ -224,21 +224,6 @@ impl Library {
         &self.ranked[..limit.min(self.ranked.len())]
     }
 
-    /// The last pages visited, newest first, one row per URL.
-    pub fn recent(&self, limit: usize) -> Vec<&Visit> {
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for visit in self.history.iter().rev() {
-            if seen.insert(visit.url.as_str()) {
-                out.push(visit);
-            }
-            if out.len() >= limit {
-                break;
-            }
-        }
-        out
-    }
-
     /// History newest first, filtered by `query`, grouped into buckets in the
     /// order they should be shown. Indices are into `self.history`, so a row
     /// can be removed without a second lookup.
@@ -316,48 +301,6 @@ impl Library {
     pub fn remove_favourite(&mut self, url: &str) {
         self.favourites.retain(|entry| entry.url != url);
         self.dirty = true;
-    }
-
-    // ── The new tab page's own scraps
-
-    /// The scratchpad, to edit in place.
-    ///
-    /// Pair it with [`Library::changed`] when an edit lands: a text field hands
-    /// back a borrow rather than an event, so nothing here can tell on its own
-    /// that the string moved.
-    pub fn note_mut(&mut self) -> &mut String {
-        &mut self.note
-    }
-
-    /// Something was edited through a borrow; write the file out.
-    pub fn changed(&mut self) {
-        self.dirty = true;
-    }
-
-    pub fn add_task(&mut self, text: &str) {
-        let text = text.trim();
-        if text.is_empty() {
-            return;
-        }
-        self.tasks.push(Task {
-            text: text.to_owned(),
-            done: false,
-        });
-        self.dirty = true;
-    }
-
-    pub fn toggle_task(&mut self, index: usize) {
-        if let Some(task) = self.tasks.get_mut(index) {
-            task.done = !task.done;
-            self.dirty = true;
-        }
-    }
-
-    pub fn remove_task(&mut self, index: usize) {
-        if index < self.tasks.len() {
-            self.tasks.remove(index);
-            self.dirty = true;
-        }
     }
 }
 

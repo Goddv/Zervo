@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 const USER_AGENT: &str = concat!(
     "Zervo/",
     env!("CARGO_PKG_VERSION"),
-    " (https://github.com/goddv/zervo) rustls"
+    " (https://github.com/Goddv/Heion) rustls"
 );
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

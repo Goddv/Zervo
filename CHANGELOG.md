@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0 — Heion
+
+- Renamed the browser to Heion. The Refraction icon adapts to light and dark
+  appearances with white and midnight backgrounds.
+- Simplified New Tab to a centered search pill. Choose Grid (the default),
+  Frosted, or Liquid Glass under Settings → Layout.
+- Animated the New Tab search field into the command bar. It expands to show
+  all actions when there is room and scrolls in shorter windows.
+- Existing updater-enabled Zervo 0.6.1.2 and 0.6.1.3 installs can update
+  directly from Settings → About. Profiles and saved logins carry forward.
+
 ## 0.6.1.3 — 25 November 2026
 
 - Added French, Russian, and Ukrainian. Choose a language in

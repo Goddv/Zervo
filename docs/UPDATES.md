@@ -21,9 +21,12 @@ against the installed app's Apple code-signing requirement. An atomic
 filesystem swap replaces the app at its existing path. The browser profile
 stays outside the bundle.
 
-The Heion branding update uses the existing executable name, bundle identifier,
-profile directory, keychain service, and signed feeds. The updater installs
-the new bundle at the existing app path.
+Zervo 0.6.1.2 and 0.6.1.3 can update to Heion 0.1.0. GitHub redirects the old
+repository's appcast URLs to Heion. The bundle identifier, executable, keychain
+service, profile directory, and Ed25519 key carry forward. The updater installs
+the new bundle at the existing app path. Sparkle compares the internal build
+number, which starts at `1.1.0` in Heion so it sorts above the Zervo builds.
+Keep the old GitHub repository name free so those redirects continue to work.
 
 An absent, invalid, or interrupted patch leaves the installed app in place.
 Heion requires signatures on both the feed and patch, and disables Sparkle's
@@ -44,11 +47,12 @@ DMG.
    secrets listed in [packaging](PACKAGING.md). Switching signing modes
    requires installing a new baseline from its DMG.
 3. Add a versioned entry in [CHANGELOG.md](../CHANGELOG.md), update the Cargo
-   version, and tag a new release. Install the first updater-enabled release
+   version, and tag the release as `heion-v<version>`. Install the first updater-enabled release
    from its DMG. macOS evaluates that first download under its usual
    [Gatekeeper policy](https://support.apple.com/en-us/102445). Later releases
-   can patch from up to three prior updater-enabled releases with the same
-   signing mode. Keep each published DMG intact.
+   can patch from up to three prior Heion releases with the same signing mode.
+   The first Heion release also carries the exact legacy Zervo installers as
+   patch-generation baselines. Keep those assets and each published Heion DMG intact.
 4. Inspect the draft before publishing. Each architecture must have a verified
    appcast. Entries with eligible baselines also carry signed delta assets.
    The regular DMGs remain available for manual installation.
@@ -64,8 +68,8 @@ release history and offer the manual installer link.
   sensitive material, so keep exports off shared folders and out of Git.
 - GitHub embeds its public variable in each app. The signing job alone gets
   the private secret, verifies the release bundles, and signs the appcasts and
-  any deltas. A first release has two appcasts and zero deltas because it is
-  the baseline.
+  any deltas. Both signed appcasts must contain patches from the two supported
+  Zervo build numbers before the release can be published.
 - Push a version tag to build a GitHub draft. Review the two DMGs, the two
   architecture-specific appcasts, and `SHA256SUMS` before publishing. A
   manual dispatch with **publish** enabled also publishes after verification.

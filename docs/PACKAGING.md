@@ -404,7 +404,7 @@ on, and it will either work or say exactly why not.
 ## The release pipeline
 
 Pushes to `main` build macOS preview artifacts without creating a release.
-Download them from [Actions → Release](https://github.com/Goddv/Zervo/actions/workflows/release.yml).
+Download them from [Actions → Release](https://github.com/Goddv/Heion/actions/workflows/release.yml).
 To build a specific ref, run the workflow manually with the tag field blank.
 
 A matching `v*` tag builds the two disk images and the source archive, then

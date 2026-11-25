@@ -28,7 +28,7 @@ zervo_release_notes "$version" > "$staged/${archive%.dmg}.txt"
 signing_key="$SPARKLE_PRIVATE_ED_KEY"
 unset SPARKLE_PRIVATE_ED_KEY
 printf '%s\n' "$signing_key" | "$tools/generate_appcast" --ed-key-file - \
-    --versions "$build" --maximum-versions 1 --maximum-deltas 3 \
+    --versions "$build" --maximum-versions 1 --maximum-deltas 5 \
     --delta-compression lzfse --embed-release-notes \
     --download-url-prefix "$prefix" -o "$output/$feed" "$staged"
 # Bind each patch to the signed target executable and write architecture-specific URLs.

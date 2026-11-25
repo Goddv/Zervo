@@ -242,11 +242,6 @@ pub struct BrowserState {
     /// What the passwords page last did, shown under the form.
     pub password_notice: String,
     pub command_bar: Option<crate::ui::CommandBar>,
-    /// The half-typed line on the new tab page's to-do card.
-    pub newtab_task_draft: String,
-    /// The new tab page is being arranged. Session state on purpose: nobody
-    /// wants to open a browser and find it still in edit mode from yesterday.
-    pub newtab_editing: Option<TabId>,
     /// Which settings category the settings page is showing.
     pub settings_section: SettingsSection,
     pub settings_query: String,
@@ -286,8 +281,6 @@ impl BrowserState {
             password_draft: (String::new(), String::new(), String::new()),
             password_notice: String::new(),
             command_bar: None,
-            newtab_task_draft: String::new(),
-            newtab_editing: None,
             settings_section: SettingsSection::Appearance,
             settings_query: String::new(),
             next_tab_id: 0,

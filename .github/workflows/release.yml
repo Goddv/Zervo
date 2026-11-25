@@ -5,7 +5,7 @@ run-name: ${{ !inputs.tag && (github.event_name == 'workflow_dispatch' || github
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["heion-v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -38,6 +38,7 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,6 +50,7 @@ jobs:
         id: meta
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          UPDATE_KEY: ${{ vars.ZERVO_SPARKLE_PUBLIC_KEY }}
         run: |
           if [ -z "$INPUT_TAG" ] && { [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ "$GITHUB_REF_TYPE" = branch ]; }; then
             echo "tag=" >> "$GITHUB_OUTPUT"
@@ -59,22 +61,27 @@ jobs:
             || { echo "no such tag: $TAG"; exit 1; }
           [ "$(git rev-parse HEAD)" = "$TAG_COMMIT" ] \
             || { echo "select $TAG as the workflow ref to build that release"; exit 1; }
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
           cargo_version() {
             sed -n '/^\[package\]/,/^\[[a-z]/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' | head -1
           }
           TAGGED="$(cargo_version < Cargo.toml)"
           # A fourth release component is stored as Cargo build metadata.
           TAGGED="${TAGGED/+/.}"
-          [ "$TAG" = "v$TAGGED" ] \
+          [ "$TAG" = "heion-v$TAGGED" ] \
             || { echo "tag $TAG does not match the Cargo.toml version at that tag ($TAGGED)"; exit 1; }
+          if [ "$GITHUB_REPOSITORY" = Goddv/Heion ] && [ -z "$UPDATE_KEY" ]; then
+            echo "The Heion release requires the existing Sparkle public key."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$TAGGED" >> "$GITHUB_OUTPUT"
 
       - name: Create the draft
         if: steps.meta.outputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
             [ "$draft" = true ] || { echo "Published release $TAG is immutable; use a new version."; exit 1; }
@@ -84,11 +91,11 @@ jobs:
           # shellcheck source=scripts/lib/common.sh
           source scripts/lib/common.sh
           NOTES="$RUNNER_TEMP/release-notes.md"
-          zervo_release_notes "${TAG#v}" > "$NOTES"
+          zervo_release_notes "$VERSION" > "$NOTES"
           gh release create "$TAG" \
             --draft \
             --verify-tag \
-            --title "Zervo ${TAG#v}" \
+            --title "Heion $VERSION" \
             --notes-file "$NOTES"
 
   source:
@@ -105,8 +112,8 @@ jobs:
           VERSION="${VERSION/+/.}"
           mkdir -p dist
           git archive --format=tar.gz \
-            --prefix="zervo-$VERSION/" \
-            -o "dist/zervo-$VERSION-src.tar.gz" \
+            --prefix="heion-$VERSION/" \
+            -o "dist/heion-$VERSION-src.tar.gz" \
             HEAD
           sha256sum dist/*.tar.gz
 
@@ -120,7 +127,7 @@ jobs:
     needs: draft
     uses: ./.github/workflows/macos.yml
     with:
-      updater-public-key: ${{ needs.draft.outputs.tag != '' && github.repository == 'Goddv/Zervo' && vars.ZERVO_SPARKLE_PUBLIC_KEY || '' }}
+      updater-public-key: ${{ needs.draft.outputs.tag != '' && github.repository == 'Goddv/Heion' && vars.ZERVO_SPARKLE_PUBLIC_KEY || '' }}
     # Named rather than `secrets: inherit`, which would hand the build every
     # secret the repository has. All six are optional; absent ones arrive as
     # empty strings and the bundler falls back to an ad-hoc signature.
@@ -135,7 +142,7 @@ jobs:
   updates:
     name: Sign ${{ matrix.arch }} update assets
     needs: [draft, macos]
-    if: needs.draft.outputs.tag != '' && github.repository == 'Goddv/Zervo' && vars.ZERVO_SPARKLE_PUBLIC_KEY != ''
+    if: needs.draft.outputs.tag != '' && github.repository == 'Goddv/Heion' && vars.ZERVO_SPARKLE_PUBLIC_KEY != ''
     runs-on: macos-26
     permissions:
       contents: read
@@ -144,6 +151,7 @@ jobs:
         arch: [arm64, x86_64]
     env:
       TAG: ${{ needs.draft.outputs.tag }}
+      VERSION: ${{ needs.draft.outputs.version }}
       ARCH: ${{ matrix.arch }}
       ZERVO_SPARKLE_PUBLIC_KEY: ${{ vars.ZERVO_SPARKLE_PUBLIC_KEY }}
     steps:
@@ -164,7 +172,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          build="$(scripts/stage-appcast.sh "$TAG" "$ARCH" "incoming/Zervo-${TAG#v}-$ARCH.dmg" "$RUNNER_TEMP/update-input")"
+          build="$(scripts/stage-appcast.sh "$TAG" "$ARCH" "incoming/Heion-$VERSION-$ARCH.dmg" "$RUNNER_TEMP/update-input")"
           echo "build=$build" >> "$GITHUB_OUTPUT"
 
       - name: Generate and verify signed feed and deltas
@@ -173,8 +181,14 @@ jobs:
           SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
         run: |
           scripts/make-appcast.sh "$RUNNER_TEMP/sparkle/bin" "$RUNNER_TEMP/update-input" \
-            "$RUNNER_TEMP/update-output" "$ARCH" "${TAG#v}" "$BUILD_VERSION" \
+            "$RUNNER_TEMP/update-output" "$ARCH" "$VERSION" "$BUILD_VERSION" \
             "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/"
+          if [ "$TAG" = heion-v0.1.0 ]; then
+            for version in 0.6.1.2 0.6.1.3; do
+              cp "$RUNNER_TEMP/update-input/Zervo-$version-$ARCH-sparkle.dmg" \
+                "$RUNNER_TEMP/update-output/Legacy-Zervo-$version-$ARCH.dmg"
+            done
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
@@ -209,17 +223,17 @@ jobs:
           UPDATE_ASSETS: ${{ needs.updates.result == 'success' }}
         run: |
           mkdir -p release
-          cp incoming/zervo-macos-arm64/Zervo-*-arm64.dmg release/
-          cp incoming/zervo-macos-x86_64/Zervo-*-x86_64.dmg release/
+          cp incoming/zervo-macos-arm64/Heion-*-arm64.dmg release/
+          cp incoming/zervo-macos-x86_64/Heion-*-x86_64.dmg release/
           cp incoming/zervo-source/*-src.tar.gz release/
           if [ "$UPDATE_ASSETS" = true ]; then
             for arch in arm64 x86_64; do
               dir="incoming/zervo-updates-$arch"
               cp "$dir/zervo-appcast-$arch.xml" release/
-              # The enrollment release may have no eligible deltas.
-              for delta in "$dir"/*-"$arch".delta; do
-                if [ -f "$delta" ]; then
-                  cp "$delta" release/
+              cp "$dir"/*-"$arch".delta release/
+              for baseline in "$dir"/Legacy-Zervo-*-"$arch".dmg; do
+                if [ -f "$baseline" ]; then
+                  cp "$baseline" release/
                 fi
               done
             done

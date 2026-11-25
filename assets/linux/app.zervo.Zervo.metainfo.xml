@@ -40,9 +40,9 @@
   </description>
 
   <launchable type="desktop-id">app.zervo.Zervo.desktop</launchable>
-  <url type="homepage">https://github.com/Goddv/Zervo</url>
-  <url type="bugtracker">https://github.com/Goddv/Zervo/issues</url>
-  <url type="vcs-browser">https://github.com/Goddv/Zervo</url>
+  <url type="homepage">https://github.com/Goddv/Heion</url>
+  <url type="bugtracker">https://github.com/Goddv/Heion/issues</url>
+  <url type="vcs-browser">https://github.com/Goddv/Heion</url>
 
   <categories>
     <category>Network</category>
@@ -77,15 +77,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>The sidebar open, with workspaces and tabs in a column on the left</caption>
-      <image type="source">https://raw.githubusercontent.com/Goddv/Zervo/main/assets/screenshots/zervo-light.png</image>
+      <image type="source">https://raw.githubusercontent.com/Goddv/Heion/main/assets/screenshots/zervo-light.png</image>
     </screenshot>
     <screenshot>
       <caption>The same window with the sidebar collapsed to a slim bar</caption>
-      <image type="source">https://raw.githubusercontent.com/Goddv/Zervo/main/assets/screenshots/zervo-light-bar.png</image>
+      <image type="source">https://raw.githubusercontent.com/Goddv/Heion/main/assets/screenshots/zervo-light-bar.png</image>
     </screenshot>
     <screenshot>
       <caption>The dark theme</caption>
-      <image type="source">https://raw.githubusercontent.com/Goddv/Zervo/main/assets/screenshots/zervo-dark.png</image>
+      <image type="source">https://raw.githubusercontent.com/Goddv/Heion/main/assets/screenshots/zervo-dark.png</image>
     </screenshot>
   </screenshots>
 
@@ -96,7 +96,7 @@
 
   <releases>
     <release version="0.4.2" date="2026-08-22">
-      <url type="details">https://github.com/Goddv/Zervo/blob/main/CHANGELOG.md</url>
+      <url type="details">https://github.com/Goddv/Heion/blob/main/CHANGELOG.md</url>
       <description>
         <p>Notifications reach the window, five embedder delegates that were
         empty are implemented, and nine web platform features Servo ships off
@@ -105,7 +105,7 @@
       </description>
     </release>
     <release version="0.4.1" date="2026-08-21">
-      <url type="details">https://github.com/Goddv/Zervo/blob/main/CHANGELOG.md</url>
+      <url type="details">https://github.com/Goddv/Heion/blob/main/CHANGELOG.md</url>
       <description>
         <p>Windows starts, the about page reports the real driver, and idle CPU
         drops from nineteen per cent to nought point two.</p>

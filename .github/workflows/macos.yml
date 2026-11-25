@@ -229,7 +229,7 @@ jobs:
 
           echo "--- app icon ---"
           test -s target/Zervo.app/Contents/Resources/Assets.car
-          test "$(plutil -extract CFBundleIconName raw target/Zervo.app/Contents/Info.plist)" = Zervo
+          test "$(plutil -extract CFBundleIconName raw target/Zervo.app/Contents/Info.plist)" = Heion
 
           echo "--- signature ---"
           codesign -dv --verbose=4 target/Zervo.app 2>&1 | head -20

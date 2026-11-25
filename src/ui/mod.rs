@@ -21,7 +21,6 @@ use crate::settings::Settings;
 use crate::state::{BrowserState, TabId, TabKind};
 use crate::theme::{self, Palette, Surface, Tier};
 
-pub(crate) mod backdrops;
 mod command;
 mod frame;
 mod layout_editor;
@@ -41,11 +40,8 @@ use frame::*;
 use settings_page::*;
 use text::*;
 
-pub use backdrops::paint_newtab_background;
 pub use command::{CommandBar, CommandMode};
-pub use frame::{
-    CardFrame, Corners, PANEL_REACH, finish_content_frame, vertical_gradient, window_chrome_tint,
-};
+pub use frame::{CardFrame, Corners, PANEL_REACH, finish_content_frame, window_chrome_tint};
 pub(crate) use frame::{builtin_card, paint_builtin_page};
 pub use text::{
     anchored_popup, clamp_into, display_name, ellipsize, host_of, initial, normalize_url,
@@ -150,7 +146,6 @@ pub enum UiAction {
     /// Pin a site the reader picked from a list, rather than the page they
     /// happen to be on. Same favourites as the sidebar's star keeps — one
     /// list, reachable from the new tab page's chip row as well.
-    PinSite(String, String),
     /// Open one of the four pages a page that will not load lands on. The
     /// string is the whole address, query and all: what is known about the
     /// failure travels in it rather than in a field beside it.
@@ -179,11 +174,6 @@ pub enum UiAction {
     OpenDownload(u64),
     ClearDownloads,
     RestartDownload(u64),
-    /// Fetch another wallpaper from whichever source is chosen.
-    ShuffleWallpaper,
-    /// Choose a picture from this machine instead.
-    PickWallpaper,
-    /// Put every dragged-into-place thing back where it started.
     ResetLayout,
     /// Pointer started dragging empty chrome — move the OS window.
     DragWindow,
@@ -231,9 +221,6 @@ pub struct UiOutput {
     /// True while a page-initiated dialog or menu is up; the chrome owns the
     /// pointer over the content area for as long as it is.
     pub controls_open: bool,
-    /// True while an ambient animation is on screen (aurora new-tab page):
-    /// the caller schedules ~30fps timed wakes instead of the idle cadence.
-    pub ambient: bool,
 }
 
 pub struct ChromeContext<'a> {
@@ -255,8 +242,6 @@ pub struct ChromeContext<'a> {
     pub favicons: &'a HashMap<TabId, TextureHandle>,
     pub downloads: &'a crate::downloads::DownloadManager,
     pub updates: &'a crate::updates::Snapshot,
-    /// The new tab page's photograph, and whatever is known about it.
-    pub wallpaper: crate::wallpaper::View<'a>,
     /// Where to take the blurred copy of the page, when one is due this frame.
     ///
     /// Handed to the page rather than taken by the window, because only the
@@ -343,7 +328,6 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
             sidebar_overlay: None,
             sidebar_bounds: None,
             controls_open: false,
-            ambient: false,
         };
     }
 
@@ -385,7 +369,11 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     let native_sidebar = chrome.uses_native_sidebar() && present >= 1.0;
     let new_tab_glass = matches!(active_kind, Some(TabKind::NewTab))
         && chrome.native_glass.vibrancy_available
-        && chrome.settings.newtab_material.is_translucent();
+        && chrome
+            .settings
+            .new_tab_background
+            .material()
+            .is_translucent();
     let chrome_tint = if new_tab_glass && !chrome.native_glass.window_backdrop {
         0.20
     } else {
@@ -460,13 +448,12 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     } else {
         content_rect
     };
-    let mut ambient = false;
     match active_kind {
         Some(TabKind::Settings) => {
             draw_settings_page(root, chrome, content_rect, &mut actions);
         },
         Some(TabKind::NewTab) => {
-            ambient = crate::newtab::draw(root, chrome, page_rect, content_rect, &mut actions);
+            crate::newtab::draw(root, chrome, page_rect, content_rect, &mut actions);
         },
         Some(TabKind::Downloads) => {
             draw_downloads_page(root, chrome, content_rect, &mut actions);
@@ -653,7 +640,6 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         sidebar_overlay,
         sidebar_bounds,
         controls_open,
-        ambient,
     }
 }
 

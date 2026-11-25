@@ -214,7 +214,7 @@ zervo_appimage_arch() {
 # shellcheck disable=SC2034
 ZERVO_SUMMARY="A sidebar-first browser built on the Servo engine"
 # shellcheck disable=SC2034
-ZERVO_HOMEPAGE="https://github.com/Goddv/Zervo"
+ZERVO_HOMEPAGE="https://github.com/Goddv/Heion"
 # shellcheck disable=SC2034
 ZERVO_MAINTAINER="Goddv <habitat.cristal@gmail.com>"
 # shellcheck disable=SC2034

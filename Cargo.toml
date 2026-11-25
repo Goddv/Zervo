@@ -3,12 +3,12 @@ members = ["zervo-core"]
 
 [package]
 name = "zervo"
-version = "0.6.1+3"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 license = "MPL-2.0"
 description = "A calm, workspace-oriented browser built on the Servo engine"
-repository = "https://github.com/goddv/zervo"
+repository = "https://github.com/Goddv/Heion"
 readme = "README.md"
 publish = false
 
@@ -81,7 +81,7 @@ servo = { version = "=0.8.0", default-features = false, features = [
 
 # The version is here as well as the path so this is not a wildcard
 # dependency, which `cargo deny check bans` rejects and rightly so.
-zervo-core = { path = "zervo-core", version = "0.6.1" }
+zervo-core = { path = "zervo-core", version = "0.1.0" }
 
 # ── Chrome ────────────────────────────────────────────────────────────────
 egui = "0.37.0"

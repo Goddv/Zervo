@@ -28,7 +28,7 @@ ManifestDPIAware true
 
 !define APPNAME    "Heion"
 !define PUBLISHER  "Goddv"
-!define HOMEPAGE   "https://github.com/Goddv/Zervo"
+!define HOMEPAGE   "https://github.com/Goddv/Heion"
 !define REGKEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\Zervo"
 
 Name "${APPNAME} ${VERSION}"

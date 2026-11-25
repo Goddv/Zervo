@@ -13,7 +13,7 @@ use egui::{
 use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
 use crate::settings::{MAX_ACCENT_STRENGTH, NewTabBackground, NewTabPage, SearchEngine};
-use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier, Translucency};
+use crate::theme::{self, AccentColor, Palette, ThemeMode, Tier};
 use crate::widgets;
 
 use super::*;
@@ -1489,230 +1489,17 @@ pub(crate) fn settings_layout(
         },
     );
     settings_section(ui, palette, tr("settings-new-tab-page"), |ui| {
-        ui.label(tr("newtab-backdrop-material"));
+        ui.label(tr("newtab-backdrop"));
         if choose(
             ui,
             palette,
-            &mut chrome.settings.newtab_material,
-            &Translucency::ALL,
-            Translucency::label,
+            &mut chrome.settings.new_tab_background,
+            &NewTabBackground::ALL,
+            NewTabBackground::label,
         ) {
             actions.push(UiAction::PersistSettings);
+            ui.ctx().request_repaint();
         }
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(tr("settings-custom-greeting"))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        let response = crate::overlay_glass::text_field(
-            ui,
-            TextEdit::singleline(&mut chrome.settings.newtab_message)
-                .font(FontId::proportional(13.0))
-                .desired_width(f32::INFINITY),
-        )
-        .response;
-        if response.lost_focus() {
-            actions.push(UiAction::PersistSettings);
-        }
-    });
-
-    settings_section(ui, palette, tr("common-world-clocks"), |ui| {
-        let mut remove = None;
-        for (index, zone) in chrome.settings.newtab_world_clocks.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(zone.display_label())
-                        .size(13.0)
-                        .color(palette.text),
-                );
-                ui.label(
-                    RichText::new(&zone.name)
-                        .size(11.5)
-                        .color(palette.text_muted),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::icon_button(ui, Icon::Close, 13.0, palette, true)
-                        .on_hover_text(tr("settings-take-this-city-off"))
-                        .clicked()
-                    {
-                        remove = Some(index);
-                    }
-                });
-            });
-        }
-        if let Some(index) = remove {
-            chrome.settings.newtab_world_clocks.remove(index);
-            actions.push(UiAction::PersistSettings);
-        }
-        if chrome.settings.newtab_world_clocks.is_empty() {
-            ui.label(
-                RichText::new(tr("settings-no-cities-the-card-says-so-rather"))
-                    .size(11.5)
-                    .color(palette.text_muted),
-            );
-        }
-        ui.add_space(6.0);
-        egui::ComboBox::from_id_salt("zervo_world_clock_add")
-            .selected_text(tr("settings-add-a-city"))
-            .width(220.0)
-            .show_glass(ui, |ui| {
-                for (label, name, key) in crate::newtab::Zone::CATALOGUE {
-                    let already = chrome
-                        .settings
-                        .newtab_world_clocks
-                        .iter()
-                        .any(|zone| zone.name == name);
-                    if already {
-                        continue;
-                    }
-                    if ui.selectable_label(false, tr(key)).clicked() {
-                        chrome
-                            .settings
-                            .newtab_world_clocks
-                            .push(crate::newtab::Zone {
-                                label: label.to_owned(),
-                                name: name.to_owned(),
-                            });
-                        actions.push(UiAction::PersistSettings);
-                    }
-                }
-            });
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(tr("settings-each-clock-reads-the-zone-from-the"))
-                .size(11.5)
-                .color(palette.text_muted),
-        );
-    });
-
-    settings_section(ui, palette, tr("common-wallpaper"), |ui| {
-        use crate::wallpaper::{Cadence, Source, Subject};
-        let photo = chrome.settings.new_tab_background == NewTabBackground::Photo;
-        let mut wants_photo = photo;
-        if widgets::toggle(
-            ui,
-            &mut wants_photo,
-            tr("settings-show-a-photograph"),
-            palette,
-        ) {
-            chrome.settings.new_tab_background = if wants_photo {
-                NewTabBackground::Photo
-            } else {
-                NewTabBackground::Grid
-            };
-            actions.push(UiAction::PersistSettings);
-        }
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(tr(
-                "settings-pictures-come-from-wikimedia-commons-and-openverse",
-            ))
-            .size(11.5)
-            .color(palette.text_muted),
-        );
-
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr("settings-source"))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        let mut sources: Vec<(String, Source)> = vec![(
-            tr("settings-commons-picture-of-the-day").to_owned(),
-            Source::Commons,
-        )];
-        sources.extend(Subject::ALL.iter().map(|subject| {
-            (
-                Source::Openverse(*subject).label(),
-                Source::Openverse(*subject),
-            )
-        }));
-        let selected = sources
-            .iter()
-            .find(|(_, source)| *source == chrome.settings.wallpaper_source)
-            .map(|(label, _)| label.clone())
-            .unwrap_or_else(|| chrome.settings.wallpaper_source.label());
-        egui::ComboBox::from_id_salt("zervo_wallpaper_source")
-            .selected_text(selected)
-            .width(260.0)
-            .show_glass(ui, |ui| {
-                for (label, source) in sources {
-                    if ui
-                        .selectable_label(chrome.settings.wallpaper_source == source, label)
-                        .clicked()
-                    {
-                        chrome.settings.wallpaper_source = source;
-                        actions.push(UiAction::ShuffleWallpaper);
-                    }
-                }
-            });
-
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr("settings-change-it"))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        let cadences = Cadence::ALL;
-        let labels: Vec<&str> = cadences.iter().map(|cadence| cadence.label()).collect();
-        let current = cadences
-            .iter()
-            .position(|cadence| *cadence == chrome.settings.wallpaper_cadence)
-            .unwrap_or(0);
-        if let Some(index) = widgets::segmented(ui, current, &labels, palette) {
-            chrome.settings.wallpaper_cadence = cadences[index];
-            actions.push(UiAction::PersistSettings);
-        }
-
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr("settings-veil"))
-                .size(12.0)
-                .color(palette.text_muted),
-        );
-        if widgets::slider(ui, &mut chrome.settings.wallpaper_dim, 0.15..=0.9, palette).settled {
-            actions.push(UiAction::PersistSettings);
-        }
-        ui.label(
-            RichText::new(crate::l10n::message(
-                "settings-wallpaper-dim-description",
-                [(
-                    "percent",
-                    (chrome.settings.wallpaper_dim * 100.0).round().into(),
-                )],
-            ))
-            .size(11.5)
-            .color(palette.text_muted),
-        );
-
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            if ui.button(tr("common-another-picture")).clicked() {
-                actions.push(UiAction::ShuffleWallpaper);
-            }
-            if ui.button(tr("common-choose-file")).clicked() {
-                actions.push(UiAction::PickWallpaper);
-            }
-        });
-        ui.add_space(4.0);
-        let credit = chrome.wallpaper.credit;
-        let note = if chrome.wallpaper.fetch_failed {
-            tr("settings-wallpaper-fetch-error").to_owned()
-        } else if chrome.wallpaper.loading {
-            tr("settings-fetching-one").to_owned()
-        } else if chrome.wallpaper.texture.is_some() {
-            crate::l10n::message(
-                "settings-wallpaper-credit",
-                [
-                    ("credit", credit.line().into()),
-                    ("source", credit.source_label().into()),
-                ],
-            )
-        } else {
-            tr("settings-nothing-fetched-yet").to_owned()
-        };
-        ui.label(RichText::new(note).size(11.5).color(palette.text_muted));
     });
 
     settings_section(ui, palette, tr("settings-trackpad"), |ui| {

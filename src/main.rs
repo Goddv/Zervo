@@ -71,7 +71,6 @@ mod state;
 mod ui;
 #[cfg(target_os = "macos")]
 mod vibrancy;
-mod wallpaper;
 mod widgets;
 
 use std::cell::{Cell, RefCell};
@@ -280,9 +279,6 @@ struct RunningApp {
     theme_fade: Option<(Palette, std::time::Instant)>,
     /// File downloads (Servo has no download subsystem — we do it ourselves).
     downloads: downloads::DownloadManager,
-    /// The new tab page's photograph: where it comes from, and what is known
-    /// about the one currently up.
-    wallpaper: wallpaper::Wallpaper,
     /// A blurred copy of the page, for the chrome to frost itself against.
     /// Shared because the copy is taken inside a paint callback, which runs
     /// while `self` is already borrowed by `EguiGlow::run` — and behind a
@@ -323,8 +319,6 @@ struct RunningApp {
     /// glass surface over it is frosted against. Held here rather than in the
     /// manager because making one needs an egui context, and the manager runs
     /// on a thread that has none.
-    wallpaper_texture: Option<egui::TextureHandle>,
-    wallpaper_frost: Option<theme::Frost>,
     /// Retained frosted-glass backdrop, kept so its material can be retuned.
     #[cfg(target_os = "macos")]
     _vibrancy: Option<vibrancy::Vibrancy>,
@@ -629,10 +623,6 @@ impl ApplicationHandler<WakerEvent> for App {
             settings.appearance.translucency,
         );
         let applied_appearance = settings.appearance;
-        // Whatever was cached last time, decoded on a thread so a launch never
-        // waits on a photograph.
-        let mut wallpaper = wallpaper::Wallpaper::default();
-        wallpaper.restore();
         #[cfg(target_os = "macos")]
         let updater = updates::Updater::install(waker.0.clone());
         #[cfg(target_os = "macos")]
@@ -678,7 +668,6 @@ impl ApplicationHandler<WakerEvent> for App {
             space: 0,
             theme_fade: None,
             downloads: downloads::DownloadManager::default(),
-            wallpaper,
             page_backdrop: Arc::new(std::sync::Mutex::new(backdrop::PageBackdrop::default())),
             page_backdrop_texture: None,
             frosted_for: None,
@@ -689,8 +678,6 @@ impl ApplicationHandler<WakerEvent> for App {
             draining: false,
             corner_eraser: Arc::new(Mutex::new(backdrop::Eraser::default())),
             translucent_window,
-            wallpaper_texture: None,
-            wallpaper_frost: None,
             #[cfg(target_os = "macos")]
             _vibrancy: vibrancy,
             #[cfg(target_os = "macos")]
@@ -1330,38 +1317,6 @@ impl RunningApp {
             self.refresh_favicons();
         }
 
-        // Collected whatever the page is showing: a result left sitting in the
-        // channel would keep the loop waking up for it forever.
-        if self.wallpaper.poll()
-            && let Some(image) = self.wallpaper.take_image()
-        {
-            // Mipmapped, because a two-thousand-pixel photograph drawn into a
-            // nine-hundred-point window is a minification, and bilinear
-            // minification of a photograph is what makes one shimmer.
-            self.wallpaper_texture = Some(self.egui_glow.egui_ctx.load_texture(
-                "zervo-wallpaper",
-                image.sharp,
-                egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
-            ));
-            // The frost is the other way round: a small picture magnified,
-            // where plain bilinear filtering is exactly what is wanted, since
-            // smoothing between its pixels is more blur.
-            self.wallpaper_frost = Some(theme::Frost::upload(
-                &self.egui_glow.egui_ctx,
-                "zervo-wallpaper-frost",
-                image.frost,
-                egui::TextureOptions::LINEAR,
-            ));
-        }
-        if self.settings.new_tab_background == settings::NewTabBackground::Photo
-            && self.wallpaper.due(
-                &self.settings.wallpaper_source,
-                self.settings.wallpaper_cadence,
-            )
-        {
-            self.wallpaper.fetch(&self.settings.wallpaper_source);
-        }
-
         // Read once, before anything borrows the browser: the accent follows
         // the space when the reader has asked it to.
         self.space = self.state.browser.borrow().active_workspace;
@@ -1386,7 +1341,7 @@ impl RunningApp {
                 .active_tab()
                 .is_some_and(|tab| tab.kind == TabKind::NewTab);
             let material = if new_tab {
-                self.settings.newtab_material
+                self.settings.new_tab_background.material()
             } else {
                 palette.translucency
             };
@@ -1476,10 +1431,6 @@ impl RunningApp {
                 .lock()
                 .is_ok_and(|backdrop| backdrop.due()))
         .then(|| self.page_backdrop.clone());
-        // Every glass surface inside the content rect frosts against the page,
-        // the same way the new tab page's cards frost against its wallpaper —
-        // the new tab page then replaces it with the wallpaper's own, since
-        // that is what is behind *its* cards.
         let palette = match &self.page_backdrop_texture {
             Some(frost) => palette.with_backdrop(Some(theme::Backdrop {
                 texture: frost.id(),
@@ -1490,14 +1441,6 @@ impl RunningApp {
                 alpha: 1.0,
             })),
             _ => palette,
-        };
-
-        let wallpaper = wallpaper::View {
-            texture: self.wallpaper_texture.as_ref(),
-            frost: self.wallpaper_frost.as_ref(),
-            credit: self.wallpaper.credit(),
-            fetch_failed: self.wallpaper.fetch_failed,
-            loading: self.wallpaper.is_loading(),
         };
 
         // Keep standard controls and their popups on the same appearance as
@@ -1554,7 +1497,6 @@ impl RunningApp {
                 favicons: &self.favicons,
                 downloads: &self.downloads,
                 updates: &self.update_snapshot,
-                wallpaper,
                 capture: capture.clone(),
                 crossing: self.crossing.as_ref(),
                 status: status.as_deref(),
@@ -1739,7 +1681,6 @@ impl RunningApp {
             }
         }
 
-        let mut ambient = false;
         #[cfg(target_os = "macos")]
         let mut native_geometry = None;
         if let Some(output) = ui_output {
@@ -1787,7 +1728,6 @@ impl RunningApp {
             state
                 .content_origin
                 .set((output.content_rect.min.x, output.content_rect.min.y));
-            ambient = output.ambient;
             // Debug-only, and only when asked: go somewhere so the picture at
             // the end of this frame lands in the middle of a page transition.
             // Here rather than at the top of the redraw, because *here* is
@@ -1812,24 +1752,6 @@ impl RunningApp {
                 self.apply_action(action);
             }
             self.draining = false;
-        }
-        // Ambient animations (aurora new-tab page) tick at ~30fps via timed
-        // wakes rather than a max-FPS redraw loop.
-        // Nothing else will wake the loop when a fetch finishes on its own
-        // thread, so while one is running the page checks back.
-        if self.wallpaper.is_loading() {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
-            self.pending_repaint_at = Some(
-                self.pending_repaint_at
-                    .map_or(deadline, |at| at.min(deadline)),
-            );
-        }
-        if ambient {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(33);
-            self.pending_repaint_at = Some(
-                self.pending_repaint_at
-                    .map_or(deadline, |d| d.min(deadline)),
-            );
         }
         // Nothing else will wake the loop when a notification's time is up, or
         // while one is still growing out of the bell.
@@ -2393,14 +2315,6 @@ impl RunningApp {
                 state.browser.borrow_mut().favourite_edit = None;
                 state.window.request_redraw();
             },
-            UiAction::PinSite(url, title) => {
-                let mut library = state.library.borrow_mut();
-                if !library.favourites.iter().any(|entry| entry.url == url) {
-                    library.toggle_favourite(&url, &title);
-                }
-                drop(library);
-                state.window.request_redraw();
-            },
             UiAction::RemoveFavourite(url) => {
                 state.library.borrow_mut().remove_favourite(&url);
                 state.window.request_redraw();
@@ -2457,30 +2371,10 @@ impl RunningApp {
                     downloads::open_file(&item.path);
                 }
             },
-            UiAction::ShuffleWallpaper => {
-                // Asking for a picture is also asking to see one, so the page
-                // switches to photographs if it was not already showing them.
-                self.settings.new_tab_background = settings::NewTabBackground::Photo;
-                self.settings.save();
-                self.wallpaper.fetch(&self.settings.wallpaper_source);
-                state.window.request_redraw();
-            },
-            UiAction::PickWallpaper => {
-                if let Some(path) = state.pick_file() {
-                    self.settings.wallpaper_source =
-                        wallpaper::Source::File(path.to_string_lossy().into_owned());
-                    self.settings.new_tab_background = settings::NewTabBackground::Photo;
-                    self.settings.save();
-                    self.wallpaper.fetch(&self.settings.wallpaper_source);
-                }
-                state.window.request_redraw();
-            },
             UiAction::ResetLayout => {
                 let settings = &mut self.settings;
                 settings.sidebar_widgets = dashboard::Placed::defaults();
                 settings.reset_sidebar_sections();
-                settings.newtab_grid = None;
-                settings.newtab_world_clocks = newtab::Zone::defaults();
                 settings.sidebar_width = ui::SIDEBAR_DEFAULT_WIDTH;
                 settings.save();
                 // egui remembers the panel's width itself, and would otherwise

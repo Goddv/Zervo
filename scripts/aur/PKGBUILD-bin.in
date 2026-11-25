@@ -11,7 +11,7 @@ pkgver=@VERSION@
 pkgrel=1
 pkgdesc='A sidebar-first browser built on the Servo engine'
 arch=('x86_64' 'aarch64')
-url='https://github.com/Goddv/Zervo'
+url='https://github.com/Goddv/Heion'
 license=('MPL-2.0' 'OFL-1.1')
 provides=("zervo=$pkgver")
 conflicts=('zervo')
