@@ -529,17 +529,20 @@ fn favourites(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) 
                     .iter()
                     .flat_map(|space| &space.tabs)
                     .find(|tab| tab.url == site.url);
+                let icon_rect = Rect::from_center_size(rect.center(), vec2(18.0, 18.0));
                 if let Some(favicon) = open
                     .filter(|_| chrome.settings.show_tab_favicons)
                     .and_then(|tab| chrome.favicons.get(&tab.id))
                 {
                     ui.painter().image(
                         favicon.id(),
-                        Rect::from_center_size(rect.center(), vec2(18.0, 18.0)),
+                        icon_rect,
                         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
-                } else {
+                } else if !chrome.settings.show_tab_favicons
+                    || !paint_site_icon(ui, chrome.saved_favicons, &site.url, icon_rect)
+                {
                     ui.painter().text(
                         rect.center(),
                         Align2::CENTER_CENTER,
