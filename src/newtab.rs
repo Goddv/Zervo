@@ -81,7 +81,15 @@ fn backdrop(
         .ctx()
         .layer_painter(egui::LayerId::background())
         .with_clip_rect(page);
-    let corners = theme::content_corners(palette);
+    // A page that owns the full window is already clipped by AppKit's window
+    // shape. Rounding it again punches four transparent wedges through the
+    // GL surface, which exposes the native white backing in light mode. Keep
+    // the inner card shape only when there is actually chrome around it.
+    let corners = if palette.fills_window {
+        egui::CornerRadius::ZERO
+    } else {
+        theme::content_corners(palette)
+    };
     painter.rect_filled(page, corners, ground);
     let phase = if background.animated() {
         crate::newtab_wallpaper::phase(
