@@ -41,32 +41,9 @@ printf '%s\n' "$signing_key" | "$tools/generate_appcast" --ed-key-file - \
     --versions "$build" --maximum-versions 1 --maximum-deltas 3 \
     --delta-compression lzfse --embed-release-notes \
     --download-url-prefix "$prefix" -o "$output/$feed" "$staged"
-# GitHub asset names share a single namespace across architectures.
-# Rewrite the enclosure URLs and the displayed version, then re-sign the XML.
-python3 - "$output/$feed" "$staged" "$arch" "$version" "$prefix" <<'PYTHON'
-import re
-import sys
-from pathlib import Path
-from xml.etree import ElementTree as ET
-
-feed, stage, arch, version, prefix = sys.argv[1:]
-ns = "http://www.andymatuschak.org/xml-namespaces/sparkle"
-ET.register_namespace("sparkle", ns)
-tree = ET.parse(feed)
-for item in tree.findall("./channel/item"):
-    display_version = item.find(f"{{{ns}}}shortVersionString")
-    if display_version is None:
-        raise SystemExit("Missing Sparkle short version")
-    display_version.text = version
-    for delta in item.findall(f"{{{ns}}}deltas/enclosure"):
-        source = delta.attrib["url"].removeprefix(prefix)
-        if not re.fullmatch(r"Zervo[0-9.]+-[0-9.]+\.delta", source):
-            raise SystemExit(f"Unexpected Sparkle delta name: {source}")
-        target = f"{source.removesuffix('.delta')}-{arch}.delta"
-        Path(stage, source).rename(Path(stage, target))
-        delta.set("url", prefix + target)
-tree.write(feed, encoding="utf-8", xml_declaration=True)
-PYTHON
+# Bind each patch to the signed target executable and write architecture-specific URLs.
+printf '%s\n' "$signing_key" | python3 "$root/scripts/lib/prepare-appcast.py" \
+    "$output/$feed" "$staged" "$arch" "$version" "$prefix" "$tools/sign_update"
 printf '%s\n' "$signing_key" | "$tools/sign_update" --ed-key-file - "$output/$feed"
 unset signing_key
 

@@ -4,9 +4,11 @@
 
 - Added an Updates page with release history and incoming release notes.
   Check for updates and manage automatic installation in Settings → About.
-- Added signed, architecture-specific incremental updates for notarized macOS
-  releases. Zervo verifies the feed, patch, and staged app before atomically
-  replacing the installed app on quit or restart.
+- Added signed, architecture-specific incremental updates for ad-hoc and
+  notarized macOS releases. Zervo verifies the feed, patch, and staged app
+  before atomically replacing the installed app on quit or restart.
+- Added configurable background update checks, optional macOS update
+  notifications, and a reminder that can defer an available update for a day.
 - When a compatible patch is unavailable, the Updates page links to the
   standalone GitHub installer.
 

@@ -18,8 +18,9 @@
 #                        Needs --sign, and APPLE_ID / APPLE_TEAM_ID /
 #                        APPLE_APP_PASSWORD in the environment.
 #   --updates <dir>     embed the patched Sparkle framework built by
-#                        scripts/build-sparkle.sh. Requires a notarized build
-#                        and ZERVO_SPARKLE_PUBLIC_KEY (the public Ed25519 key).
+#                        scripts/build-sparkle.sh. Set ZERVO_SPARKLE_PUBLIC_KEY
+#                        to the public Ed25519 key. Supports ad-hoc signing
+#                        and notarized Developer ID Application signing.
 #   --output <dir>       where the .app and .dmg go, default the target dir
 #
 # Without --sign the result is UNSIGNED beyond an ad-hoc signature, and macOS
@@ -72,8 +73,8 @@ done
     die "--notarize needs --dmg: the disk image is what is submitted and stapled"
 
 if [ -n "$UPDATER_FRAMEWORK" ]; then
-    [[ "$IDENTITY" == "Developer ID Application: "* && "$NOTARIZE" = 1 ]] ||
-        die "--updates requires Developer ID Application signing and --notarize"
+    [[ "$IDENTITY" == "-" || ( "$IDENTITY" == "Developer ID Application: "* && "$NOTARIZE" = 1 ) ]] ||
+        die "--updates supports ad-hoc or notarized Developer ID Application signing"
     : "${ZERVO_SPARKLE_PUBLIC_KEY:?--updates needs a Sparkle public key}"
     [[ "$ZERVO_SPARKLE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
         die "Sparkle public key must be a base64-encoded 32-byte key"
@@ -335,11 +336,13 @@ if [ "$IDENTITY" != "-" ]; then
                        --entitlements assets/macos/entitlements.plist)
 fi
 
-# An ad-hoc signature is best-effort — a machine without codesign at all can
-# still produce a bundle worth looking at. A real identity is not: a build that
-# was asked to sign with a Developer ID and did not is an unsigned release with
-# a green log, and macos.yml would then hand it to notarytool.
-if [ "$IDENTITY" = "-" ]; then
+# Updater builds always require intact signatures on the app and its helpers.
+# Keep best-effort signing for local bundles built without an updater.
+STRICT_SIGNATURES=1
+if [ "$IDENTITY" = "-" ] && [ -z "$UPDATER_FRAMEWORK" ]; then
+    STRICT_SIGNATURES=0
+fi
+if [ "$STRICT_SIGNATURES" = 0 ]; then
     sign_or_fail() { codesign "${SIGN_ARGS[@]}" "$1" || warn "codesign failed on $(basename -- "$1")"; }
 else
     sign_or_fail() { codesign "${SIGN_ARGS[@]}" "$1" || die "codesign failed on $1"; }
@@ -366,14 +369,14 @@ if [ -n "$UPDATER_FRAMEWORK" ]; then
     zervo_bundle_updater "$UPDATER_FRAMEWORK" "$APP" "$UPDATE_FEED" "$ZERVO_SPARKLE_PUBLIC_KEY" "$UPDATE_ARCH"
 fi
 
-if [ "$IDENTITY" = "-" ]; then
+if [ "$STRICT_SIGNATURES" = 0 ]; then
     codesign "${BUNDLE_SIGN_ARGS[@]}" "$APP" || warn "codesign failed on the bundle"
 else
     codesign "${BUNDLE_SIGN_ARGS[@]}" "$APP" || die "codesign failed on $APP"
 fi
 
 if ! codesign --verify --deep --strict "$APP"; then
-    if [ "$IDENTITY" = "-" ]; then
+    if [ "$STRICT_SIGNATURES" = 0 ]; then
         warn "the bundle does not verify"
     else
         die "the bundle does not verify after signing with $IDENTITY"

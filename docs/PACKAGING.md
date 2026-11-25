@@ -52,8 +52,9 @@ framework. The plist used to say 13.0, typed in beside the compiler rather than
 derived from it, which turned away macOS 11 and 12 at launch from a binary that
 would have run.
 
-Updates-enabled release bundles require macOS 12 or later, the minimum
-supported by Sparkle. See [macOS updates](UPDATES.md) for release setup.
+Updater-enabled bundles require macOS 12 or later and a Zervo Ed25519 public
+key. The workflow can publish ad-hoc or notarized update-enabled releases.
+See [macOS updates](UPDATES.md) for release setup.
 
 ### Unsigned builds — what your users will see
 

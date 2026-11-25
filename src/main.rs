@@ -737,7 +737,22 @@ impl ApplicationHandler<WakerEvent> for App {
             #[cfg(target_os = "macos")]
             WakerEvent::UpdaterChanged => {
                 if let Some(updater) = &app.updater {
-                    app.update_snapshot = updater.snapshot();
+                    let snapshot = updater.snapshot();
+                    if !snapshot.notice_version.is_empty() {
+                        app.state.toasts.borrow_mut().raise_update(
+                            l10n::text("updates-notification-title").into(),
+                            l10n::message(
+                                "updates-notification-body",
+                                [("version", snapshot.notice_version.as_str().into())],
+                            ),
+                            std::time::Instant::now(),
+                        );
+                    }
+                    let open_updates = snapshot.open_updates;
+                    app.update_snapshot = snapshot;
+                    if open_updates {
+                        app.apply_action(ui::UiAction::OpenUpdates);
+                    }
                     app.state.window.request_redraw();
                 }
             },
@@ -2390,13 +2405,16 @@ impl RunningApp {
                     updater.check();
                 }
             },
-            UiAction::SetAutomaticUpdates(enabled) => {
+            UiAction::ConfigureUpdates(preference) => {
                 #[cfg(target_os = "macos")]
                 if let Some(updater) = &self.updater {
-                    updater.set_automatic(enabled);
+                    updater.configure(preference);
+                    if matches!(preference, updates::Preference::RemindTomorrow) {
+                        state.toasts.borrow_mut().clear_update();
+                    }
                 }
                 #[cfg(not(target_os = "macos"))]
-                let _ = enabled;
+                let _ = preference;
             },
             UiAction::CancelDownload(id) => {
                 self.downloads.cancel(id);

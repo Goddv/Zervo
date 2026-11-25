@@ -1977,12 +1977,7 @@ fn settings_about(
             }
         });
         if updates.enabled() {
-            ui.add_space(10.0);
-            let mut automatic = updates.automatic;
-            if widgets::toggle(ui, &mut automatic, tr("updates-automatic"), palette) {
-                actions.push(UiAction::SetAutomaticUpdates(automatic));
-            }
-            note(ui, palette, tr("updates-automatic-hint"));
+            update_preferences(ui, palette, updates, actions);
         }
     });
 
@@ -2006,6 +2001,68 @@ fn settings_about(
         }
         about_detail(ui, palette, "WebGPU", crate::gpu::webgpu_backend_name());
     });
+}
+
+fn update_preferences(
+    ui: &mut Ui,
+    palette: &Palette,
+    updates: &crate::updates::Snapshot,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::updates::{CHECK_INTERVALS, Preference, check_interval_label};
+
+    ui.add_space(10.0);
+    let mut checks = updates.automatic_checks;
+    if widgets::toggle(ui, &mut checks, tr("updates-automatic-checks"), palette) {
+        actions.push(UiAction::ConfigureUpdates(Preference::AutomaticChecks(
+            checks,
+        )));
+    }
+    ui.add_enabled_ui(checks, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tr("updates-check-frequency"));
+            let mut interval = updates.check_interval;
+            egui::ComboBox::from_id_salt("update_check_interval")
+                .selected_text(tr(check_interval_label(interval)))
+                .show_glass(ui, |ui| {
+                    for (seconds, label) in CHECK_INTERVALS {
+                        if ui
+                            .selectable_value(&mut interval, seconds, tr(label))
+                            .changed()
+                        {
+                            actions.push(UiAction::ConfigureUpdates(Preference::CheckInterval(
+                                seconds,
+                            )));
+                        }
+                    }
+                });
+        });
+    });
+    ui.add_space(8.0);
+    ui.add_enabled_ui(checks, |ui| {
+        let mut automatic = updates.automatic_install;
+        if widgets::toggle(ui, &mut automatic, tr("updates-automatic"), palette) {
+            actions.push(UiAction::ConfigureUpdates(Preference::AutomaticInstall(
+                automatic,
+            )));
+        }
+    });
+    note(ui, palette, tr("updates-automatic-hint"));
+    ui.add_space(8.0);
+    let mut notifications = updates.system_notifications;
+    if widgets::toggle(
+        ui,
+        &mut notifications,
+        tr("updates-system-notifications"),
+        palette,
+    ) {
+        actions.push(UiAction::ConfigureUpdates(Preference::SystemNotifications(
+            notifications,
+        )));
+    }
+    if updates.notifications_blocked {
+        note(ui, palette, tr("updates-notifications-blocked"));
+    }
 }
 
 fn about_detail(ui: &mut Ui, palette: &Palette, label: &str, value: &str) {

@@ -20,11 +20,41 @@ pub(crate) enum Status {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Preference {
+    AutomaticChecks(bool),
+    AutomaticInstall(bool),
+    CheckInterval(u32),
+    SystemNotifications(bool),
+    RemindTomorrow,
+}
+
+pub(crate) const CHECK_INTERVALS: [(u32, &str); 4] = [
+    (3_600, "updates-hourly"),
+    (21_600, "updates-six-hours"),
+    (86_400, "updates-daily"),
+    (604_800, "updates-weekly"),
+];
+
+pub(crate) fn check_interval_label(seconds: u32) -> &'static str {
+    CHECK_INTERVALS
+        .iter()
+        .find(|(interval, _)| *interval == seconds)
+        .map_or("updates-custom-interval", |(_, label)| label)
+}
+
 #[derive(Default, Deserialize)]
 pub(crate) struct Snapshot {
     pub status: Status,
     pub can_check: bool,
-    pub automatic: bool,
+    pub automatic_checks: bool,
+    pub automatic_install: bool,
+    pub check_interval: u32,
+    pub system_notifications: bool,
+    pub notifications_blocked: bool,
+    pub reminder_scheduled: bool,
+    pub notice_version: String,
+    pub open_updates: bool,
     pub version: String,
     pub notes: String,
     pub bytes: u64,

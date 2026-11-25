@@ -48,6 +48,9 @@ func verify() throws {
     let notes = try entries[0].nodes(forXPath: "description")
     try require(notes.count == 1 && notes[0].stringValue?.isEmpty == false, "missing signed release notes")
 
+    let targetDigest = try String(contentsOf: staging.appendingPathComponent("target-executable.sha256"), encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let deltaMarker = Data("ZERVOD01".utf8)
     var baselines: Set<String> = []
     for node in try entries[0].nodes(forXPath: "*[local-name()='deltas']/enclosure") {
         guard let delta = node as? XMLElement,
@@ -65,6 +68,9 @@ func verify() throws {
         let patch = staging.appendingPathComponent(name)
         let data = try Data(contentsOf: patch, options: .mappedIfSafe)
         try require(data.count == count && key.isValidSignature(signature, for: data), "invalid delta signature for \(name)")
+        let digest = data.suffix(32).map { String(format: "%02x", $0) }.joined()
+        try require(data.count > 40 && data.dropLast(32).suffix(deltaMarker.count) == deltaMarker &&
+            targetDigest == digest, "delta has an incorrect target executable digest for \(name)")
         try FileManager.default.copyItem(at: patch, to: output.appendingPathComponent(name))
     }
     print("Verified signed feed and \(baselines.count) incremental update(s).")

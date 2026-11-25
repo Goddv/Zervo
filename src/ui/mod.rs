@@ -143,7 +143,7 @@ pub enum UiAction {
     OpenDownloads,
     OpenUpdates,
     CheckForUpdates,
-    SetAutomaticUpdates(bool),
+    ConfigureUpdates(crate::updates::Preference),
     OpenHistory,
     /// Add or remove the active page from favourites.
     ToggleFavourite,
@@ -3808,6 +3808,9 @@ fn draw_toasts(
                     Sense::click(),
                 );
                 if response.clicked() {
+                    if toast.browser_update {
+                        actions.push(UiAction::OpenUpdates);
+                    }
                     dismissed = Some(toast.id);
                 }
                 if response.hovered() {

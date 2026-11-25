@@ -3,14 +3,20 @@
 Open **Settings → About → Check for Updates** to check and install. **Release
 Notes** opens `zervo://updates`, which shows the installed version, update
 status, the size and notes of an available patch, and the bundled changelog.
-Automatic updates are enabled in signed release builds and can be switched off
-in About. A background update applies after you quit Zervo.
+Updater-enabled builds check daily by default. In About you can choose hourly,
+six-hourly, daily, or weekly checks and independently enable installation on
+quit. Update notices appear inside Zervo. To receive macOS alerts, enable
+**Show macOS update notifications** and allow them when prompted. **Remind Me
+Tomorrow** schedules a reminder for the available release.
 
 ## What an update changes
 
 Zervo publishes a separate signed feed for Apple Silicon and Intel. Sparkle
 builds a binary delta from each supported prior app bundle. An update downloads
-that delta, reconstructs the new bundle in staging, and verifies the result
+that delta and reconstructs the new bundle in staging. The signed delta
+includes the expected SHA-256 of the staged executable. For ad-hoc builds,
+Zervo also verifies the sealed bundle, nested code, app identifier, target
+version, and embedded update key. Developer ID builds verify the staged app
 against the installed app's Apple code-signing requirement. An atomic
 filesystem swap replaces the app at its existing path. The browser profile
 stays outside the bundle.
@@ -24,31 +30,32 @@ DMG.
 
 ## Enable the GitHub release pipeline
 
-1. Set the repository's Apple Developer ID Application certificate and
-   notarization secrets listed in [packaging](PACKAGING.md). Use the same
-   Team ID and bundle identifier for subsequent releases.
-2. Use Sparkle's `generate_keys` to create a dedicated Zervo Ed25519 key.
+1. Use Sparkle's `generate_keys` to create a dedicated Zervo Ed25519 key.
    Save the public key as the repository variable `ZERVO_SPARKLE_PUBLIC_KEY`.
    Export the seed into the repository secret `SPARKLE_PRIVATE_ED_KEY` and keep
-   an offline backup. Keep the seed out of source control and app bundles.
+   an offline backup. If the key is lost, distributing a new trusted key
+   requires a manually installed release.
+2. Leave the Apple secrets empty to release ad-hoc builds. To ship notarized
+   builds, configure the Developer ID Application certificate and notarization
+   secrets listed in [packaging](PACKAGING.md). Switching signing modes
+   requires installing a new baseline from its DMG.
 3. Add a versioned entry in [CHANGELOG.md](../CHANGELOG.md), update the Cargo
-   version, and tag a new release. The first notarized updater-enabled release
-   is installed from its DMG. Later releases can patch from up to three prior
-   updater-enabled releases. Keep each published DMG intact so the next release
-   can build deltas against its exact bytes.
+   version, and tag a new release. Install the first updater-enabled release
+   from its DMG. macOS evaluates that first download under its usual
+   [Gatekeeper policy](https://support.apple.com/en-us/102445). Later releases
+   can patch from up to three prior updater-enabled releases with the same
+   signing mode. Keep each published DMG intact.
 4. Inspect the draft before publishing. Each architecture must have a verified
    appcast. Entries with eligible baselines also carry signed delta assets.
-   Only the architecture-specific deltas and the signed feeds are used by
-   in-app updates. The regular DMGs remain available for manual installation.
+   The regular DMGs remain available for manual installation.
 
-Apple certificates are available only to the macOS build jobs. The Ed25519
-private key is exposed only to the step that signs update assets. Preview
-builds and releases without an enrolled public key show the bundled release
-history and offer the manual installer link.
+The Ed25519 private key is exposed only to the step that signs update assets.
+Preview builds and releases without an enrolled public key show the bundled
+release history and offer the manual installer link.
 
 ## Smoke test a release
 
-Install a copy of the previous signed Zervo in a disposable location. Check that
+Install a copy of the previous updater-enabled Zervo in a disposable location. Check that
 the Updates page reports the target release and patch size. Check manually and
 also try the background install-on-quit path. After quitting, confirm the app
 at the original path has the new bundle version and starts with the same

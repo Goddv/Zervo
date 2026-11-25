@@ -1,11 +1,9 @@
-//! Web notifications, drawn as toasts in the corner of the page.
+//! Page and browser notifications, drawn in the corner of the page.
 //!
 //! Servo dispatches `new Notification(...)` to the embedder already
 //! (`EmbedderMsg::ShowNotification`); all that was ever missing was somewhere
-//! for one to land. There is no system-notification integration here — that
-//! wants a signed bundle and `UNUserNotificationCenter` on macOS, and an
-//! equivalent on each other platform — so a notification is shown inside the
-//! window, over the page that raised it.
+//! for one to land. Web notifications stay inside the browser. Zervo also
+//! shows its own update notifications here.
 //!
 //! Nothing in here is modal. `controls.rs` holds the things a page is *waiting*
 //! on and draws one at a time; a notification is told, not asked, so several can
@@ -41,6 +39,7 @@ pub struct Toast {
     pub tag: String,
     /// `requireInteraction` — stay until dismissed rather than timing out.
     pub sticky: bool,
+    browser_update: bool,
     raised: Instant,
 }
 
@@ -51,6 +50,7 @@ pub struct ToastView {
     pub id: u64,
     pub title: String,
     pub body: String,
+    pub browser_update: bool,
     /// How long this has been up.
     ///
     /// The chrome grows a toast out of the bell over its first fraction of a
@@ -83,16 +83,42 @@ pub struct Toasts {
 impl Toasts {
     /// Show a notification, or replace the one it supersedes.
     pub fn raise(&mut self, title: String, body: String, tag: String, sticky: bool, now: Instant) {
-        self.next_id += 1;
-        let toast = Toast {
-            id: self.next_id,
+        self.push(Toast {
+            id: 0,
             title,
             body,
             tag,
             sticky,
+            browser_update: false,
             raised: now,
-        };
+        });
+    }
 
+    #[cfg(target_os = "macos")]
+    pub fn raise_update(&mut self, title: String, body: String, now: Instant) {
+        self.clear_update();
+        self.push(Toast {
+            id: 0,
+            title,
+            body,
+            tag: String::new(),
+            sticky: false,
+            browser_update: true,
+            raised: now,
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn clear_update(&mut self) {
+        self.items.retain(|toast| !toast.browser_update);
+        if self.items.is_empty() {
+            self.open = false;
+        }
+    }
+
+    fn push(&mut self, mut toast: Toast) {
+        self.next_id += 1;
+        toast.id = self.next_id;
         // An empty tag is not an identifier — the spec says so, and treating it
         // as one would make every untagged notification replace the last.
         if !toast.tag.is_empty() {
@@ -175,6 +201,7 @@ impl Toasts {
                 id: toast.id,
                 title: toast.title.clone(),
                 body: toast.body.clone(),
+                browser_update: toast.browser_update,
                 age: now.saturating_duration_since(toast.raised),
             })
             .collect()

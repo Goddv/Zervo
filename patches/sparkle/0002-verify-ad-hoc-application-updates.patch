@@ -1,0 +1,146 @@
+diff --git a/Autoupdate/SUCodeSigningVerifier.h b/Autoupdate/SUCodeSigningVerifier.h
+index b1dbf10..a1e3f57 100644
+--- a/Autoupdate/SUCodeSigningVerifier.h
++++ b/Autoupdate/SUCodeSigningVerifier.h
+@@ -39,6 +39,7 @@ SUCodeSigningVerifierDefinitionAttribute
+ 
+ + (BOOL)codeSignatureIsValidAtDownloadURL:(NSURL *)downloadURL andMatchesDeveloperIDTeamFromOldBundleURL:(NSURL *)oldBundleURL error:(NSError * __autoreleasing *)error;
+ 
+++ (BOOL)bundleAtURLIsAdHocSigned:(NSURL *)bundleURL;
+ + (BOOL)bundleAtURLIsCodeSigned:(NSURL *)bundleURL;
+ 
+ + (NSString * _Nullable)teamIdentifierAtURL:(NSURL *)url;
+diff --git a/Autoupdate/SUCodeSigningVerifier.m b/Autoupdate/SUCodeSigningVerifier.m
+index 777dc35..70e8a19 100644
+--- a/Autoupdate/SUCodeSigningVerifier.m
++++ b/Autoupdate/SUCodeSigningVerifier.m
+@@ -245,6 +245,20 @@ + (NSDictionary *)logSigningInfoForCode:(SecStaticCodeRef)code label:(NSString*)
+     return relevantInfo;
+ }
+ 
+++ (BOOL)bundleAtURLIsAdHocSigned:(NSURL *)bundleURL
++{
++    SecStaticCodeRef code = NULL;
++    if (SecStaticCodeCreateWithPath((__bridge CFURLRef)bundleURL, kSecCSDefaultFlags, &code) != errSecSuccess) {
++        return NO;
++    }
++    CFDictionaryRef info = NULL;
++    OSStatus result = SecCodeCopySigningInformation(code, kSecCSSigningInformation, &info);
++    CFRelease(code);
++    NSDictionary *signingInfo = CFBridgingRelease(info);
++    NSNumber *flags = signingInfo[(__bridge NSString *)kSecCodeInfoFlags];
++    return result == errSecSuccess && (flags.unsignedIntValue & kSecCodeSignatureAdhoc) != 0;
++}
++
+ + (BOOL)bundleAtURLIsCodeSigned:(NSURL *)bundleURL
+ {
+     OSStatus result;
+diff --git a/Sparkle/SUUpdateValidator.m b/Sparkle/SUUpdateValidator.m
+index 101a1c8..6a13ff2 100644
+--- a/Sparkle/SUUpdateValidator.m
++++ b/Sparkle/SUUpdateValidator.m
+@@ -15,6 +15,7 @@
+ #import "SUSignatures.h"
+ #import "SUErrors.h"
+ #import "SPUVerifierInformation.h"
++#import <CommonCrypto/CommonDigest.h>
+ 
+ 
+ #include "AppKitPrevention.h"
+@@ -28,6 +29,7 @@ @implementation SUUpdateValidator
+     
+     BOOL _prevalidatedSignature;
+     BOOL _validatedDownloadUsingCodeSigning;
++    NSData *_expectedUpdateExecutableDigest;
+ }
+ 
+ - (instancetype)initWithDownloadPath:(NSString *)downloadPath signatures:(SUSignatures *)signatures host:(SUHost *)host verifierInformation:(SPUVerifierInformation * _Nullable)verifierInformation
+@@ -57,10 +59,41 @@ - (BOOL)validateHostHasPublicKeys:(NSError * __autoreleasing *)error
+     return YES;
+ }
+ 
++// The trailer is part of the signed delta. Its SHA-256 digest authenticates
++// the reconstructed app's sealed executable independently of its ad-hoc ID.
++- (BOOL)validateAdHocDeltaWithPublicKeys:(SUPublicKeys *)publicKeys error:(NSError * __autoreleasing *)error
++{
++    static const char marker[] = "ZERVOD01";
++    const NSUInteger markerLength = sizeof(marker) - 1;
++    const NSUInteger trailerLength = markerLength + CC_SHA256_DIGEST_LENGTH;
++    NSData *data = [NSData dataWithContentsOfFile:_downloadPath options:NSDataReadingMappedIfSafe error:error];
++    if (data == nil) {
++        return NO;
++    }
++    if (![_downloadPath.pathExtension isEqualToString:@"delta"] || data.length <= trailerLength ||
++        publicKeys.ed25519PubKeyStatus != SUSigningInputStatusPresent ||
++        memcmp((const unsigned char *)data.bytes + data.length - trailerLength, marker, markerLength) != 0) {
++        if (error != NULL) {
++            *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUValidationError userInfo:@{ NSLocalizedDescriptionKey: @"The update is missing the signed Zervo delta trailer." }];
++        }
++        return NO;
++    }
++    SUSignatureVerifier *verifier = [[SUSignatureVerifier alloc] initWithPublicKeys:publicKeys];
++    if (![verifier verifyData:data signatures:_signatures fileKind:@"update" verifierInformation:_verifierInformation error:error]) {
++        return NO;
++    }
++    _expectedUpdateExecutableDigest = [data subdataWithRange:NSMakeRange(data.length - CC_SHA256_DIGEST_LENGTH, CC_SHA256_DIGEST_LENGTH)];
++    _prevalidatedSignature = YES;
++    return YES;
++}
++
+ - (BOOL)validateDownloadPathWithFallbackOnCodeSigning:(BOOL)fallbackOnCodeSigning error:(NSError * __autoreleasing *)error
+ {
+     SUPublicKeys *publicKeys = _host.publicKeys;
+     SUSignatures *signatures = _signatures;
++    if ([SUCodeSigningVerifier bundleAtURLIsAdHocSigned:_host.bundle.bundleURL]) {
++        return [self validateAdHocDeltaWithPublicKeys:publicKeys error:error];
++    }
+ 
+     NSError *dsaVerificationError = nil;
+     if ([SUSignatureVerifier validatePath:_downloadPath withSignatures:signatures withPublicKeys:publicKeys verifierInformation:_verifierInformation error:&dsaVerificationError]) {
+@@ -113,6 +146,36 @@ - (BOOL)validateDownloadPathWithFallbackOnCodeSigning:(BOOL)fallbackOnCodeSignin
+     return NO;
+ }
+ 
++- (BOOL)validateStagedAdHocBundle:(NSBundle *)bundle host:(SUHost *)newHost error:(NSError * __autoreleasing *)error
++{
++    NSString *installedKey = [_host.bundle objectForInfoDictionaryKey:@"SUPublicEDKey"];
++    NSString *stagedKey = [bundle objectForInfoDictionaryKey:@"SUPublicEDKey"];
++    if (![installedKey isEqual:stagedKey] ||
++        ![bundle.bundleIdentifier isEqualToString:_host.bundle.bundleIdentifier] ||
++        ![newHost.version isEqualToString:_verifierInformation.expectedVersion] ||
++        ![SUCodeSigningVerifier bundleAtURLIsAdHocSigned:bundle.bundleURL]) {
++        if (error != NULL) {
++            *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUValidationError userInfo:@{ NSLocalizedDescriptionKey: @"The staged update has an unexpected app identity, version, or update key." }];
++        }
++        return NO;
++    }
++    if (![SUCodeSigningVerifier codeSignatureIsValidAtBundleURL:bundle.bundleURL checkNestedCode:YES error:error]) {
++        return NO;
++    }
++    NSURL *executable = bundle.executableURL;
++    NSData *data = executable != nil ? [NSData dataWithContentsOfURL:executable options:NSDataReadingMappedIfSafe error:error] : nil;
++    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
++    if (data.length > 0 && data.length <= UINT32_MAX &&
++        CC_SHA256(data.bytes, (CC_LONG)data.length, digest) != NULL &&
++        memcmp(digest, _expectedUpdateExecutableDigest.bytes, sizeof(digest)) == 0) {
++        return YES;
++    }
++    if (error != NULL) {
++        *error = [NSError errorWithDomain:SUSparkleErrorDomain code:SUValidationError userInfo:@{ NSLocalizedDescriptionKey: @"The staged executable does not match the signed update digest." }];
++    }
++    return NO;
++}
++
+ - (BOOL)validateWithUpdateDirectory:(NSString *)updateDirectory error:(NSError * __autoreleasing *)error
+ {
+     SUSignatures *signatures = _signatures;
+@@ -175,6 +238,9 @@ - (BOOL)validateWithUpdateDirectory:(NSString *)updateDirectory error:(NSError *
+         
+         NSBundle *newBundle = [NSBundle bundleWithURL:installSourceURL];
+         SUHost *newHost = [[SUHost alloc] initWithBundle:newBundle];
++        if (_expectedUpdateExecutableDigest != nil) {
++            return [self validateStagedAdHocBundle:newBundle host:newHost error:error];
++        }
+         
+         SUPublicKeys *publicKeys = host.publicKeys;
+         SUPublicKeys *newPublicKeys = newHost.publicKeys;

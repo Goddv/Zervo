@@ -7,7 +7,7 @@ use std::{
 use objc2::MainThreadMarker;
 use winit::event_loop::EventLoopProxy;
 
-use super::Snapshot;
+use super::{Preference, Snapshot};
 use crate::WakerEvent;
 
 // Values from the macOS <dlfcn.h>.
@@ -19,7 +19,7 @@ type Wake = extern "C" fn(*mut c_void);
 type Start = unsafe extern "C" fn(Wake, *mut c_void) -> *mut c_void;
 type Stop = unsafe extern "C" fn(*mut c_void);
 type Check = unsafe extern "C" fn(*mut c_void);
-type SetAutomatic = unsafe extern "C" fn(*mut c_void, u8);
+type Configure = unsafe extern "C" fn(*mut c_void, u8, u32);
 type ReadSnapshot = unsafe extern "C" fn(*mut c_void) -> *mut c_char;
 
 unsafe extern "C" {
@@ -33,7 +33,7 @@ pub(crate) struct Updater {
     context: NonNull<c_void>,
     stop: Stop,
     check: Check,
-    set_automatic: SetAutomatic,
+    configure: Configure,
     read_snapshot: ReadSnapshot,
     _proxy: Box<Proxy>,
     _main_thread: MainThreadMarker,
@@ -74,7 +74,7 @@ impl Updater {
         };
         // SAFETY: These names and ABIs are defined in platform/macos/ZervoUpdater.m.
         // Resolve all functions before passing the event proxy to the library.
-        let (start, stop, check, set_automatic, read_snapshot) = unsafe {
+        let (start, stop, check, configure, read_snapshot) = unsafe {
             let symbol = |name: &CStr| NonNull::new(dlsym(handle.as_ptr(), name.as_ptr()));
             let start =
                 std::mem::transmute::<*mut c_void, Start>(symbol(c"zervo_updater_start")?.as_ptr());
@@ -82,13 +82,13 @@ impl Updater {
                 std::mem::transmute::<*mut c_void, Stop>(symbol(c"zervo_updater_stop")?.as_ptr());
             let check =
                 std::mem::transmute::<*mut c_void, Check>(symbol(c"zervo_updater_check")?.as_ptr());
-            let set_automatic = std::mem::transmute::<*mut c_void, SetAutomatic>(
-                symbol(c"zervo_updater_set_automatic")?.as_ptr(),
+            let configure = std::mem::transmute::<*mut c_void, Configure>(
+                symbol(c"zervo_updater_configure")?.as_ptr(),
             );
             let read_snapshot = std::mem::transmute::<*mut c_void, ReadSnapshot>(
                 symbol(c"zervo_updater_snapshot")?.as_ptr(),
             );
-            (start, stop, check, set_automatic, read_snapshot)
+            (start, stop, check, configure, read_snapshot)
         };
         let mut proxy = Box::new(proxy);
         // SAFETY: The box keeps this address live until stop unregisters it.
@@ -97,7 +97,7 @@ impl Updater {
             context,
             stop,
             check,
-            set_automatic,
+            configure,
             read_snapshot,
             _proxy: proxy,
             _main_thread: main_thread,
@@ -121,9 +121,17 @@ impl Updater {
         unsafe { (self.check)(self.context.as_ptr()) };
     }
 
-    pub fn set_automatic(&self, enabled: bool) {
+    pub fn configure(&self, preference: Preference) {
+        let (operation, value) = match preference {
+            Preference::AutomaticChecks(enabled) => (0, u32::from(enabled)),
+            Preference::AutomaticInstall(enabled) => (1, u32::from(enabled)),
+            Preference::CheckInterval(seconds) => (2, seconds),
+            Preference::SystemNotifications(enabled) => (3, u32::from(enabled)),
+            Preference::RemindTomorrow => (4, 0),
+        };
         // SAFETY: The handle remains live on the main thread until Drop.
-        unsafe { (self.set_automatic)(self.context.as_ptr(), u8::from(enabled)) };
+        // The operation values match the switch in ZervoUpdater.m.
+        unsafe { (self.configure)(self.context.as_ptr(), operation, value) };
     }
 }
 

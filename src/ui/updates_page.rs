@@ -86,6 +86,22 @@ pub(super) fn draw(
                     {
                         actions.push(UiAction::OpenAddress(GITHUB_RELEASES.into()));
                     }
+                    if matches!(
+                        updates.status,
+                        Status::Available | Status::Ready | Status::Manual
+                    ) {
+                        if updates.reminder_scheduled {
+                            ui.label(
+                                RichText::new(tr("updates-reminder-scheduled"))
+                                    .size(12.0)
+                                    .color(palette.text_muted),
+                            );
+                        } else if ui.link(tr("updates-remind-tomorrow")).clicked() {
+                            actions.push(UiAction::ConfigureUpdates(
+                                crate::updates::Preference::RemindTomorrow,
+                            ));
+                        }
+                    }
                 });
             if !updates.version.is_empty() {
                 ui.add_space(16.0);

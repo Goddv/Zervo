@@ -7,7 +7,7 @@ zervo_bundle_updater() {
     ditto "$framework_source/Sparkle.framework" "$frameworks/Sparkle.framework"
     cp "$framework_source/Sparkle-LICENSE" "$resources/Sparkle-LICENSE"
     xcrun clang -arch "$arch" -mmacosx-version-min=12.0 -fobjc-arc -dynamiclib \
-        -F "$frameworks" -framework Foundation -framework Sparkle \
+        -F "$frameworks" -framework Foundation -framework Sparkle -framework UserNotifications \
         -Wl,-rpath,@loader_path -install_name '@rpath/ZervoUpdater.dylib' \
         platform/macos/ZervoUpdater.m -o "$frameworks/ZervoUpdater.dylib"
 

@@ -15,11 +15,31 @@ mount="$(mktemp -d)"
 trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true; rmdir "$mount"' EXIT
 app="$mount/Zervo.app"
 plist="$app/Contents/Info.plist"
+executable="$app/Contents/MacOS/Zervo"
+team_requirement=""
+signature_kind() {
+    local info
+    info="$(codesign -dv --verbose=2 "$app" 2>&1)"
+    if grep -Fxq 'Signature=adhoc' <<<"$info"; then
+        printf '%s\n' adhoc
+    elif grep -q '^Authority=Developer ID Application:' <<<"$info"; then
+        printf '%s\n' developer-id
+    else
+        die "expected an ad-hoc or Developer ID Application signature"
+    fi
+}
+
 verify_mounted_app() {
-    codesign --verify --deep --strict "$@" "$app"
-    xcrun stapler validate "$app" >&2
-    [ "$(lipo -archs "$app/Contents/MacOS/Zervo")" = "$arch" ] ||
-        die "unexpected app architecture"
+    codesign --verify --deep --strict "$app"
+    if [ -n "$team_requirement" ]; then
+        codesign --verify --strict --test-requirement "$team_requirement" "$app"
+    fi
+    if [ "$mode" = developer-id ]; then
+        xcrun stapler validate "$app" >&2
+    fi
+    [ "$(lipo -archs "$executable")" = "$arch" ] || die "unexpected app architecture"
+    [ "$(plutil -extract CFBundleIdentifier raw "$plist")" = app.zervo.browser ] ||
+        die "unexpected app bundle identifier"
     [ "$(plutil -extract SUPublicEDKey raw "$plist")" = "$ZERVO_SPARKLE_PUBLIC_KEY" ] ||
         die "app does not contain the configured Sparkle key"
     [ "$(plutil -extract SUFeedURL raw "$plist")" = "https://github.com/Goddv/Zervo/releases/latest/download/zervo-appcast-$arch.xml" ] ||
@@ -27,9 +47,13 @@ verify_mounted_app() {
 }
 
 hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$candidate" >&2
+mode="$(signature_kind)"
 verify_mounted_app
-requirement="$(codesign -dr - "$app" 2>&1 | sed -n 's/^designated => //p')"
-[ -n "$requirement" ] || die "candidate is missing a designated requirement"
+if [ "$mode" = developer-id ]; then
+    team_requirement="$(codesign -dr - "$app" 2>&1 | sed -n 's/^designated => //p')"
+    [ -n "$team_requirement" ] || die "candidate is missing a designated requirement"
+fi
+shasum -a 256 "$executable" | cut -d ' ' -f 1 > "$stage/target-executable.sha256"
 plutil -extract CFBundleVersion raw "$plist"
 hdiutil detach "$mount" >&2
 cp "$candidate" "$stage/Zervo-${tag#v}-$arch-sparkle.dmg"
@@ -46,7 +70,12 @@ while IFS= read -r prior; do
     baseline="$stage/Zervo-${prior#v}-$arch-sparkle.dmg"
     gh release download "$prior" --pattern "$archive" --output "$baseline" >&2
     hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$baseline" >&2
-    verify_mounted_app --test-requirement "$requirement"
+    if [ "$(signature_kind)" != "$mode" ]; then
+        hdiutil detach "$mount" >&2
+        rm "$baseline"
+        continue
+    fi
+    verify_mounted_app
     hdiutil detach "$mount" >&2
     count=$((count + 1))
     [ "$count" -lt 3 ] || break
