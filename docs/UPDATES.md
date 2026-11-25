@@ -53,6 +53,22 @@ The Ed25519 private key is exposed only to the step that signs update assets.
 Preview builds and releases without an enrolled public key show the bundled
 release history and offer the manual installer link.
 
+## Follow a release from source to update
+
+- In Keychain Access, the dedicated Sparkle account is `zervo-release`. The
+  key tool's `-p` flag prints its public key. The export flag `-x` writes
+  sensitive material, so keep exports off shared folders and out of Git.
+- GitHub embeds its public variable in each app. The signing job alone gets
+  the private secret, verifies the release bundles, and signs the appcasts and
+  any deltas. A first release has two appcasts and zero deltas because it is
+  the baseline.
+- Push a version tag to build a GitHub draft. Review the two DMGs, the two
+  architecture-specific appcasts, and `SHA256SUMS` before publishing. A
+  manual dispatch with **publish** enabled also publishes after verification.
+- Publishing makes the feeds reachable at the app's fixed GitHub URLs.
+  When the following release is cut, the workflow uses the exact previous
+  DMGs to calculate deltas and publishes them alongside the new feed.
+
 ## Smoke test a release
 
 Install a copy of the previous updater-enabled Zervo in a disposable location. Check that

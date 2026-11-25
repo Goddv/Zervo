@@ -22,17 +22,7 @@ feed="zervo-appcast-$arch.xml"
 mkdir -p "$output"
 [ ! -e "$output/$feed" ] || die "appcast already exists in $output"
 # Embed the tagged changelog as signed plain text, including wrapped bullets.
-awk -v version="$version" '
-    /^## / {
-        if (found) exit
-        found = ($2 == version)
-        next
-    }
-    found { print }
-    END { if (!found) exit 1 }
-' "$root/CHANGELOG.md" > "$staged/${archive%.dmg}.txt" ||
-    die "add a changelog section for $version before publishing"
-grep -q '[^[:space:]]' "$staged/${archive%.dmg}.txt" || die "release notes are empty"
+zervo_release_notes "$version" > "$staged/${archive%.dmg}.txt"
 
 # Avoid leaving the private seed in the signing tool's environment.
 signing_key="$SPARKLE_PRIVATE_ED_KEY"

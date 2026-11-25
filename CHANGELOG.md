@@ -1,31 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.6.1.2 — 25 November 2026
 
-- Added an Updates page with release history and incoming release notes.
-  Check for updates and manage automatic installation in Settings → About.
-- Added signed, architecture-specific incremental updates for ad-hoc and
-  notarized macOS releases. Zervo verifies the feed, patch, and staged app
-  before atomically replacing the installed app on quit or restart.
-- Added configurable background update checks, optional macOS update
-  notifications, and a reminder that can defer an available update for a day.
+This is the first macOS release that can receive in-app updates. Install this
+DMG once. Future releases can update it through **Settings → About**.
+
+### Updates
+
+- Added a dedicated Updates page with the current version, release history,
+  update progress, and release notes.
+- Added signed, architecture-specific incremental updates. Zervo verifies the
+  feed and staged app before replacing the installed app atomically.
+- Added configurable background checks, optional macOS update notifications,
+  and **Remind Me Tomorrow**. Automatic installation applies on quit.
 - When a compatible patch is unavailable, the Updates page links to the
   standalone GitHub installer.
 
-## 0.6.1.2 — 24 November 2026
+### Servo
 
-- Updated Servo to upstream main at `3f21bf4ee33`, including the SpiderMonkey
-  153.7.0 security update, newer layout and fullscreen fixes, and a
-  GStreamer player initialization fix.
-- Ported Zervo's engine-backed downloads and text-only web notifications to
-  the newer engine. Servo now supplies the larger HTTP/2 header limit directly.
-
-### In-app updates roadmap
-
-Starting with 0.6.1.2, work begins on in-app updates for macOS. The planned
-updater will detect new GitHub releases, verify and stage the installer, and
-atomically replace the app on restart. If the upgrade fails, the previous
-installation will remain available.
+- Updated Servo to upstream main at `3f21bf4ee33`, including SpiderMonkey
+  153.7.0, layout and fullscreen fixes, and a GStreamer initialization fix.
+- Ported engine-backed downloads and text-only web notifications to the newer
+  engine. Servo now supplies the larger HTTP/2 header limit directly.
 
 ## 0.6.1.1 — 24 November 2026
 

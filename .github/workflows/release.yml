@@ -1,7 +1,7 @@
 name: Release
 run-name: ${{ !inputs.tag && (github.event_name == 'workflow_dispatch' || github.ref_type == 'branch') && format('macOS preview · {0} · {1}', github.ref_name, github.sha) || format('Release {0}', inputs.tag || github.ref_name) }}
 
-# Main builds preview artifacts. Tags retain the draft and publish flow.
+# Main builds previews. Version tags build release drafts for review.
 on:
   push:
     branches: [main]
@@ -81,11 +81,15 @@ jobs:
             echo "Retrying draft $TAG"
             exit 0
           fi
+          # shellcheck source=scripts/lib/common.sh
+          source scripts/lib/common.sh
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          zervo_release_notes "${TAG#v}" > "$NOTES"
           gh release create "$TAG" \
             --draft \
             --verify-tag \
             --title "Zervo ${TAG#v}" \
-            --generate-notes
+            --notes-file "$NOTES"
 
   source:
     name: Source tarball
@@ -250,9 +254,8 @@ jobs:
         run: gh release upload "$TAG" release/* --clobber
 
       - name: Publish
-        # On a tag push this publishes. On a manual run it waits for the
-        # `publish` input, so a release can be built and inspected first.
-        if: ${{ github.event_name == 'push' || inputs.publish }}
+        # A manual dispatch can opt into publishing after the builds succeed.
+        if: ${{ inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -260,7 +263,7 @@ jobs:
         run: gh release edit "$TAG" --draft=false --latest
 
       - name: Leave it as a draft
-        if: ${{ github.event_name != 'push' && !inputs.publish }}
+        if: ${{ !inputs.publish }}
         env:
           TAG: ${{ needs.draft.outputs.tag }}
         run: echo "::notice::$TAG is ready as a draft. Publish it when you have looked at it."

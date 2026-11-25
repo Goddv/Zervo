@@ -61,6 +61,23 @@ zervo_version() {
     printf '%s\n' "$version"
 }
 
+# Use the same versioned changelog text in GitHub and the signed update feed.
+zervo_release_notes() {
+    local version="$1" notes
+    notes="$(awk -v version="$version" '
+        /^## / {
+            if (found) exit
+            found = ($2 == version)
+            next
+        }
+        found { print }
+        END { if (!found) exit 1 }
+    ' "$(zervo_repo_root)/CHANGELOG.md")" ||
+        die "add a changelog section for $version before publishing"
+    grep -q '[^[:space:]]' <<<"$notes" || die "release notes for $version are empty"
+    printf '%s\n' "$notes"
+}
+
 # Where cargo puts its output. Honours CARGO_TARGET_DIR, which CI sets on
 # Windows to keep paths short.
 zervo_target_dir() {
