@@ -5,7 +5,7 @@ use egui::{CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilde
 
 use crate::glass::{self, Glass};
 use crate::icons::{self, Icon};
-use crate::l10n::{message, text as tr};
+use crate::l10n::text as tr;
 use crate::overlay_glass::{self, Role, Surface};
 use crate::settings::{NewTabBackground, SearchEngine};
 use crate::theme::{self, Palette, Tier, Translucency};
@@ -161,28 +161,8 @@ fn search(
     width: f32,
     actions: &mut Vec<UiAction>,
 ) {
-    let engine = chrome.settings.search_engine;
-    let capsule_width = width.min(660.0);
-    if width >= 330.0 {
-        let (engines, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
-        let labels = SearchEngine::ALL.map(|engine| engine.label());
-        let bounds = Rect::from_center_size(engines.center(), vec2(330.0, 32.0));
-        let mut selector =
-            ui.new_child(UiBuilder::new().id_salt("newtab_engines").max_rect(bounds));
-        let current = SearchEngine::ALL
-            .iter()
-            .position(|value| *value == engine)
-            .unwrap_or(0);
-        if let Some(selected) = crate::widgets::segmented(&mut selector, current, &labels, palette)
-        {
-            chrome.settings.search_engine = SearchEngine::ALL[selected];
-            actions.push(UiAction::PersistSettings);
-            ui.ctx().request_repaint();
-        }
-        ui.add_space(10.0);
-    }
     let (slot, _) = ui.allocate_exact_size(vec2(width, 54.0), Sense::hover());
-    let bounds = Rect::from_center_size(slot.center(), vec2(capsule_width, 54.0));
+    let bounds = Rect::from_center_size(slot.center(), vec2(width.min(660.0), 54.0));
     if chrome
         .browser
         .command_bar
@@ -192,34 +172,109 @@ fn search(
     {
         return;
     }
+
     let surface = glass_surface(ui, bounds, palette, Role::SearchPill);
-    let hint = message(
-        "newtab-search-compact",
-        [("engine", chrome.settings.search_engine.label().into())],
+    let engine = chrome.settings.search_engine;
+    let compact = bounds.width() < 300.0;
+    let chip_width = if compact { 51.0 } else { 140.0 };
+    let chip = Rect::from_min_size(bounds.min + vec2(7.0, 7.0), vec2(chip_width, 40.0));
+    ui.painter().rect(
+        chip,
+        20,
+        theme::mix(
+            palette.surface,
+            palette.accent,
+            if palette.dark { 0.28 } else { 0.16 },
+        ),
+        Stroke::new(1.0, palette.accent.gamma_multiply(0.35)),
+        StrokeKind::Inside,
     );
-    let response = button(ui, bounds, "newtab_search", &hint, palette);
-    let submit = Rect::from_center_size(bounds.right_center() - vec2(24.0, 0.0), vec2(32.0, 32.0));
-    ui.painter()
-        .circle_filled(submit.center(), 16.0, palette.accent.gamma_multiply(0.24));
-    draw_icon(ui, submit.center(), Icon::Forward, palette.text);
+    let engine_label = format!("{}: {}", tr("settings-search-engine"), engine.label());
+    let picker = button(ui, chip, "newtab_engine_picker", &engine_label, palette)
+        .on_hover_text(&engine_label);
     draw_icon(
         ui,
-        bounds.left_center() + vec2(25.0, 0.0),
-        Icon::Search,
-        palette.text_muted,
-    );
-    text(
-        ui,
-        bounds
-            .with_min_x(bounds.left() + 46.0)
-            .with_max_x(submit.left() - 9.0),
-        &hint,
-        15.0,
+        chip.left_center() + vec2(17.0, 0.0),
+        Icon::Globe,
         palette.text,
     );
+    icons::draw_icon(
+        ui.painter(),
+        Rect::from_center_size(chip.right_center() - vec2(13.0, 0.0), vec2(10.0, 10.0)),
+        Icon::CaretDown,
+        palette.text_muted,
+    );
+    if !compact {
+        text(
+            ui,
+            chip.with_min_x(chip.left() + 31.0)
+                .with_max_x(chip.right() - 23.0),
+            engine.label(),
+            13.0,
+            palette.text,
+        );
+    }
+
+    let hint = tr("chrome-search-or-enter-an-address");
+    let input = bounds.with_min_x(chip.right() + 3.0).shrink(4.0);
+    let response = button(ui, input, "newtab_search", hint, palette);
+    let mut title = input
+        .with_min_x(input.left() + 7.0)
+        .with_max_x(input.right() - 13.0);
+    if bounds.width() >= 330.0 {
+        let (shortcut, badge_width) = if cfg!(target_os = "macos") {
+            ("⌘L", 36.0)
+        } else {
+            ("Ctrl+L", 57.0)
+        };
+        let badge = Rect::from_center_size(
+            pos2(input.right() - 12.0 - badge_width * 0.5, input.center().y),
+            vec2(badge_width, 27.0),
+        );
+        ui.painter().rect_stroke(
+            badge,
+            8,
+            Stroke::new(1.0, palette.border),
+            StrokeKind::Inside,
+        );
+        ui.painter().text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            shortcut,
+            FontId::proportional(12.0),
+            palette.text_muted,
+        );
+        title.set_right(badge.left() - 11.0);
+    }
+    text(ui, title, hint, 15.0, palette.text);
     surface.finish(ui, bounds, Role::SearchPill);
+
     if response.clicked() {
         actions.push(UiAction::OpenCommandFrom(bounds));
+    }
+    let picked = overlay_glass::popup(
+        egui::Popup::menu(&picker).gap(4.0).width(148.0),
+        ui.ctx(),
+        |ui| {
+            let mut picked = None;
+            for option in SearchEngine::ALL {
+                if ui
+                    .selectable_label(engine == option, option.label())
+                    .clicked()
+                {
+                    picked = Some(option);
+                    ui.close();
+                }
+            }
+            picked
+        },
+    );
+    if let Some(option) = picked.and_then(|popup| popup.inner)
+        && option != engine
+    {
+        chrome.settings.search_engine = option;
+        actions.push(UiAction::PersistSettings);
+        ui.ctx().request_repaint();
     }
 }
 

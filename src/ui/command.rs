@@ -196,11 +196,13 @@ pub(super) fn draw(root: &Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAc
                         ink,
                     );
                 }
+                let query_font = FontId::proportional(15.0 + 4.0 * eased);
                 let edit = TextEdit::singleline(&mut bar.query)
                     .id(id.with("query"))
-                    .font(FontId::proportional(15.0 + 4.0 * eased))
+                    .font(query_font.clone())
                     .text_color(palette.text)
-                    .hint_text(tr("command-search-placeholder"))
+                    .hint_text(RichText::new(tr("command-search-placeholder")).font(query_font))
+                    .vertical_align(egui::Align::Center)
                     .desired_width(width)
                     .min_size(vec2(0.0, field.height()))
                     .margin(Margin::symmetric(12, 11))
