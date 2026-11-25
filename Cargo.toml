@@ -3,7 +3,7 @@ members = ["zervo-core"]
 
 [package]
 name = "zervo"
-version = "0.6.1+2"
+version = "0.6.1+3"
 edition = "2024"
 rust-version = "1.100"
 license = "MPL-2.0"

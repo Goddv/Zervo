@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1.3 — 25 November 2026
+
+- Added French, Russian, and Ukrainian. Choose a language in
+  **Settings → General → Language**. Untranslated entries fall back to English.
+- Extended Fluent coverage to site permission prompts, saved-login messages,
+  download progress, History, New Tab clocks, error pages, and macOS update
+  reminders.
+- Documented how to preview a translation and verify it after installing a
+  signed incremental update.
+
 ## 0.6.1.2 — 25 November 2026
 
 This is the first macOS release that can receive in-app updates. Install this
