@@ -189,7 +189,7 @@ impl DownloadManager {
             DownloadState::Complete
         } else {
             let _ = std::fs::remove_file(&entry.part_path);
-            DownloadState::Failed("transfer failed".to_owned())
+            DownloadState::Failed(crate::l10n::text("downloads-transfer-failed").to_owned())
         };
         if let Some(item) = self.items.iter_mut().find(|item| item.id == entry.id) {
             item.state = state;
@@ -419,19 +419,36 @@ pub fn open_file(path: &Path) {
 }
 
 /// Human-readable byte count.
+pub fn format_progress(received: u64, total: u64) -> String {
+    crate::l10n::message(
+        "downloads-transfer-progress",
+        [
+            ("received", format_bytes(received).into()),
+            ("total", format_bytes(total).into()),
+        ],
+    )
+}
+
 pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    const UNITS: [&str; 5] = [
+        "downloads-size-bytes",
+        "downloads-size-kilobytes",
+        "downloads-size-megabytes",
+        "downloads-size-gigabytes",
+        "downloads-size-terabytes",
+    ];
     let mut value = bytes as f64;
     let mut unit = 0;
     while value >= 1024.0 && unit + 1 < UNITS.len() {
         value /= 1024.0;
         unit += 1;
     }
-    if unit == 0 {
-        format!("{bytes} B")
+    let amount = if unit == 0 {
+        bytes.to_string()
     } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
+        format!("{value:.1}")
+    };
+    crate::l10n::message(UNITS[unit], [("amount", amount.into())])
 }
 
 #[cfg(test)]
@@ -525,10 +542,11 @@ mod tests {
 
     #[test]
     fn bytes_are_reported_in_units_a_person_reads() {
-        assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(1023), "1023 B");
-        assert_eq!(format_bytes(1024), "1.0 KB");
-        assert_eq!(format_bytes(1536), "1.5 KB");
+        let visible_bytes = |bytes| format_bytes(bytes).replace(['\u{2068}', '\u{2069}'], "");
+        assert_eq!(visible_bytes(0), "0 B");
+        assert_eq!(visible_bytes(1023), "1023 B");
+        assert_eq!(visible_bytes(1024), "1.0 KB");
+        assert_eq!(visible_bytes(1536), "1.5 KB");
         // The largest number there is must not come out as "inf" or panic.
         let huge = format_bytes(u64::MAX);
         assert!(

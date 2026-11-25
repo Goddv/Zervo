@@ -286,8 +286,25 @@ mod tests {
                 if variables.is_empty() {
                     assert!(
                         catalogue.labels.contains_key(&key),
-                        "{locale}: {key} fails to format"
+                        "{locale}: {key} fails to format as a label"
                     );
+                } else {
+                    // Exercise zero, singular and plural forms in addition
+                    // to checking that translators kept each variable.
+                    for count in [0, 1, 2] {
+                        let mut args = FluentArgs::new();
+                        for name in &variables {
+                            if name == "count" {
+                                args.set(name.as_str(), count);
+                            } else {
+                                args.set(name.as_str(), "Example");
+                            }
+                        }
+                        assert!(
+                            catalogue.format(&key, Some(&args)).is_some(),
+                            "{locale}: {key} fails to format with count={count}"
+                        );
+                    }
                 }
             }
         }

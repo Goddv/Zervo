@@ -165,9 +165,12 @@ pub const PANEL_REACH: f32 = 400.0;
 /// Describe the shadow spread relative to its default size.
 pub(crate) fn spread_note(amount: f32) -> String {
     if (amount - 1.0).abs() < 0.02 {
-        "Default.".to_owned()
+        crate::l10n::text("settings-frame-spread-default").to_owned()
     } else {
-        format!("{:.0}% of default.", amount * 100.0)
+        crate::l10n::message(
+            "settings-frame-spread-percent",
+            [("percent", (amount * 100.0).round().into())],
+        )
     }
 }
 

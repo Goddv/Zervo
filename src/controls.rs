@@ -266,7 +266,7 @@ impl Controls {
         let mut deny = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let mut allow = false;
         let host = pending.host.clone();
-        let what = feature_name(pending.request.feature());
+        let prompt = permission_prompt(pending.request.feature());
         let rect = Rect::from_center_size(
             content_rect.center(),
             vec2(420.0_f32.min(content_rect.width() - 48.0), 148.0),
@@ -282,10 +282,7 @@ impl Controls {
                 ui.painter().text(
                     top,
                     Align2::LEFT_TOP,
-                    crate::l10n::message(
-                        "dialog-site-permission",
-                        [("host", host.into()), ("permission", what.into())],
-                    ),
+                    crate::l10n::message(prompt, [("host", host.into())]),
                     FontId::proportional(14.0),
                     palette.text,
                 );
@@ -1216,22 +1213,22 @@ fn clicked_outside(ctx: &egui::Context, rect: Rect) -> bool {
 
 /// What to call a capability on screen. Phrased to finish "example.com
 /// wants …", so a person reads a sentence rather than a spec term.
-fn feature_name(feature: servo::PermissionFeature) -> &'static str {
+fn permission_prompt(feature: servo::PermissionFeature) -> &'static str {
     use servo::PermissionFeature as F;
     match feature {
-        F::Geolocation => "your location",
-        F::Notifications => "to send you notifications",
-        F::Push => "to send you push messages",
-        F::Midi => "to use your MIDI devices",
-        F::Camera => "to use your camera",
-        F::Microphone => "to use your microphone",
-        F::Speaker => "to use your speakers",
-        F::DeviceInfo => "to see your devices",
-        F::BackgroundSync => "to sync in the background",
-        F::Bluetooth => "to use Bluetooth",
-        F::PersistentStorage => "to store data on this device",
-        F::ScreenWakeLock(_) => "to keep the screen awake",
-        F::Gamepad => "to use your gamepad",
+        F::Geolocation => "dialog-permission-location",
+        F::Notifications => "dialog-permission-notifications",
+        F::Push => "dialog-permission-push",
+        F::Midi => "dialog-permission-midi",
+        F::Camera => "dialog-permission-camera",
+        F::Microphone => "dialog-permission-microphone",
+        F::Speaker => "dialog-permission-speaker",
+        F::DeviceInfo => "dialog-permission-device-info",
+        F::BackgroundSync => "dialog-permission-background-sync",
+        F::Bluetooth => "dialog-permission-bluetooth",
+        F::PersistentStorage => "dialog-permission-persistent-storage",
+        F::ScreenWakeLock(_) => "dialog-permission-screen-wake-lock",
+        F::Gamepad => "dialog-permission-gamepad",
         // Deliberately exhaustive, with no catch-all: when Servo adds a
         // feature this stops compiling, which is the moment to decide what to
         // call it rather than shipping "a permission".

@@ -81,6 +81,9 @@ setup-four-questions-about-a-minute = Four questions. About a minute.
 setup-finish = Finish
 setup-next = Next
 
+setup-space-ready = { $name } is ready
+setup-change-layout-and-accent = Change your layout and accent colour any time in Settings.
+
 ## Settings pages
 
 settings-save-as-a-preset = Save as a preset…
@@ -208,6 +211,11 @@ settings-graphics = Graphics
 settings-graphics-adapter = Adapter
 settings-graphics-driver = Driver
 
+settings-language = Language
+settings-macos-reduce-transparency = macOS Reduce Transparency is on. Surfaces are shown as solid.
+settings-download-location = Saved to { $path }
+settings-version = Version { $version }
+
 ## Settings choices
 
 options-full-page = Full Page
@@ -275,6 +283,32 @@ chrome-cancelled = Cancelled
 chrome-reveal-in-finder = Reveal in Finder
 chrome-clear-all = Clear all
 
+chrome-downloads-active = Downloads ({ $count } active)
+chrome-close-tab = Close { $title }
+chrome-download-failed = Failed — { $error }
+chrome-notification-count =
+    { $count ->
+        [one] 1 notification
+       *[other] { $count } notifications
+    }
+
+## History and download details
+
+history-today = Today
+history-yesterday = Yesterday
+history-this-week = Earlier this week
+history-this-month = Earlier this month
+history-older = Older
+downloads-transfer-progress = { $received } of { $total }
+downloads-transfer-failed = Transfer failed
+
+# $amount is the size in the given unit, formatted to fit the download row.
+downloads-size-bytes = { $amount } B
+downloads-size-kilobytes = { $amount } KB
+downloads-size-megabytes = { $amount } MB
+downloads-size-gigabytes = { $amount } GB
+downloads-size-terabytes = { $amount } TB
+
 ## New tab page
 
 newtab-clock = Clock
@@ -310,6 +344,26 @@ newtab-a-place-to-put-something-down = A place to put something down.
 newtab-nothing-to-do-enviable = Nothing to do. Enviable.
 newtab-add-something = Add something…
 
+newtab-search-hero = Search with { $engine }, or say where to go
+newtab-search-compact = Search with { $engine } or enter an address…
+
+## New tab activity
+
+newtab-age-now = just now
+newtab-age-minutes = { $count } minutes ago
+newtab-age-hours =
+    { $count ->
+        [one] an hour ago
+       *[other] { $count } hours ago
+    }
+newtab-age-yesterday = yesterday
+newtab-age-days = { $count } days ago
+newtab-open-tab-count =
+    { $count ->
+        [one] { $count } open tab
+       *[other] { $count } open tabs
+    }
+
 ## Browser prompts
 
 dialog-this-page = This page
@@ -324,6 +378,26 @@ dialog-it-goes-to-your-downloads-folder = It goes to your Downloads folder.
 dialog-the-page-asked-for-this-not-zervo = The page asked for this, not Zervo.
 dialog-sign-in = Sign in
 dialog-not-now = Not now
+
+# $host is the site asking for permission. Translate each prompt as a whole sentence.
+dialog-permission-location = { $host } wants your location
+dialog-permission-notifications = { $host } wants to send you notifications
+dialog-permission-push = { $host } wants to send you push messages
+dialog-permission-midi = { $host } wants to use your MIDI devices
+dialog-permission-camera = { $host } wants to use your camera
+dialog-permission-microphone = { $host } wants to use your microphone
+dialog-permission-speaker = { $host } wants to use your speakers
+dialog-permission-device-info = { $host } wants to see your devices
+dialog-permission-background-sync = { $host } wants to sync in the background
+dialog-permission-bluetooth = { $host } wants to use Bluetooth
+dialog-permission-persistent-storage = { $host } wants to store data on this device
+dialog-permission-screen-wake-lock = { $host } wants to keep the screen awake
+dialog-permission-gamepad = { $host } wants to use your gamepad
+dialog-site-download = { $host } wants to save a file
+dialog-http-auth = { $host } wants a password
+dialog-http-saved-password = Send your saved password for { $username }?
+dialog-http-saved-origin = Send the password saved for { $username } at { $host }?
+dialog-site-says = { $origin } says
 
 ## Page error screens
 
@@ -347,13 +421,82 @@ error-that-s-the-whole-list-ship-it = That's the whole list. Ship it.
 error-knock-one-out-the-paddle-follows-the = Knock one out — the paddle follows the pointer.
 error-knock-one-out-move-the-pointer-in = Knock one out — move the pointer in here, or just press a brick.
 
-## Credential store errors
+# $detail is the engine's diagnostic text. $host is a domain name.
+error-open-in-browser = Open in { $browser }
+error-default-browser = your default browser
+error-go-to-site = Go to { $host }
+error-unsupported-feature = { $host } needs { $feature }, which Servo does not support yet.
+error-unsupported-site = { $host } needs a feature Servo does not support yet. Servo did not identify the feature.
+error-unsupported-generic = This page needs a feature Servo does not support yet.
+error-offline-queue =
+    { $count ->
+        [0] No tabs are waiting. New pages will load when you reconnect.
+        [one] One tab is waiting to load. It will load when you reconnect.
+       *[other] { $count } tabs are waiting to load. They will load when you reconnect.
+    }
+error-certificate-name-mismatch = { $host } presented a certificate for { $name }. A misconfigured server or an interception could cause this.
+error-certificate-site = Zervo could not match the certificate to { $host }. A misconfigured server or an interception could cause this.
+error-certificate-generic = Zervo could not match the certificate to this site. A misconfigured server or an interception could cause this.
+error-certificate-proceed = Continue anyway only if you know why this certificate is invalid.
+error-crash-site = Servo's content process stopped on { $host }. Reloading the page usually works. Your other tabs are unaffected.
+error-crash-site-detail = Servo's content process stopped on { $host }. Reloading the page usually works. Your other tabs are unaffected. Servo reported: { $detail }
+error-crash-generic = Servo's content process stopped. Reloading the page usually works. Your other tabs are unaffected.
+error-crash-detail = Servo's content process stopped. Reloading the page usually works. Your other tabs are unaffected. Servo reported: { $detail }
+error-not-found-site = Nothing answered at { $host }. Check the address and try again.
+error-not-found-address = Nothing answered at that address. Check the address and try again.
+error-not-found-site-suggestion =
+    Nothing answered at { $host }. Did you mean { $suggestion }? You've visited it { $count ->
+        [one] once
+       *[other] { $count } times
+    }.
+error-not-found-suggestion =
+    Nothing answered at that address. Did you mean { $suggestion }? You've visited it { $count ->
+        [one] once
+       *[other] { $count } times
+    }.
+error-game-shipped = { $shipped } / { $total } shipped
+error-game-media-source = Media Source Extensions
+error-game-extensions = Extensions
+error-game-find = Find in page
+error-game-devtools = Devtools
+error-game-session-restore = Session restore
+error-game-save-login = Saving a login
+error-game-clear-site-data = Clearing site data
+error-game-fullscreen-video = Fullscreen video
+
+## Saved logins and credential-store messages
 
 password-a-site-and-a-username-are-both = A site and a username are both needed.
 password-windows-would-not-encrypt-the-password = Windows would not encrypt the password.
 password-no-place-to-keep-credentials = No place to keep credentials.
 password-no-credential-store-found-install-libsecret-secret = No credential store found. Install libsecret (secret-tool) to save passwords.
 password-the-credential-store-refused-to-save-the = The credential store refused to save the password.
+
+password-fill-https-only = Saved logins can only be filled on HTTPS pages.
+password-fill-no-login = No saved login for { $host }.
+password-fill-secret-unavailable = The credential store could not retrieve that password.
+password-fill-success = Filled the saved login for { $host }.
+password-saved = Saved the login for { $site }.
+password-exported =
+    { $count ->
+        [one] Exported one login to { $path }. The file is unencrypted.
+       *[other] Exported { $count } logins to { $path }. The file is unencrypted.
+    }
+password-imported =
+    { $count ->
+        [one] Imported one login.
+       *[other] Imported { $count } logins.
+    }
+password-export-secret-unavailable = Export cancelled. The credential store could not retrieve the password for { $username } at { $site }.
+password-export-encode-error = Could not prepare the export: { $error }
+password-import-format-error = Could not read the Zervo export: { $error }
+password-encrypt-error = Could not run PowerShell to encrypt the password: { $error }
+password-save-error = Could not save the password: { $error }
+password-remove-error = Could not remove the password: { $error }
+password-read-file-error = Could not read { $path }: { $error }
+password-write-file-error = Could not write { $path }: { $error }
+password-keychain-save-error = Could not save the password to your keychain: { $error }
+password-keychain-remove-error = Could not remove the password from your keychain: { $error }
 
 ## Appearance values
 
@@ -403,6 +546,14 @@ theme-auto = Auto
 theme-light = Light
 theme-dark = Dark
 
+## Appearance details and wallpaper status
+
+settings-frame-spread-default = Default.
+settings-frame-spread-percent = { $percent }% of default.
+settings-wallpaper-dim-description = { $percent }% dimming keeps the cards readable over the picture.
+settings-wallpaper-fetch-error = Could not load the wallpaper. Try another picture or choose a different file.
+settings-wallpaper-credit = Showing { $credit } from { $source }.
+
 ## Gesture actions
 
 gesture-toggle-sidebar = Toggle sidebar
@@ -433,31 +584,8 @@ wallpaper-hourly = Hourly
 wallpaper-daily = Daily
 wallpaper-untitled = Untitled
 wallpaper-public-domain = Public domain
-
-## Language and messages with variables
-
-settings-language = Language
-settings-macos-reduce-transparency = macOS Reduce Transparency is on. Surfaces are shown as solid.
-settings-download-location = Saved to { $path }
-settings-version = Version { $version }
-setup-space-ready = { $name } is ready
-setup-change-layout-and-accent = Change your layout and accent colour any time in Settings.
-chrome-downloads-active = Downloads ({ $count } active)
-chrome-close-tab = Close { $title }
-chrome-download-failed = Failed — { $error }
-chrome-notification-count =
-    { $count ->
-        [one] 1 notification
-       *[other] { $count } notifications
-    }
-newtab-search-hero = Search with { $engine }, or say where to go
-newtab-search-compact = Search with { $engine } or enter an address…
-dialog-site-permission = { $host } wants { $permission }
-dialog-site-download = { $host } wants to save a file
-dialog-http-auth = { $host } wants a password
-dialog-http-saved-password = Send your saved password for { $username }?
-dialog-http-saved-origin = Send the password saved for { $username } at { $host }?
-dialog-site-says = { $origin } says
+wallpaper-openverse-subject = Openverse — { $subject }
+wallpaper-local-source = This machine
 
 ## Sidebar and command bar
 
@@ -539,9 +667,80 @@ updates-ready = The update is ready to install when you quit.
 updates-installing = Installing the update…
 updates-manual = This build needs the installer from GitHub.
 updates-no-compatible = No compatible update was found.
+updates-delta-required = This build has no compatible incremental update.
+updates-delta-recovery = Get the latest installer from Zervo’s GitHub releases.
 updates-failed = The update could not be completed. You can try again from About.
 updates-history = Release History
 updates-github = View releases on GitHub
 updates-installed = Installed version
 updates-next-version = Version { $version }
 updates-download-size = { $size } incremental download
+
+## Clocks and calendar dates
+
+# $day is the day of the month. $zone is a time-zone abbreviation such as UTC.
+clock-date = { $weekday }, { $day } { $month }
+clock-date-short = { $weekday } { $day } { $month }
+clock-zone-day = { $zone } · { $weekday }
+clock-weekday-monday = Monday
+clock-weekday-monday-short = Mon
+clock-weekday-tuesday = Tuesday
+clock-weekday-tuesday-short = Tue
+clock-weekday-wednesday = Wednesday
+clock-weekday-wednesday-short = Wed
+clock-weekday-thursday = Thursday
+clock-weekday-thursday-short = Thu
+clock-weekday-friday = Friday
+clock-weekday-friday-short = Fri
+clock-weekday-saturday = Saturday
+clock-weekday-saturday-short = Sat
+clock-weekday-sunday = Sunday
+clock-weekday-sunday-short = Sun
+clock-month-january = January
+clock-month-january-short = Jan
+clock-month-february = February
+clock-month-february-short = Feb
+clock-month-march = March
+clock-month-march-short = Mar
+clock-month-april = April
+clock-month-april-short = Apr
+clock-month-may = May
+clock-month-may-short = May
+clock-month-june = June
+clock-month-june-short = Jun
+clock-month-july = July
+clock-month-july-short = Jul
+clock-month-august = August
+clock-month-august-short = Aug
+clock-month-september = September
+clock-month-september-short = Sep
+clock-month-october = October
+clock-month-october-short = Oct
+clock-month-november = November
+clock-month-november-short = Nov
+clock-month-december = December
+clock-month-december-short = Dec
+clock-city-london = London
+clock-city-paris = Paris
+clock-city-berlin = Berlin
+clock-city-belgrade = Belgrade
+clock-city-lisbon = Lisbon
+clock-city-helsinki = Helsinki
+clock-city-moscow = Moscow
+clock-city-reykjavik = Reykjavík
+clock-city-new-york = New York
+clock-city-chicago = Chicago
+clock-city-denver = Denver
+clock-city-los-angeles = Los Angeles
+clock-city-sao-paulo = São Paulo
+clock-city-mexico-city = Mexico City
+clock-city-lagos = Lagos
+clock-city-nairobi = Nairobi
+clock-city-johannesburg = Johannesburg
+clock-city-dubai = Dubai
+clock-city-mumbai = Mumbai
+clock-city-singapore = Singapore
+clock-city-shanghai = Shanghai
+clock-city-tokyo = Tokyo
+clock-city-sydney = Sydney
+clock-city-auckland = Auckland

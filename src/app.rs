@@ -159,15 +159,15 @@ impl AppState {
                     .then(|| url.host_str().map(str::to_owned))
                     .flatten()
             })
-            .ok_or_else(|| "Saved logins are only filled on https pages.".to_owned())?;
+            .ok_or_else(|| crate::l10n::text("password-fill-https-only").to_owned())?;
 
         let vault = self.vault.borrow();
-        let login = vault
-            .for_host(&host)
-            .ok_or_else(|| format!("No saved login for {host}."))?;
+        let login = vault.for_host(&host).ok_or_else(|| {
+            crate::l10n::message("password-fill-no-login", [("host", host.as_str().into())])
+        })?;
         let password = vault
             .secret(&login)
-            .ok_or_else(|| "Your keychain would not give up that password.".to_owned())?;
+            .ok_or_else(|| crate::l10n::text("password-fill-secret-unavailable").to_owned())?;
         drop(vault);
 
         let username = serde_json::to_string(&login.username).map_err(|e| e.to_string())?;
@@ -200,7 +200,10 @@ impl AppState {
             Ok(value) => log::info!("filled the saved login for {host_for_log}: {value:?}"),
             Err(error) => log::warn!("could not fill the login for {host_for_log}: {error:?}"),
         });
-        Ok(format!("Filled the saved login for {host}."))
+        Ok(crate::l10n::message(
+            "password-fill-success",
+            [("host", host.into())],
+        ))
     }
 
     pub fn active_webview(&self) -> Option<WebView> {
@@ -689,7 +692,7 @@ impl servo::WebViewDelegate for AppState {
             .active_tab()
             .and_then(|tab| url::Url::parse(&tab.url).ok())
             .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_else(|| "This page".to_owned());
+            .unwrap_or_else(|| crate::l10n::text("dialog-this-page").to_owned());
         self.controls.borrow_mut().push_permission(request, host);
         self.window.request_redraw();
     }

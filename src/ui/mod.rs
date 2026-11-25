@@ -1903,9 +1903,7 @@ fn draw_downloads_card(
                     );
                     let detail = match state {
                         DownloadState::Running => match total {
-                            Some(total) => {
-                                format!("{} of {}", format_bytes(*received), format_bytes(*total))
-                            },
+                            Some(total) => crate::downloads::format_progress(*received, *total),
                             None => format_bytes(*received),
                         },
                         DownloadState::Complete => format_bytes(*received),
@@ -3544,9 +3542,7 @@ fn draw_downloads_page(
                 );
                 let status = match &item.state {
                     DownloadState::Running => match item.total {
-                        Some(total) => {
-                            format!("{} of {}", format_bytes(item.received), format_bytes(total))
-                        },
+                        Some(total) => crate::downloads::format_progress(item.received, total),
                         None => format_bytes(item.received),
                     },
                     DownloadState::Complete => format_bytes(item.received),

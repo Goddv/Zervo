@@ -131,10 +131,12 @@ impl Vault {
             // Refusing outright at least says so while the originals still
             // exist.
             let Some(password) = read_secret(&login.site, &login.username) else {
-                return Err(format!(
-                    "Your keychain would not give up the password for {} ({}), \
-                     so nothing was exported.",
-                    login.site, login.username
+                return Err(crate::l10n::message(
+                    "password-export-secret-unavailable",
+                    [
+                        ("site", login.site.as_str().into()),
+                        ("username", login.username.as_str().into()),
+                    ],
                 ));
             };
             exported.push(Exported {
@@ -143,23 +145,45 @@ impl Vault {
                 password,
             });
         }
-        let json = serde_json::to_vec_pretty(&exported)
-            .map_err(|error| format!("Could not write the export: {error}"))?;
+        let json = serde_json::to_vec_pretty(&exported).map_err(|error| {
+            crate::l10n::message(
+                "password-export-encode-error",
+                [("error", error.to_string().into())],
+            )
+        })?;
         // Owner-readable only, and written whole or not at all. This is every
         // password in the vault in plaintext; it should not spend even a moment
         // at whatever the umask happens to say.
-        crate::store::write_private(path, &json)
-            .map_err(|error| format!("Could not write {path:?}: {error}"))?;
+        crate::store::write_private(path, &json).map_err(|error| {
+            crate::l10n::message(
+                "password-write-file-error",
+                [
+                    ("path", path.display().to_string().into()),
+                    ("error", error.to_string().into()),
+                ],
+            )
+        })?;
         Ok(exported.len())
     }
 
     /// Read an export back. Existing logins for the same site and username are
     /// overwritten.
     pub fn import(&mut self, path: &std::path::Path) -> Result<usize, Failure> {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|error| format!("Could not read {path:?}: {error}"))?;
-        let entries: Vec<Exported> = serde_json::from_str(&contents)
-            .map_err(|error| format!("That does not look like a Zervo export: {error}"))?;
+        let contents = std::fs::read_to_string(path).map_err(|error| {
+            crate::l10n::message(
+                "password-read-file-error",
+                [
+                    ("path", path.display().to_string().into()),
+                    ("error", error.to_string().into()),
+                ],
+            )
+        })?;
+        let entries: Vec<Exported> = serde_json::from_str(&contents).map_err(|error| {
+            crate::l10n::message(
+                "password-import-format-error",
+                [("error", error.to_string().into())],
+            )
+        })?;
         let mut imported = 0;
         for entry in entries {
             if self
@@ -246,7 +270,7 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
             // Update in place if it is already there.
             "-U",
         ]),
-        "save the password to your keychain",
+        "password-keychain-save-error",
     )
 }
 
@@ -282,7 +306,7 @@ fn delete_secret(site: &str, username: &str) -> Result<(), Failure> {
             "-a",
             username,
         ]),
-        "remove the password from your keychain",
+        "password-keychain-remove-error",
     )
 }
 
@@ -302,7 +326,12 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
-        .map_err(|error| format!("Could not run PowerShell to encrypt the password: {error}"))?;
+        .map_err(|error| {
+            crate::l10n::message(
+                "password-encrypt-error",
+                [("error", error.to_string().into())],
+            )
+        })?;
     if !output.status.success() {
         return Err(tr("password-windows-would-not-encrypt-the-password").to_owned());
     }
@@ -313,7 +342,9 @@ fn store_secret(site: &str, username: &str, password: &str) -> Result<(), Failur
         &path,
         String::from_utf8_lossy(&output.stdout).trim().as_bytes(),
     )
-    .map_err(|error| format!("Could not save the password: {error}"))
+    .map_err(|error| {
+        crate::l10n::message("password-save-error", [("error", error.to_string().into())])
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -342,7 +373,10 @@ fn delete_secret(site: &str, username: &str) -> Result<(), Failure> {
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("Could not remove the password: {error}")),
+        Err(error) => Err(crate::l10n::message(
+            "password-remove-error",
+            [("error", error.to_string().into())],
+        )),
     }
 }
 
@@ -408,18 +442,24 @@ fn read_secret(site: &str, username: &str) -> Option<String> {
 fn delete_secret(site: &str, username: &str) -> Result<(), Failure> {
     run(
         Command::new("secret-tool").args(["clear", "service", &service(site), "account", username]),
-        "remove the password from your credential store",
+        "password-remove-error",
     )
 }
 
-fn run(command: &mut Command, what: &str) -> Result<(), Failure> {
+fn run(command: &mut Command, error_message: &'static str) -> Result<(), Failure> {
     match command.output() {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => {
             let detail = String::from_utf8_lossy(&output.stderr);
-            Err(format!("Could not {what}: {}", detail.trim()))
+            Err(crate::l10n::message(
+                error_message,
+                [("error", detail.trim().into())],
+            ))
         },
-        Err(error) => Err(format!("Could not {what}: {error}")),
+        Err(error) => Err(crate::l10n::message(
+            error_message,
+            [("error", error.to_string().into())],
+        )),
     }
 }
 

@@ -16,7 +16,8 @@ const RTLD_LOCAL: c_int = 0x4;
 
 type Proxy = EventLoopProxy<WakerEvent>;
 type Wake = extern "C" fn(*mut c_void);
-type Start = unsafe extern "C" fn(Wake, *mut c_void) -> *mut c_void;
+type Translate = extern "C" fn(*const c_char, *const c_char) -> *mut c_char;
+type Start = unsafe extern "C" fn(Wake, *mut c_void, Translate) -> *mut c_void;
 type Stop = unsafe extern "C" fn(*mut c_void);
 type Check = unsafe extern "C" fn(*mut c_void);
 type Configure = unsafe extern "C" fn(*mut c_void, u8, u32);
@@ -27,6 +28,7 @@ unsafe extern "C" {
     fn dlerror() -> *const c_char;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn free(pointer: *mut c_void);
+    fn strdup(text: *const c_char) -> *mut c_char;
 }
 
 pub(crate) struct Updater {
@@ -43,6 +45,32 @@ extern "C" fn wake(context: *mut c_void) {
     // SAFETY: The native delegate only calls this before stop returns.
     let proxy = unsafe { &*context.cast::<Proxy>() };
     let _ = proxy.send_event(WakerEvent::UpdaterChanged);
+}
+
+extern "C" fn translate(key: *const c_char, version: *const c_char) -> *mut c_char {
+    if key.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: The bridge passes an ASCII ID and a nullable UTF-8 version.
+    // Both non-null pointers reference NUL-terminated strings for this call.
+    let text = match unsafe { CStr::from_ptr(key) }.to_bytes() {
+        b"updates-notification-title" => crate::l10n::text("updates-notification-title").into(),
+        b"updates-notification-body" if !version.is_null() => {
+            let version = unsafe { CStr::from_ptr(version) }.to_string_lossy();
+            crate::l10n::message(
+                "updates-notification-body",
+                [("version", version.as_ref().into())],
+            )
+        },
+        b"updates-delta-required" => crate::l10n::text("updates-delta-required").into(),
+        b"updates-delta-recovery" => crate::l10n::text("updates-delta-recovery").into(),
+        _ => return std::ptr::null_mut(),
+    };
+    let Ok(text) = CString::new(text) else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: strdup copies the live C string. The caller frees that copy.
+    unsafe { strdup(text.as_ptr()) }
 }
 
 impl Updater {
@@ -76,8 +104,9 @@ impl Updater {
         // Resolve all functions before passing the event proxy to the library.
         let (start, stop, check, configure, read_snapshot) = unsafe {
             let symbol = |name: &CStr| NonNull::new(dlsym(handle.as_ptr(), name.as_ptr()));
-            let start =
-                std::mem::transmute::<*mut c_void, Start>(symbol(c"zervo_updater_start")?.as_ptr());
+            let start = std::mem::transmute::<*mut c_void, Start>(
+                symbol(c"zervo_updater_start_with_locale")?.as_ptr(),
+            );
             let stop =
                 std::mem::transmute::<*mut c_void, Stop>(symbol(c"zervo_updater_stop")?.as_ptr());
             let check =
@@ -92,7 +121,8 @@ impl Updater {
         };
         let mut proxy = Box::new(proxy);
         // SAFETY: The box keeps this address live until stop unregisters it.
-        let context = NonNull::new(unsafe { start(wake, (&mut *proxy as *mut Proxy).cast()) })?;
+        let context =
+            NonNull::new(unsafe { start(wake, (&mut *proxy as *mut Proxy).cast(), translate) })?;
         Some(Self {
             context,
             stop,

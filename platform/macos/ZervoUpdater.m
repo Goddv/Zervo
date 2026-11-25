@@ -17,12 +17,14 @@ static NSArray<NSString *> *ObservedKeys(void) {
     return @[@"canCheckForUpdates", @"automaticallyChecksForUpdates", @"automaticallyDownloadsUpdates", @"updateCheckInterval"];
 }
 typedef void (*Wake)(void *);
+typedef char *(*Translate)(const char *key, const char *version);
 
 @interface ZervoUpdaterDelegate : NSObject <SPUUpdaterDelegate, UNUserNotificationCenterDelegate>
 @property(nonatomic, strong) SPUStandardUpdaterController *controller;
 @property(nonatomic, copy) NSString *status;
 @property(nonatomic, strong, nullable) SUAppcastItem *updateItem;
 @property(nonatomic) Wake wake;
+@property(nonatomic) Translate translate;
 @property(nonatomic) void *context;
 @property(nonatomic) BOOL openUpdates;
 @property(nonatomic) BOOL notificationsBlocked;
@@ -40,6 +42,14 @@ typedef void (*Wake)(void *);
     if (self.wake != NULL) self.wake(self.context);
 }
 
+- (NSString *)localized:(const char *)key version:(NSString *)version {
+    char *text = self.translate(key, version.UTF8String);
+    if (text == NULL) return @"";
+    NSString *value = [NSString stringWithUTF8String:text];
+    free(text);
+    return value ?: @"";
+}
+
 - (NSDate *)reminderDate {
     return [NSUserDefaults.standardUserDefaults objectForKey:ReminderDateKey];
 }
@@ -55,8 +65,8 @@ typedef void (*Wake)(void *);
 - (void)sendSystemNotice:(SUAppcastItem *)item after:(NSTimeInterval)delay {
     if (![NSUserDefaults.standardUserDefaults boolForKey:NotificationsEnabledKey]) return;
     UNMutableNotificationContent *content = [UNMutableNotificationContent new];
-    content.title = @"Zervo update available";
-    content.body = [NSString stringWithFormat:@"Version %@ is available. Open Zervo for update details.", item.displayVersionString];
+    content.title = [self localized:"updates-notification-title" version:nil];
+    content.body = [self localized:"updates-notification-body" version:item.displayVersionString];
     UNTimeIntervalNotificationTrigger *trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:MAX(delay, 1) repeats:NO];
     UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:NotificationIdentifier content:content trigger:trigger];
     [UNUserNotificationCenter.currentNotificationCenter addNotificationRequest:request withCompletionHandler:^(NSError *error) {
@@ -181,8 +191,8 @@ typedef void (*Wake)(void *);
     [self notify];
     if (error != NULL && updateCheck == SPUUpdateCheckUpdates) {
         *error = [NSError errorWithDomain:ZervoUpdaterDomain code:1 userInfo:@{
-            NSLocalizedDescriptionKey: @"This build has no compatible incremental update.",
-            NSLocalizedRecoverySuggestionErrorKey: @"Get the latest installer from Zervo’s GitHub releases."
+            NSLocalizedDescriptionKey: [self localized:"updates-delta-required" version:nil],
+            NSLocalizedRecoverySuggestionErrorKey: [self localized:"updates-delta-recovery" version:nil]
         }];
     }
     return NO;
@@ -249,7 +259,8 @@ typedef void (*Wake)(void *);
 
 // The Rust event loop owns the handle. All entry points and Sparkle delegate
 // callbacks run on AppKit's main thread.
-void *zervo_updater_start(Wake wake, void *context) {
+void *zervo_updater_start_with_locale(Wake wake, void *context, Translate translate) {
+    if (translate == NULL) return NULL;
     NSBundle *bundle = NSBundle.mainBundle;
     NSURL *feed = [NSURL URLWithString:[bundle objectForInfoDictionaryKey:@"SUFeedURL"] ?: @""];
     if (![feed.scheme isEqualToString:@"https"] ||
@@ -258,6 +269,7 @@ void *zervo_updater_start(Wake wake, void *context) {
     ZervoUpdaterDelegate *bridge = [ZervoUpdaterDelegate new];
     bridge.status = @"idle";
     bridge.wake = wake;
+    bridge.translate = translate;
     bridge.context = context;
     bridge.controller = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:NO
                                                                      updaterDelegate:bridge

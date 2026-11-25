@@ -1484,7 +1484,7 @@ impl RunningApp {
             texture: self.wallpaper_texture.as_ref(),
             frost: self.wallpaper_frost.as_ref(),
             credit: self.wallpaper.credit(),
-            error: self.wallpaper.error.as_deref(),
+            fetch_failed: self.wallpaper.fetch_failed,
             loading: self.wallpaper.is_loading(),
         };
 
@@ -2262,7 +2262,7 @@ impl RunningApp {
                 browser.password_notice = match outcome {
                     Ok(()) => {
                         browser.password_draft = Default::default();
-                        format!("Saved the login for {site}.")
+                        l10n::message("password-saved", [("site", site.into())])
                     },
                     Err(why) => why,
                 };
@@ -2278,9 +2278,12 @@ impl RunningApp {
                     .join("zervo-passwords.json");
                 let outcome = state.vault.borrow().export(&path);
                 state.browser.borrow_mut().password_notice = match outcome {
-                    Ok(count) => format!(
-                        "Exported {count} login(s) to {} — the file is not encrypted.",
-                        path.display()
+                    Ok(count) => l10n::message(
+                        "password-exported",
+                        [
+                            ("count", count.into()),
+                            ("path", path.display().to_string().into()),
+                        ],
                     ),
                     Err(why) => why,
                 };
@@ -2290,7 +2293,7 @@ impl RunningApp {
                 let picked = state.pick_file();
                 let notice = match picked {
                     Some(path) => match state.vault.borrow_mut().import(&path) {
-                        Ok(count) => format!("Imported {count} login(s)."),
+                        Ok(count) => l10n::message("password-imported", [("count", count.into())]),
                         Err(why) => why,
                     },
                     None => String::new(),

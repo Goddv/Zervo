@@ -1529,7 +1529,11 @@ pub(crate) fn settings_layout(
         let mut remove = None;
         for (index, zone) in chrome.settings.newtab_world_clocks.iter().enumerate() {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&zone.label).size(13.0).color(palette.text));
+                ui.label(
+                    RichText::new(zone.display_label())
+                        .size(13.0)
+                        .color(palette.text),
+                );
                 ui.label(
                     RichText::new(&zone.name)
                         .size(11.5)
@@ -1561,7 +1565,7 @@ pub(crate) fn settings_layout(
             .selected_text(tr("settings-add-a-city"))
             .width(220.0)
             .show_glass(ui, |ui| {
-                for (label, name) in crate::newtab::Zone::CATALOGUE {
+                for (label, name, key) in crate::newtab::Zone::CATALOGUE {
                     let already = chrome
                         .settings
                         .newtab_world_clocks
@@ -1570,7 +1574,7 @@ pub(crate) fn settings_layout(
                     if already {
                         continue;
                     }
-                    if ui.selectable_label(false, label).clicked() {
+                    if ui.selectable_label(false, tr(key)).clicked() {
                         chrome
                             .settings
                             .newtab_world_clocks
@@ -1628,7 +1632,7 @@ pub(crate) fn settings_layout(
         )];
         sources.extend(Subject::ALL.iter().map(|subject| {
             (
-                format!("Openverse — {}", subject.label().to_lowercase()),
+                Source::Openverse(*subject).label(),
                 Source::Openverse(*subject),
             )
         }));
@@ -1679,9 +1683,12 @@ pub(crate) fn settings_layout(
             actions.push(UiAction::PersistSettings);
         }
         ui.label(
-            RichText::new(format!(
-                "{:.0}% — how far the picture is dimmed so the cards stay readable on it.",
-                chrome.settings.wallpaper_dim * 100.0
+            RichText::new(crate::l10n::message(
+                "settings-wallpaper-dim-description",
+                [(
+                    "percent",
+                    (chrome.settings.wallpaper_dim * 100.0).round().into(),
+                )],
             ))
             .size(11.5)
             .color(palette.text_muted),
@@ -1698,12 +1705,18 @@ pub(crate) fn settings_layout(
         });
         ui.add_space(4.0);
         let credit = chrome.wallpaper.credit;
-        let note = if let Some(why) = chrome.wallpaper.error {
-            format!("The last attempt failed: {why}")
+        let note = if chrome.wallpaper.fetch_failed {
+            tr("settings-wallpaper-fetch-error").to_owned()
         } else if chrome.wallpaper.loading {
             tr("settings-fetching-one").to_owned()
         } else if chrome.wallpaper.texture.is_some() {
-            format!("Showing {} — from {}.", credit.line(), credit.source)
+            crate::l10n::message(
+                "settings-wallpaper-credit",
+                [
+                    ("credit", credit.line().into()),
+                    ("source", credit.source_label().into()),
+                ],
+            )
         } else {
             tr("settings-nothing-fetched-yet").to_owned()
         };

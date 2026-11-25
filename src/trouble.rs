@@ -326,7 +326,6 @@ pub fn draw(
         width,
         ink.text,
         ink.text_muted,
-        trouble.tint(&palette),
     );
     let playing = trouble.is_a_wait() && content_rect.height() > plan.height + GAME_HEIGHT + 80.0;
     let total = plan.height + if playing { GAP + GAME_HEIGHT } else { 0.0 };
@@ -390,7 +389,10 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
                 let (name, _) = other_browser();
                 out.push(Press {
                     icon: Icon::ExternalLink,
-                    label: format!("Open in {name}"),
+                    label: crate::l10n::message(
+                        "error-open-in-browser",
+                        [("browser", name.into())],
+                    ),
 
                     action: Deed::Elsewhere(url.clone()),
                 });
@@ -448,7 +450,10 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
             if let Some((host, _)) = suggested {
                 out.push(Press {
                     icon: Icon::Forward,
-                    label: format!("Go to {host}"),
+                    label: crate::l10n::message(
+                        "error-go-to-site",
+                        [("host", host.as_str().into())],
+                    ),
 
                     action: Deed::Go(format!("https://{host}")),
                 });
@@ -473,223 +478,70 @@ fn buttons(trouble: Trouble, told: &Told, suggested: Option<&(String, usize)>) -
 /// that mentions a hostname and prose that *points at* one. A single string
 /// cannot say that, so the body is a handful of runs and the layout job puts
 /// them back together with one wrap.
-struct Run {
-    text: String,
-    /// Monospace, for anything the reader could type: a host, an API's name.
-    fixed: bool,
-    /// The page's own colour, for the one thing it is about.
-    lit: bool,
-}
-
-impl Run {
-    fn plain(text: impl Into<String>) -> Run {
-        Run {
-            text: text.into(),
-            fixed: false,
-            lit: false,
-        }
-    }
-
-    fn fixed(text: impl Into<String>) -> Run {
-        Run {
-            text: text.into(),
-            fixed: true,
-            lit: false,
-        }
-    }
-
-    fn lit(text: impl Into<String>) -> Run {
-        Run {
-            text: text.into(),
-            fixed: true,
-            lit: true,
-        }
-    }
-}
-
-/// The runs, laid out as one wrapped paragraph.
-fn paragraph(
-    ui: &Ui,
-    runs: &[Run],
-    width: f32,
-    ink: Color32,
-    tint: Color32,
-) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob {
-        wrap: egui::text::TextWrapping {
-            max_width: width,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // A section that ends in a space loses it: egui trims trailing whitespace
-    // per section, so `"…com"`, `" needs "`, `"Media Source Extensions"` came
-    // out as "needsMedia". Spaces are moved to the front of the following
-    // section, where they survive — the same text, laid out where the layout
-    // will keep it.
-    let mut moved: Vec<String> = runs.iter().map(|run| run.text.clone()).collect();
-    for index in 1..moved.len() {
-        if moved[index - 1].ends_with(' ') {
-            moved[index - 1].pop();
-            moved[index].insert(0, ' ');
-        }
-    }
-    for (run, text) in runs.iter().zip(&moved) {
-        job.append(
-            text,
-            0.0,
-            egui::TextFormat {
-                // A little smaller in monospace: at the same nominal size a
-                // fixed-pitch face reads a full step larger beside a
-                // proportional one, and the line goes lumpy.
-                font_id: if run.fixed {
-                    FontId::monospace(12.5)
-                } else {
-                    body_font()
-                },
-                color: if run.lit { tint } else { ink },
-                ..Default::default()
-            },
-        );
-    }
-    ui.painter().layout_job(job)
-}
-
-/// What the page says, in the reader's own situation.
-///
-/// Every one of these is written to be true when the address was typed by hand
-/// as well as when something filled it in, because both happen and a page that
-/// only reads well in one of them is half a page.
 fn body(
     chrome: &mut ChromeContext,
     trouble: Trouble,
     told: &Told,
     suggested: Option<&(String, usize)>,
-) -> Vec<Run> {
+) -> String {
+    use crate::l10n::message;
+
+    let host = told.host.as_deref();
+    let detail = told.detail.as_deref();
     match trouble {
-        Trouble::Unsupported => {
-            let site = told.host.clone();
-            match (&site, &told.detail) {
-                (Some(site), Some(needs)) => vec![
-                    Run::fixed(site),
-                    Run::plain(" needs "),
-                    Run::lit(needs),
-                    Run::plain(
-                        ", which Servo does not implement — so the page loads and then quietly \
-                         does nothing. This is the engine, not Zervo, and it is being worked on \
-                         upstream.",
-                    ),
-                ],
-                (Some(site), None) => vec![
-                    Run::fixed(site),
-                    Run::plain(
-                        " asks for something the engine has not built yet. Servo does not tell \
-                         Zervo which one, so this page cannot name it — what is still missing is \
-                         below. It is the engine, not Zervo, and it is being worked on upstream.",
-                    ),
-                ],
-                (None, _) => vec![
-                    Run::plain(
-                        "Some of the web asks for something the engine has not built yet — ",
-                    ),
-                    Run::lit("Media Source Extensions"),
-                    Run::plain(
-                        ", most often, which is what every streaming site is made of. Servo does not \
-                     tell Zervo which one, so a page cannot name it. What is still missing is \
-                     below; it is the engine, not Zervo, and it is being worked on upstream.",
-                    ),
-                ],
-            }
+        Trouble::Unsupported => match (host, detail) {
+            (Some(host), Some(feature)) => message(
+                "error-unsupported-feature",
+                [("host", host.into()), ("feature", feature.into())],
+            ),
+            (Some(host), None) => message("error-unsupported-site", [("host", host.into())]),
+            (None, _) => tr("error-unsupported-generic").to_owned(),
         },
         Trouble::Offline => {
-            let waiting = chrome
+            let count = chrome
                 .browser
                 .workspaces
                 .iter()
                 .flat_map(|workspace| workspace.tabs.iter())
                 .filter(|tab| tab.loading)
                 .count();
-            match waiting {
-                0 => vec![Run::plain(
-                    "Nothing is queued. The moment an interface comes back, anything you open \
-                     will go on its own.",
-                )],
-                1 => vec![Run::plain(
-                    "One tab is waiting to load. It'll go when the network does.",
-                )],
-                many => vec![Run::plain(format!(
-                    "{many} tabs are waiting to load. They'll go when the network does."
-                ))],
-            }
+            message("error-offline-queue", [("count", count.into())])
         },
-        Trouble::Certificate => {
-            let site = told.host.clone();
-            let tail = "That is what a machine in the middle of the connection looks like, and \
-                        it is also what a misconfigured server looks like. Zervo cannot tell you \
-                        which.";
-            match (&site, &told.detail) {
-                (Some(site), Some(name)) => vec![
-                    Run::plain("The certificate "),
-                    Run::fixed(site),
-                    Run::plain(" presented is for "),
-                    Run::lit(name),
-                    Run::plain(format!(", not for {site}. ")),
-                    Run::plain(tail),
+        Trouble::Certificate => match (host, detail) {
+            (Some(host), Some(name)) => message(
+                "error-certificate-name-mismatch",
+                [("host", host.into()), ("name", name.into())],
+            ),
+            (Some(host), None) => message("error-certificate-site", [("host", host.into())]),
+            (None, _) => tr("error-certificate-generic").to_owned(),
+        },
+        Trouble::Crashed => match (host, detail) {
+            (Some(host), Some(detail)) => message(
+                "error-crash-site-detail",
+                [("host", host.into()), ("detail", detail.into())],
+            ),
+            (Some(host), None) => message("error-crash-site", [("host", host.into())]),
+            (None, Some(detail)) => message("error-crash-detail", [("detail", detail.into())]),
+            (None, None) => tr("error-crash-generic").to_owned(),
+        },
+        Trouble::NotFound => match (host, suggested) {
+            (Some(host), Some((suggestion, visits))) => message(
+                "error-not-found-site-suggestion",
+                [
+                    ("host", host.into()),
+                    ("suggestion", suggestion.as_str().into()),
+                    ("count", (*visits).into()),
                 ],
-                (Some(site), None) => vec![
-                    Run::fixed(site),
-                    Run::plain(format!(
-                        " presented a certificate Zervo could not match to it. {tail}"
-                    )),
+            ),
+            (None, Some((suggestion, visits))) => message(
+                "error-not-found-suggestion",
+                [
+                    ("suggestion", suggestion.as_str().into()),
+                    ("count", (*visits).into()),
                 ],
-                (None, _) => vec![Run::plain(format!(
-                    "This site presented a certificate Zervo could not match to it. {tail}"
-                ))],
-            }
-        },
-        Trouble::Crashed => {
-            let site = told.host.clone();
-            let mut runs = Vec::new();
-            match &site {
-                Some(host) => {
-                    runs.push(Run::plain("The engine's content process fell over on "));
-                    runs.push(Run::fixed(host));
-                    runs.push(Run::plain(". "));
-                },
-                None => runs.push(Run::plain("The engine's content process fell over. ")),
-            }
-            runs.push(Run::plain(
-                "That is a bug in Servo rather than a feature it has not built, so loading the \
-                 page again usually works. Nothing else in the window was affected.",
-            ));
-            if let Some(why) = &told.detail {
-                runs.push(Run::plain(" It said: "));
-                runs.push(Run::lit(why));
-                runs.push(Run::plain("."));
-            }
-            runs
-        },
-        Trouble::NotFound => {
-            let site = told.host.clone();
-            let mut runs = vec![Run::plain("Nothing answered at ")];
-            match &site {
-                Some(host) => runs.push(Run::fixed(host)),
-                None => runs.push(Run::plain("that address")),
-            }
-            match suggested {
-                Some((host, visits)) => {
-                    runs.push(Run::plain(". Did you mean "));
-                    runs.push(Run::lit(host));
-                    runs.push(Run::plain(format!(
-                        "? You've been there {visits} {}.",
-                        if *visits == 1 { "time" } else { "times" }
-                    )));
-                },
-                None => runs.push(Run::plain(
-                    ". Either the address is wrong or the site is gone.",
-                )),
-            }
-            runs
+            ),
+            (Some(host), None) => message("error-not-found-site", [("host", host.into())]),
+            (None, None) => tr("error-not-found-address").to_owned(),
         },
     }
 }
@@ -785,7 +637,7 @@ fn other_browser() -> Elsewhere {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        ("your default browser", |url: &str| {
+        (tr("error-default-browser"), |url: &str| {
             let _ = std::process::Command::new("xdg-open").arg(url).spawn();
         })
     }
@@ -824,7 +676,6 @@ fn wrap(
 
 /// The proceed line under the certificate card, hoisted so the measure and the
 /// draw cannot read two different strings.
-const PROCEED: &str = "Continue anyway — only if you know exactly why this certificate is wrong.";
 
 /// Where everything on the message card goes.
 ///
@@ -853,21 +704,14 @@ struct Plan {
 }
 
 impl Plan {
-    /// `ink` and `muted` are the colours the card will actually be drawn in,
-    /// and `tint` the page's own — passed in rather than taken from the
-    /// palette because a galley bakes its colours in at layout time, and
-    /// laying out here in one colour to paint there in another is how the one
-    /// amber run in the whole paragraph would have come out white.
-    #[expect(clippy::too_many_arguments, reason = "one plan, one place")]
     fn of(
         ui: &Ui,
         trouble: Trouble,
-        body: &[Run],
+        body: &str,
         buttons: &[Press],
         width: f32,
         ink: Color32,
         muted: Color32,
-        tint: Color32,
     ) -> Plan {
         let inner = width - CARD_PAD * 2.0;
         let head = wrap(
@@ -881,7 +725,7 @@ impl Plan {
         // A short headline is centred on the badge; a tall one starts where the
         // badge does, rather than riding up out of the card's top padding.
         let head_top = 24.0 + (BADGE - head.size().y).max(0.0) * 0.5;
-        let body = paragraph(ui, body, inner.max(1.0), muted, tint);
+        let body = wrap(ui, body, &body_font(), inner.max(1.0), muted);
 
         // The buttons, wrapped. Three of them at a 240-point floor are wider
         // than the card, and a row that neither wraps nor clamps just runs off
@@ -908,7 +752,7 @@ impl Plan {
         let proceed = (trouble == Trouble::Certificate).then(|| {
             wrap(
                 ui,
-                PROCEED,
+                tr("error-certificate-proceed"),
                 &FontId::proportional(11.5),
                 inner.max(1.0),
                 muted,
@@ -1081,14 +925,14 @@ fn draw_message(
 /// roughly the order they hurt. Clearing them is the roadmap, which is why the
 /// score reads "shipped".
 const GAPS: [&str; 8] = [
-    "Media Source Extensions",
-    "Extensions",
-    "Find in page",
-    "Devtools",
-    "Session restore",
-    "Saving a login",
-    "Clearing site data",
-    "Fullscreen video",
+    "error-game-media-source",
+    "error-game-extensions",
+    "error-game-find",
+    "error-game-devtools",
+    "error-game-session-restore",
+    "error-game-save-login",
+    "error-game-clear-site-data",
+    "error-game-fullscreen-video",
 ];
 
 /// Where the ball is, and what has been knocked out.
@@ -1168,7 +1012,10 @@ fn draw_game(root: &mut Ui, palette: &Palette, panel: Rect, tab: crate::state::T
     root.painter().text(
         pos2(panel.max.x - 16.0, panel.min.y + 18.0),
         Align2::RIGHT_CENTER,
-        format!("{shipped} / {} shipped", GAPS.len()),
+        crate::l10n::message(
+            "error-game-shipped",
+            [("shipped", shipped.into()), ("total", GAPS.len().into())],
+        ),
         FontId::monospace(11.0),
         palette.accent,
     );
@@ -1178,7 +1025,8 @@ fn draw_game(root: &mut Ui, palette: &Palette, panel: Rect, tab: crate::state::T
     let mut bricks: Vec<Rect> = Vec::with_capacity(GAPS.len());
     let mut x = panel.min.x + 16.0;
     let mut y = panel.min.y + 34.0;
-    for label in GAPS {
+    for key in GAPS {
+        let label = tr(key);
         let width = root
             .painter()
             .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
@@ -1234,7 +1082,7 @@ fn draw_game(root: &mut Ui, palette: &Palette, panel: Rect, tab: crate::state::T
             root,
             palette,
             *brick,
-            GAPS[index],
+            tr(GAPS[index]),
             &font,
             done,
             hit.hovered(),
@@ -1537,21 +1385,16 @@ mod tests {
         let ctx = egui::Context::default();
         let mut out = None;
         let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let body = vec![
-                Run::fixed("watch.example.com"),
-                Run::plain(" needs "),
-                Run::lit("Media Source Extensions"),
-                Run::plain(", which Servo does not implement — so the page loads."),
-            ];
+            let body =
+                "watch.example.com needs Media Source Extensions, which Servo does not implement.";
             out = Some(Plan::of(
                 ui,
                 trouble,
-                &body,
+                body,
                 buttons,
                 width,
                 Color32::WHITE,
                 Color32::GRAY,
-                Color32::YELLOW,
             ));
         });
         frame.textures_delta.clear();

@@ -72,11 +72,11 @@ pub enum Bucket {
 impl Bucket {
     pub fn label(self) -> &'static str {
         match self {
-            Bucket::Today => "Today",
-            Bucket::Yesterday => "Yesterday",
-            Bucket::ThisWeek => "Earlier this week",
-            Bucket::ThisMonth => "Earlier this month",
-            Bucket::Earlier => "Older",
+            Bucket::Today => crate::l10n::text("history-today"),
+            Bucket::Yesterday => crate::l10n::text("history-yesterday"),
+            Bucket::ThisWeek => crate::l10n::text("history-this-week"),
+            Bucket::ThisMonth => crate::l10n::text("history-this-month"),
+            Bucket::Earlier => crate::l10n::text("history-older"),
         }
     }
 }

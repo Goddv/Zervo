@@ -38,7 +38,10 @@ impl Source {
     pub fn label(&self) -> String {
         match self {
             Source::Commons => "Wikimedia Commons".to_owned(),
-            Source::Openverse(subject) => format!("Openverse — {}", subject.label().to_lowercase()),
+            Source::Openverse(subject) => crate::l10n::message(
+                "wallpaper-openverse-subject",
+                [("subject", subject.label().into())],
+            ),
             Source::File(path) => Path::new(path)
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -152,6 +155,13 @@ pub struct Credit {
 }
 
 impl Credit {
+    pub fn source_label(&self) -> &str {
+        match self.source.as_str() {
+            "This machine" => tr("wallpaper-local-source"),
+            other => other,
+        }
+    }
+
     /// The one line drawn over the picture. Everything the licences ask for,
     /// in the order a person reads it.
     pub fn line(&self) -> String {
@@ -183,7 +193,7 @@ pub struct View<'a> {
     /// picture is frosted against it.
     pub frost: Option<&'a crate::theme::Frost>,
     pub credit: &'a Credit,
-    pub error: Option<&'a str>,
+    pub fetch_failed: bool,
     pub loading: bool,
 }
 
@@ -211,7 +221,7 @@ pub struct Wallpaper {
     inbox: Option<Receiver<Result<Fetched, String>>>,
     fetched_at: Option<SystemTime>,
     /// What went wrong last time, shown in the settings rather than swallowed.
-    pub error: Option<String>,
+    pub fetch_failed: bool,
     /// Set once per launch, so `Each launch` means once.
     launched: bool,
 }
@@ -272,7 +282,7 @@ impl Wallpaper {
             return;
         }
         self.launched = true;
-        self.error = None;
+        self.fetch_failed = false;
         let source = source.clone();
         let (sender, receiver) = channel();
         self.inbox = Some(receiver);
@@ -301,13 +311,14 @@ impl Wallpaper {
             Ok(Err(why)) => {
                 self.inbox = None;
                 log::warn!("Wallpaper: {why}");
-                self.error = Some(why);
+                self.fetch_failed = true;
                 true
             },
             Err(TryRecvError::Empty) => false,
             Err(TryRecvError::Disconnected) => {
                 self.inbox = None;
-                self.error = Some("the fetch gave up".to_owned());
+                log::warn!("Wallpaper fetch stopped before returning a result");
+                self.fetch_failed = true;
                 true
             },
         }

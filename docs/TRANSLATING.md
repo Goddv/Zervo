@@ -18,13 +18,26 @@ incomplete translation safely falls back to English.
 3. Try the language in first-run setup or **Settings → General → Language**.
    Check that longer labels still fit at a narrow window size.
 
-For example, this is a valid starter `fr.ftl`:
+A minimal `fr.ftl` looks like this.
 
 ```ftl
 language-name = Français
 common-settings = Réglages
 sidebar-new-space-name = Espace { $number }
 ```
+
+## Where to start
+
+Work down the section headings in [the English catalogue](../zervo-core/locales/en-US.ftl).
+Start with shared controls, setup, Settings, and the command bar. Continue
+with New Tab, History, Downloads, site prompts, error pages, and software
+updates. Settings and New Tab share the same city and calendar labels. A
+language can give each site permission prompt its own wording and word order.
+
+Zervo supplies the copy on its Updates page and in its own update reminders.
+Sparkle supplies the installer dialogs. macOS supplies system permission
+dialog controls. Website text, saved names, external diagnostics, and release
+notes use the text supplied by their authors.
 
 ## Preview without rebuilding
 
@@ -38,7 +51,29 @@ ZERVO_LOCALES_DIR=/absolute/path/to/catalogues /Applications/Zervo.app/Contents/
 
 Quit Zervo before launching the preview. Restart it after editing the file.
 If you already contribute code, `cargo test -p zervo-core --locked l10n`
-checks catalogue syntax, duplicate IDs, placeholders, and English fallback.
+checks catalogue syntax, duplicate IDs, placeholders, formatting, and English
+fallback.
+
+## Use a translation to test an incremental update
+
+1. Preview your catalogue from disk. Pick a recognizable label and check it
+   in Settings. Quit and relaunch normally to clear the preview override.
+2. Merge the translation and include it in a new staging or release build.
+   The build embeds all the catalogues in the executable. A locale-only
+   change therefore works as a binary delta to the app bundle.
+3. For a public test, use an unmodified copy of the previous updater-enabled
+   release for your architecture. Follow the [release pipeline](UPDATES.md)
+   to generate a signed appcast and a delta for that build. Review the draft
+   and publish it when ready. Public clients retrieve the published feed.
+4. From the previous app, open **Settings → About → Check for Updates**.
+   Check the target version and incremental download size on the Updates
+   page. Install the update, then verify the new label in the same app
+   without `ZERVO_LOCALES_DIR`. Confirm that your existing profile is intact.
+
+For a private end-to-end test, use separate test keys, an HTTPS test feed, and
+a disposable copy of the previous app built to trust that feed. Use the
+official v0.6.1.2 installer as the baseline when testing against the official
+feed.
 
 ## Open a translation pull request
 

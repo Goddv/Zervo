@@ -792,7 +792,7 @@ fn draw_widget(
                         rect.center().y + if roomy { 16.0 } else { 12.0 },
                     ),
                     Align2::CENTER_CENTER,
-                    now.strftime("%a %-d %b").to_string(),
+                    crate::newtab::calendar_date(&now, true),
                     FontId::proportional(11.5),
                     palette.text_muted,
                 );

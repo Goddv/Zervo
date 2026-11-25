@@ -249,33 +249,52 @@ impl Zone {
         ]
     }
 
+    pub fn display_label(&self) -> &str {
+        Self::CATALOGUE
+            .iter()
+            .find(|(label, name, _)| self.name == *name && self.label == *label)
+            .map_or(self.label.as_str(), |(_, _, key)| tr(key))
+    }
+
     /// The zones offered when adding one. A list somebody can read beats every
     /// zone in the table, which is six hundred of them.
-    pub const CATALOGUE: [(&'static str, &'static str); 24] = [
-        ("London", "Europe/London"),
-        ("Paris", "Europe/Paris"),
-        ("Berlin", "Europe/Berlin"),
-        ("Belgrade", "Europe/Belgrade"),
-        ("Lisbon", "Europe/Lisbon"),
-        ("Helsinki", "Europe/Helsinki"),
-        ("Moscow", "Europe/Moscow"),
-        ("Reykjavík", "Atlantic/Reykjavik"),
-        ("New York", "America/New_York"),
-        ("Chicago", "America/Chicago"),
-        ("Denver", "America/Denver"),
-        ("Los Angeles", "America/Los_Angeles"),
-        ("São Paulo", "America/Sao_Paulo"),
-        ("Mexico City", "America/Mexico_City"),
-        ("Lagos", "Africa/Lagos"),
-        ("Nairobi", "Africa/Nairobi"),
-        ("Johannesburg", "Africa/Johannesburg"),
-        ("Dubai", "Asia/Dubai"),
-        ("Mumbai", "Asia/Kolkata"),
-        ("Singapore", "Asia/Singapore"),
-        ("Shanghai", "Asia/Shanghai"),
-        ("Tokyo", "Asia/Tokyo"),
-        ("Sydney", "Australia/Sydney"),
-        ("Auckland", "Pacific/Auckland"),
+    pub const CATALOGUE: [(&'static str, &'static str, &'static str); 24] = [
+        ("London", "Europe/London", "clock-city-london"),
+        ("Paris", "Europe/Paris", "clock-city-paris"),
+        ("Berlin", "Europe/Berlin", "clock-city-berlin"),
+        ("Belgrade", "Europe/Belgrade", "clock-city-belgrade"),
+        ("Lisbon", "Europe/Lisbon", "clock-city-lisbon"),
+        ("Helsinki", "Europe/Helsinki", "clock-city-helsinki"),
+        ("Moscow", "Europe/Moscow", "clock-city-moscow"),
+        ("Reykjavík", "Atlantic/Reykjavik", "clock-city-reykjavik"),
+        ("New York", "America/New_York", "clock-city-new-york"),
+        ("Chicago", "America/Chicago", "clock-city-chicago"),
+        ("Denver", "America/Denver", "clock-city-denver"),
+        (
+            "Los Angeles",
+            "America/Los_Angeles",
+            "clock-city-los-angeles",
+        ),
+        ("São Paulo", "America/Sao_Paulo", "clock-city-sao-paulo"),
+        (
+            "Mexico City",
+            "America/Mexico_City",
+            "clock-city-mexico-city",
+        ),
+        ("Lagos", "Africa/Lagos", "clock-city-lagos"),
+        ("Nairobi", "Africa/Nairobi", "clock-city-nairobi"),
+        (
+            "Johannesburg",
+            "Africa/Johannesburg",
+            "clock-city-johannesburg",
+        ),
+        ("Dubai", "Asia/Dubai", "clock-city-dubai"),
+        ("Mumbai", "Asia/Kolkata", "clock-city-mumbai"),
+        ("Singapore", "Asia/Singapore", "clock-city-singapore"),
+        ("Shanghai", "Asia/Shanghai", "clock-city-shanghai"),
+        ("Tokyo", "Asia/Tokyo", "clock-city-tokyo"),
+        ("Sydney", "Australia/Sydney", "clock-city-sydney"),
+        ("Auckland", "Pacific/Auckland", "clock-city-auckland"),
     ];
 }
 
@@ -973,7 +992,7 @@ fn draw_backdrop_menu(
     ));
     rows.extend(Subject::ALL.iter().map(|subject| {
         Row::Item(
-            format!("Openverse — {}", subject.label().to_lowercase()),
+            Source::Openverse(*subject).label(),
             Pick::Subject(*subject),
             photo && *source == Source::Openverse(*subject),
         )
@@ -1708,13 +1727,9 @@ fn draw_composed(
         .map_or(0, |workspace| workspace.tabs.len());
     strip_ink.write(
         root.painter(),
-        pos2(strip_rect.min.x + 178.0, label),
-        Align2::LEFT_TOP,
-        format!(
-            "{} open {}",
-            counted,
-            if counted == 1 { "tab" } else { "tabs" }
-        ),
+        pos2(strip_rect.max.x, label),
+        Align2::RIGHT_TOP,
+        crate::l10n::message("newtab-open-tab-count", [("count", counted.into())]),
         FontId::proportional(10.5),
         strip_ink.muted.gamma_multiply(0.7),
     );
@@ -1863,13 +1878,79 @@ impl Resume {
 fn ago(seconds: i64) -> String {
     let minutes = seconds.max(0) / 60;
     match minutes {
-        0..=1 => "just now".to_owned(),
-        2..=59 => format!("{minutes} minutes ago"),
-        60..=119 => "an hour ago".to_owned(),
-        120..=1439 => format!("{} hours ago", minutes / 60),
-        1440..=2879 => "yesterday".to_owned(),
-        _ => format!("{} days ago", minutes / 1440),
+        0..=1 => tr("newtab-age-now").to_owned(),
+        2..=59 => crate::l10n::message("newtab-age-minutes", [("count", minutes.into())]),
+        60..=1439 => crate::l10n::message("newtab-age-hours", [("count", (minutes / 60).into())]),
+        1440..=2879 => tr("newtab-age-yesterday").to_owned(),
+        _ => crate::l10n::message("newtab-age-days", [("count", (minutes / 1440).into())]),
     }
+}
+
+fn weekday(date: &jiff::ZonedDateTime, short: bool) -> &'static str {
+    const LONG: [&str; 7] = [
+        "clock-weekday-monday",
+        "clock-weekday-tuesday",
+        "clock-weekday-wednesday",
+        "clock-weekday-thursday",
+        "clock-weekday-friday",
+        "clock-weekday-saturday",
+        "clock-weekday-sunday",
+    ];
+    const SHORT: [&str; 7] = [
+        "clock-weekday-monday-short",
+        "clock-weekday-tuesday-short",
+        "clock-weekday-wednesday-short",
+        "clock-weekday-thursday-short",
+        "clock-weekday-friday-short",
+        "clock-weekday-saturday-short",
+        "clock-weekday-sunday-short",
+    ];
+    let labels = if short { SHORT } else { LONG };
+    tr(labels[date.weekday().to_monday_zero_offset() as usize])
+}
+
+pub(crate) fn calendar_date(date: &jiff::ZonedDateTime, short: bool) -> String {
+    const LONG: [&str; 12] = [
+        "clock-month-january",
+        "clock-month-february",
+        "clock-month-march",
+        "clock-month-april",
+        "clock-month-may",
+        "clock-month-june",
+        "clock-month-july",
+        "clock-month-august",
+        "clock-month-september",
+        "clock-month-october",
+        "clock-month-november",
+        "clock-month-december",
+    ];
+    const SHORT: [&str; 12] = [
+        "clock-month-january-short",
+        "clock-month-february-short",
+        "clock-month-march-short",
+        "clock-month-april-short",
+        "clock-month-may-short",
+        "clock-month-june-short",
+        "clock-month-july-short",
+        "clock-month-august-short",
+        "clock-month-september-short",
+        "clock-month-october-short",
+        "clock-month-november-short",
+        "clock-month-december-short",
+    ];
+    let labels = if short { SHORT } else { LONG };
+    crate::l10n::message(
+        if short {
+            "clock-date-short"
+        } else {
+            "clock-date"
+        },
+        [
+            ("weekday", weekday(date, short).into()),
+            ("day", date.day().into()),
+            ("month", tr(labels[(date.month() - 1) as usize]).into()),
+        ],
+    )
 }
 
 /// How tall the bottom block is, or zero when there is nothing to put in it.
@@ -2366,7 +2447,7 @@ fn draw_clock(area: &mut Ui, rect: Rect, ink: &Ink) -> bool {
             area.painter(),
             pos2(rect.center().x, rect.center().y + size * 0.48),
             Align2::CENTER_CENTER,
-            now.strftime("%A, %-d %B").to_string(),
+            calendar_date(&now, false),
             FontId::proportional(12.0),
             ink.muted,
         );
@@ -2419,7 +2500,7 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
             Align2::LEFT_TOP,
             fit(
                 area.painter(),
-                &zone.label,
+                zone.display_label(),
                 &FontId::proportional(11.0),
                 cell.x - 8.0,
             ),
@@ -2437,7 +2518,13 @@ fn draw_world_clocks(area: &mut Ui, chrome: &ChromeContext, body: Rect, ink: &In
             area.painter().text(
                 pos2(slot.min.x + 2.0, slot.min.y + 26.0 + clock),
                 Align2::LEFT_TOP,
-                there.strftime("%Z · %a").to_string(),
+                crate::l10n::message(
+                    "clock-zone-day",
+                    [
+                        ("zone", there.strftime("%Z").to_string().into()),
+                        ("weekday", weekday(&there, true).into()),
+                    ],
+                ),
                 FontId::proportional(10.0),
                 palette.text_muted,
             );
