@@ -56,7 +56,8 @@ fi
 shasum -a 256 "$executable" | cut -d ' ' -f 1 > "$stage/target-executable.sha256"
 plutil -extract CFBundleVersion raw "$plist"
 hdiutil detach "$mount" >&2
-cp "$candidate" "$stage/Zervo-${tag#heion-v}-$arch-sparkle.dmg"
+# Keep the feed's installer name identical to the asset that gets uploaded.
+cp "$candidate" "$stage/Heion-${tag#heion-v}-$arch.dmg"
 
 # Retain exact, signed Zervo bundles for users who skip the first Heion release.
 for version in 0.6.1.2 0.6.1.3; do

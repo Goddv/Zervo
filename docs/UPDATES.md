@@ -21,14 +21,16 @@ against the installed app's Apple code-signing requirement. An atomic
 filesystem swap replaces the app at its existing path. The browser profile
 stays outside the bundle.
 
-Updater-enabled Zervo 0.6.1.2 and 0.6.1.3 and Heion 0.1.0 can update
-directly to Heion 0.1.1. GitHub redirects the old repository’s appcast URLs
+Updater-enabled Zervo 0.6.1.2 and 0.6.1.3 and Heion 0.1.0 and 0.1.1 can
+update directly to Heion 0.1.1.1. GitHub redirects the old repository’s appcast URLs
 to Heion. The bundle identifier, executable, keychain
 service, profile directory, and Ed25519 key carry forward. The updater installs
 the new bundle at the existing app path. Sparkle compares the internal build
 number, which starts at `1.1.0` in Heion so it sorts above the legacy builds.
 Keep the old GitHub repository name free so those redirects continue to work.
 
+Copy Heion from the disk image to Applications and launch the installed copy
+before checking for updates. Sparkle needs a writable, installed app path.
 An absent, invalid, or interrupted patch leaves the installed app in place.
 Heion requires signatures on both the feed and patch, and disables Sparkle's
 full-download and two-step installation fallbacks. If no delta matches, use

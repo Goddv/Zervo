@@ -35,7 +35,8 @@ pub fn draw(
         Translucency::LiquidGlass if !chrome.native_glass.window_backdrop => Translucency::Frosted,
         material => material,
     };
-    let palette = chrome.palette.with_translucency(material);
+    let mut palette = chrome.palette.with_translucency(material);
+    palette.material.animation = chrome.palette.material.animation;
     backdrop(root, chrome, page, &palette, background);
     if content.width() < 140.0 || content.height() < 80.0 {
         return;
@@ -72,34 +73,25 @@ fn backdrop(
     palette: &Palette,
     background: NewTabBackground,
 ) {
-    let ground = match (palette.translucency, chrome.native_glass.vibrancy_available) {
-        (Translucency::LiquidGlass, true) => theme::page_veil(palette, 0.48),
-        (Translucency::Frosted, true) => theme::page_veil(palette, 0.68),
-        _ => theme::page_base(palette),
-    };
     let painter = ui
         .ctx()
         .layer_painter(egui::LayerId::background())
         .with_clip_rect(page);
-    // A page that owns the full window is already clipped by AppKit's window
-    // shape. Rounding it again punches four transparent wedges through the
-    // GL surface, which exposes the native white backing in light mode. Keep
-    // the inner card shape only when there is actually chrome around it.
-    let corners = if palette.fills_window {
+    // The native window already clips a full-bleed page. Inset pages share
+    // the rounded path used by the content outline.
+    let corners = if crate::ui::new_tab_fills_native_window(ui, page) {
         egui::CornerRadius::ZERO
     } else {
         theme::content_corners(palette)
     };
-    painter.rect_filled(page, corners, ground);
-    let phase = if background.animated() {
-        crate::newtab_wallpaper::phase(
-            ui,
-            chrome.settings.new_tab_animate_background && palette.material.animation > 0.0,
-        )
-    } else {
-        0.0
-    };
+
     if background.animated() || background == NewTabBackground::CustomImage {
+        let animation = background.animated().then(|| {
+            crate::newtab_wallpaper::phase(
+                ui,
+                chrome.settings.new_tab_animate_background && palette.material.animation > 0.0,
+            )
+        });
         crate::newtab_wallpaper::paint(
             &painter,
             page,
@@ -107,61 +99,51 @@ fn backdrop(
             palette,
             background,
             chrome.wallpaper.texture.as_ref(),
-            phase,
+            animation,
         );
-    } else if palette.translucency.is_translucent() {
-        let strength = if palette.dark { 0.28 } else { 0.16 };
-        let spread = page.width().min(page.height());
-        for (x, y, index, size) in [
-            (0.18, 0.22, 4, 0.82),
-            (0.81, 0.48, 0, 0.77),
-            (0.56, 0.9, 1, 0.67),
-        ] {
-            let color = theme::mix(palette.accent, theme::workspace_color(index), 0.58);
-            let center = pos2(
-                page.left() + page.width() * x,
-                page.top() + page.height() * y,
-            );
-            glow(
-                &painter,
-                center,
-                spread * size,
-                color.gamma_multiply(strength),
-            );
-        }
+    } else if !chrome.native_glass.new_tab_backdrop {
+        painter.rect_filled(page, corners, theme::page_base(palette));
     }
     if background == NewTabBackground::Grid {
-        let tint = palette
-            .accent
-            .gamma_multiply(if palette.dark { 0.21 } else { 0.15 });
-        let mut y = page.top() + 29.0;
-        while y < page.bottom() {
-            let mut x = page.left() + 29.0;
-            while x < page.right() {
-                painter.circle_filled(pos2(x, y), 0.8, tint);
-                x += 29.0;
-            }
-            y += 29.0;
-        }
+        paint_grid(&painter, page, corners, palette);
     }
     if let Some(capture) = &chrome.capture {
         crate::backdrop::capture_into(&painter, page, capture);
     }
 }
 
-fn glow(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
-    const SEGMENTS: u32 = 48;
-    let mut mesh = egui::epaint::Mesh::default();
-    mesh.colored_vertex(center, color);
-    for i in 0..SEGMENTS {
-        let angle = std::f32::consts::TAU * i as f32 / SEGMENTS as f32;
-        mesh.colored_vertex(
-            center + vec2(angle.cos(), angle.sin()) * radius,
-            egui::Color32::TRANSPARENT,
-        );
-        mesh.add_triangle(0, i + 1, (i + 1) % SEGMENTS + 1);
+fn paint_grid(painter: &egui::Painter, page: Rect, corners: egui::CornerRadius, palette: &Palette) {
+    const SPACING: f32 = 29.0;
+    const DOT: f32 = 1.15;
+    let tint = palette
+        .accent
+        .gamma_multiply(if palette.dark { 0.55 } else { 0.42 });
+    let mut y = page.top() + SPACING;
+    while y < page.bottom() - DOT {
+        // Leave room for the entire dot at the corners, even with large
+        // custom corner radii. The rest of the grid keeps its spacing.
+        let inset = |top: u8, bottom: u8| {
+            let top = f32::from(top) + DOT;
+            let bottom = f32::from(bottom) + DOT;
+            if y < page.top() + top {
+                top
+            } else if y > page.bottom() - bottom {
+                bottom
+            } else {
+                DOT
+            }
+        };
+        let left = page.left() + inset(corners.nw, corners.sw);
+        let right = page.right() - inset(corners.ne, corners.se);
+        let mut x = page.left() + SPACING;
+        while x < right {
+            if x > left {
+                painter.circle_filled(pos2(x, y), DOT, tint);
+            }
+            x += SPACING;
+        }
+        y += SPACING;
     }
-    painter.add(egui::Shape::mesh(mesh));
 }
 
 fn header(
@@ -310,7 +292,6 @@ fn wallpaper_preview(
         NewTabBackground::LiquidGlass => palette.active,
         _ => theme::page_base(palette),
     };
-    ui.painter().rect_filled(thumbnail, radius, tint);
     if background.animated() {
         crate::newtab_wallpaper::paint(
             ui.painter(),
@@ -319,9 +300,12 @@ fn wallpaper_preview(
             palette,
             background,
             None,
-            0.5,
+            None,
         );
-    } else if background == NewTabBackground::Grid {
+    } else {
+        ui.painter().rect_filled(thumbnail, radius, tint);
+    }
+    if background == NewTabBackground::Grid {
         for column in 1..10 {
             for row in 1..4 {
                 let point = pos2(

@@ -42,7 +42,7 @@ use text::*;
 
 pub use command::{CommandBar, CommandMode};
 pub use frame::{CardFrame, Corners, PANEL_REACH, finish_content_frame, window_chrome_tint};
-pub(crate) use frame::{builtin_card, paint_builtin_page};
+pub(crate) use frame::{builtin_card, new_tab_fills_native_window, paint_builtin_page};
 pub use text::{
     anchored_popup, clamp_into, display_name, ellipsize, host_of, initial, normalize_url,
 };
@@ -194,6 +194,7 @@ pub struct NativeGlass {
     pub vibrancy_available: bool,
     pub reduce_transparency: bool,
     pub window_backdrop: bool,
+    pub new_tab_backdrop: bool,
     pub sidebar: Option<Rect>,
     pub address: Option<(Rect, f32)>,
     pub sidebar_captured: bool,
@@ -373,19 +374,9 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
         && chrome.palette.appearance.seam.chrome_floats()
         && matches!(active_kind, Some(TabKind::NewTab));
     let native_sidebar = chrome.uses_native_sidebar() && present >= 1.0;
-    let new_tab_glass = matches!(active_kind, Some(TabKind::NewTab))
-        && chrome.native_glass.vibrancy_available
-        && chrome
-            .settings
-            .new_tab_background
-            .material()
-            .is_translucent();
-    let chrome_tint = if new_tab_glass && !chrome.native_glass.window_backdrop {
-        0.20
-    } else {
-        window_chrome_tint(&chrome.palette, chrome.native_glass.window_backdrop)
-    };
-    if !native_sidebar || chrome.native_glass.window_backdrop {
+    let new_tab_native_backdrop = chrome.native_glass.new_tab_backdrop;
+    let chrome_tint = window_chrome_tint(&chrome.palette, chrome.native_glass.window_backdrop);
+    if !new_tab_native_backdrop && (!native_sidebar || chrome.native_glass.window_backdrop) {
         paint_chrome_base(root, &chrome.palette, chrome_tint, None);
     }
     // The docked and revealed sidebar share widget IDs. Draw only one per frame.
@@ -419,12 +410,14 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
                 palette.bg.gamma_multiply(0.16),
             );
         }
-        paint_chrome_base(
-            root,
-            &chrome.palette,
-            chrome_tint,
-            chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
-        );
+        if !new_tab_native_backdrop {
+            paint_chrome_base(
+                root,
+                &chrome.palette,
+                chrome_tint,
+                chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
+            );
+        }
     }
     let top_margin = theme::content_margin(&chrome.palette) * present;
     let content_rect = paint_content_backdrop(root, outer, &chrome.palette, top_margin);

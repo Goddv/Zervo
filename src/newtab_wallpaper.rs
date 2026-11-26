@@ -4,8 +4,8 @@ use std::io::{Cursor, Read as _};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use egui::epaint::{Mesh, Vertex};
-use egui::{Color32, Context, CornerRadius, Id, Painter, Rect, Shape, TextureHandle, Ui, pos2};
+use egui::epaint::RectShape;
+use egui::{Color32, Context, CornerRadius, Id, Painter, Rect, TextureHandle, Ui, pos2, vec2};
 use image::{DynamicImage, ImageDecoder as _, ImageReader, RgbaImage};
 
 use crate::settings::NewTabBackground;
@@ -165,7 +165,7 @@ pub(crate) fn paint(
     palette: &Palette,
     background: NewTabBackground,
     photo: Option<&TextureHandle>,
-    phase: f32,
+    animation: Option<f32>,
 ) {
     if !rect.is_positive() {
         return;
@@ -177,76 +177,73 @@ pub(crate) fn paint(
                 let scale = (rect.width() / width as f32).max(rect.height() / height as f32);
                 let crop_x = rect.width() / (width as f32 * scale);
                 let crop_y = rect.height() / (height as f32 * scale);
-                let mut mesh = Mesh::with_texture(texture.id());
-                fill_mesh(&mut mesh, rect, corners, 8, |x, y| {
-                    (
-                        pos2(0.5 + (x - 0.5) * crop_x, 0.5 + (y - 0.5) * crop_y),
-                        Color32::WHITE,
-                    )
-                });
-                painter.add(Shape::mesh(mesh));
+                let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(crop_x, crop_y));
+                painter.add(
+                    RectShape::filled(rect, corners, Color32::WHITE).with_texture(texture.id(), uv),
+                );
                 let veil = if palette.dark { 0.55 } else { 0.48 };
                 painter.rect_filled(rect, corners, theme::page_veil(palette, veil));
             }
         },
         background if background.animated() => {
-            let mut mesh = Mesh::default();
-            fill_mesh(&mut mesh, rect, corners, 24, |x, y| {
-                (
-                    egui::epaint::WHITE_UV,
-                    shade(background, palette.dark, x, y, phase),
-                )
-            });
-            painter.add(Shape::mesh(mesh));
+            // Let the same antialiased rounded path that draws the frame
+            // clip the wallpaper. Moving the corner of a coarse gradient
+            // mesh leaves a diagonal notch when the viewport grows.
+            let texture = gradient_texture(painter.ctx(), background, palette.dark, animation);
+            painter.add(
+                RectShape::filled(rect, corners, Color32::WHITE).with_texture(
+                    texture.id(),
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                ),
+            );
         },
         _ => {},
     }
 }
 
-fn fill_mesh(
-    mesh: &mut Mesh,
-    rect: Rect,
-    corners: CornerRadius,
-    steps: u32,
-    color_at: impl Fn(f32, f32) -> (egui::Pos2, Color32),
-) {
-    for row in 0..=steps {
-        for column in 0..=steps {
-            let u = column as f32 / steps as f32;
-            let v = row as f32 / steps as f32;
-            let radius = f32::from(match (column * 2 < steps, row * 2 < steps) {
-                (true, true) => corners.nw,
-                (false, true) => corners.ne,
-                (true, false) => corners.sw,
-                (false, false) => corners.se,
-            })
-            .min(0.5 * rect.width().min(rect.height()));
-            let mut pos = pos2(
-                rect.left() + rect.width() * u,
-                rect.top() + rect.height() * v,
-            );
-            let center = pos2(
-                pos.x.clamp(rect.left() + radius, rect.right() - radius),
-                pos.y.clamp(rect.top() + radius, rect.bottom() - radius),
-            );
-            let delta = pos - center;
-            if delta.length_sq() > radius * radius {
-                pos = center + delta.normalized() * radius;
-            }
-            let (uv, color) = color_at(
-                (pos.x - rect.left()) / rect.width(),
-                (pos.y - rect.top()) / rect.height(),
-            );
-            mesh.vertices.push(Vertex { pos, uv, color });
-        }
+fn gradient_texture(
+    ctx: &Context,
+    background: NewTabBackground,
+    dark: bool,
+    animation: Option<f32>,
+) -> TextureHandle {
+    // The static swatches keep their own texture and never re-upload as the
+    // full-size wallpaper animates. Both use a small, linearly filtered map.
+    let id = Id::new((
+        "wallpaper-gradient",
+        background as u8,
+        dark,
+        animation.is_some(),
+    ));
+    let phase = animation.unwrap_or(0.5);
+    let cached = ctx.data(|data| data.get_temp::<(f32, TextureHandle)>(id));
+    if let Some((last_phase, texture)) = &cached
+        && *last_phase == phase
+    {
+        return texture.clone();
     }
-    for row in 0..steps {
-        for column in 0..steps {
-            let i = row * (steps + 1) + column;
-            mesh.add_triangle(i, i + 1, i + steps + 1);
-            mesh.add_triangle(i + 1, i + steps + 2, i + steps + 1);
-        }
-    }
+    const SIDE: usize = 32;
+    let pixels = (0..SIDE * SIDE)
+        .map(|index| {
+            let unit = |value: usize| (value as f32 + 0.5) / SIDE as f32;
+            shade(
+                background,
+                dark,
+                unit(index % SIDE),
+                unit(index / SIDE),
+                phase,
+            )
+        })
+        .collect();
+    let image = egui::ColorImage::new([SIDE, SIDE], pixels);
+    let texture = if let Some((_, mut texture)) = cached {
+        texture.set(image, egui::TextureOptions::LINEAR);
+        texture
+    } else {
+        ctx.load_texture("New Tab gradient", image, egui::TextureOptions::LINEAR)
+    };
+    ctx.data_mut(|data| data.insert_temp(id, (phase, texture.clone())));
+    texture
 }
 
 fn shade(background: NewTabBackground, dark: bool, x: f32, y: f32, t: f32) -> Color32 {

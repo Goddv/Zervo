@@ -271,6 +271,13 @@ void *zervo_updater_start_with_locale(Wake wake, void *context, Translate transl
     bridge.wake = wake;
     bridge.translate = translate;
     bridge.context = context;
+    // A disk image or an App Translocation mount cannot be updated in place.
+    NSNumber *readOnly = nil;
+    if ([bundle.bundleURL getResourceValue:&readOnly forKey:NSURLVolumeIsReadOnlyKey error:NULL] &&
+        readOnly.boolValue) {
+        bridge.status = @"install_required";
+        return (__bridge_retained void *)bridge;
+    }
     bridge.controller = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:NO
                                                                      updaterDelegate:bridge
                                                                   userDriverDelegate:nil];

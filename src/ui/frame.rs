@@ -60,6 +60,15 @@ pub(crate) fn snap_rect(rect: Rect, pixels_per_point: f32) -> Rect {
     )
 }
 
+pub(crate) fn new_tab_fills_native_window(root: &Ui, page: Rect) -> bool {
+    // Page geometry is snapped to the pixel grid. Account for the rounding
+    // at fractional UI scales before deciding who owns the window corners.
+    cfg!(target_os = "macos")
+        && page
+            .expand(0.5 / root.pixels_per_point())
+            .contains_rect(root.ctx().content_rect())
+}
+
 /// Smoothstep falloff for a soft gradient.
 fn gradient_falloff(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);

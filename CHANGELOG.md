@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1.1
+
+- Fixed gaps around New Tab wallpapers in light and dark mode. Grid dots are
+  easier to see and stay inside the page frame.
+- Frosted and Liquid Glass show the native macOS backdrop wherever supported.
+- Corrected the installer URL in the signed update feed. Heion now explains
+  how to install the app when it is running from a read-only disk image.
+
 ## 0.1.1
 
 - Customize wallpapers and choose which dashboard layout to show directly

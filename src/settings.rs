@@ -162,6 +162,10 @@ impl NewTabBackground {
         matches!(self, Self::Aurora | Self::Tidelight | Self::Afterglow)
     }
 
+    pub fn uses_window_backdrop(self) -> bool {
+        matches!(self, Self::Frosted | Self::LiquidGlass)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Grid => tr("options-grid"),

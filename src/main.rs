@@ -1367,6 +1367,12 @@ impl RunningApp {
         // the space when the reader has asked it to.
         self.space = self.state.browser.borrow().active_workspace;
 
+        let showing = state
+            .browser
+            .borrow()
+            .active_tab()
+            .map(|tab| (tab.id, tab.kind));
+        let new_tab = matches!(showing, Some((_, TabKind::NewTab)));
         let palette = self.palette();
         #[cfg(target_os = "macos")]
         let (palette, native_available, reduce_transparency, window_glass) = {
@@ -1380,12 +1386,6 @@ impl RunningApp {
                 palette.material.animation = 0.0;
             }
             let native_available = self._vibrancy.is_some() && !reduce_transparency;
-            let new_tab = self
-                .state
-                .browser
-                .borrow()
-                .active_tab()
-                .is_some_and(|tab| tab.kind == TabKind::NewTab);
             let material = if new_tab {
                 self.settings.new_tab_background.material()
             } else {
@@ -1401,6 +1401,8 @@ impl RunningApp {
         };
         #[cfg(not(target_os = "macos"))]
         let (native_available, reduce_transparency, window_glass) = (false, false, false);
+        let new_tab_native_backdrop =
+            new_tab && native_available && self.settings.new_tab_background.uses_window_backdrop();
         #[cfg(target_os = "macos")]
         let (window_controls, fullscreen) =
             self._vibrancy.as_ref().map_or((None, false), |backdrop| {
@@ -1430,11 +1432,6 @@ impl RunningApp {
         let offscreen = state.rendering_context.clone();
         let mut ui_output = None;
 
-        let showing = state
-            .browser
-            .borrow()
-            .active_tab()
-            .map(|tab| (tab.id, tab.kind));
         #[cfg(target_os = "macos")]
         let native_overlays = self.glass_overlays.as_ref().is_some_and(|overlays| {
             let size = state.window.inner_size();
@@ -1447,6 +1444,7 @@ impl RunningApp {
         // Native overlays sample the live webpage directly. The software
         // copy still supplies portable overlays and the new-tab materials.
         let frosting = !native_overlays
+            && !new_tab_native_backdrop
             && palette.translucency.is_translucent()
             && matches!(showing, Some((_, TabKind::NewTab | TabKind::Web)));
         let page_changed = self.frosted_for != showing;
@@ -1538,6 +1536,7 @@ impl RunningApp {
                     vibrancy_available: native_available,
                     reduce_transparency,
                     window_backdrop: window_glass,
+                    new_tab_backdrop: new_tab_native_backdrop,
                     ..Default::default()
                 },
                 favicons: &self.favicons,
@@ -1658,6 +1657,8 @@ impl RunningApp {
                 }
             }
             // Rounded-corner masks and border, drawn over the blit.
+            let new_tab_without_frame = new_tab_native_backdrop
+                || (new_tab && ui::new_tab_fills_native_window(root, output.page_rect));
             ui::finish_content_frame(
                 root,
                 content_rect,
@@ -1671,9 +1672,8 @@ impl RunningApp {
                 },
                 ui::CardFrame {
                     backdrop_tint: ui::window_chrome_tint(&palette, window_glass),
-                    border: settings.content_border,
-                    shadow: settings
-                        .content_shadow
+                    border: settings.content_border && !new_tab_without_frame,
+                    shadow: (settings.content_shadow && !new_tab_without_frame)
                         .then_some(settings.content_shadow_amount),
                 },
             );
@@ -1923,7 +1923,7 @@ impl RunningApp {
                 backdrop.update_address(native.address, zoom);
             }
             if let Some(backdrop) = &self._vibrancy {
-                backdrop.show_window_glass(window_glass);
+                backdrop.update_window_backdrop(window_glass, new_tab_native_backdrop, palette);
             }
             if let Some(overlays) = &mut self.glass_overlays {
                 overlays.present(&self.egui_glow.egui_ctx);
@@ -2847,33 +2847,10 @@ impl RunningApp {
         self.apply_platform_theme();
     }
 
-    /// The half of a theme change that is not egui's: the engine, the window's
-    /// appearance and the frosted backdrop. Aimed at the theme being crossed
-    /// *to*, and started at the same moment as the crossfade, so the frost has
-    /// the whole interval to get there.
+    /// Send the target colour scheme to all embedded webviews.
     fn apply_platform_theme(&mut self) {
         let target = self.target_palette();
         self.state.set_engine_theme(target.dark);
-        // Every material here is appearance-adaptive on its own; what differs
-        // is how much of the desktop survives it. `UnderWindowBackground` is
-        // the clearest of them — it is meant for what shows *through* a window
-        // — and it is the one that lets the colours behind come through rather
-        // than a grey suggestion of them.
-        #[cfg(target_os = "macos")]
-        if let Some(vibrancy) = &self._vibrancy {
-            use objc2_app_kit::NSVisualEffectMaterial;
-            let backdrop = target.translucency.backdrop();
-            let material = match backdrop {
-                theme::SystemBackdrop::Opaque => NSVisualEffectMaterial::WindowBackground,
-                _ => NSVisualEffectMaterial::UnderWindowBackground,
-            };
-            let duration = if self.animations_allowed() {
-                THEME_FADE.as_secs_f64()
-            } else {
-                0.0
-            };
-            vibrancy.set_material_animated(material, duration);
-        }
     }
 
     /// Cache each favicon when Servo publishes it for a live page.

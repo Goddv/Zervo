@@ -16,7 +16,7 @@ prefix="${7:?missing release asset URL prefix}"
 case "$arch" in arm64|x86_64) ;; *) die "unsupported architecture: $arch" ;; esac
 [[ "$prefix" == https://*/ ]] || die "release asset prefix must be an HTTPS directory"
 root="$(zervo_repo_root)"
-archive="Zervo-$version-$arch-sparkle.dmg"
+archive="Heion-$version-$arch.dmg"
 [ -s "$staged/$archive" ] || die "missing candidate $archive"
 feed="zervo-appcast-$arch.xml"
 mkdir -p "$output"
@@ -37,7 +37,7 @@ printf '%s\n' "$signing_key" | python3 "$root/scripts/lib/prepare-appcast.py" \
 printf '%s\n' "$signing_key" | "$tools/sign_update" --ed-key-file - "$output/$feed"
 unset signing_key
 
-# Verify the generated files against the public key actually embedded in Zervo.
-# Copy only referenced deltas. The appcast's placeholder DMG is never shipped.
+# Verify the generated files against the key embedded in the app. The release
+# workflow already has the original installer and copies the referenced deltas.
 xcrun swift "$root/scripts/lib/verify-appcast.swift" \
     "$output/$feed" "$staged" "$archive" "$build" "$prefix" "$ZERVO_SPARKLE_PUBLIC_KEY" "$output"

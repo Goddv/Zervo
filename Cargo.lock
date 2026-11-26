@@ -11848,7 +11848,7 @@ dependencies = [
 
 [[package]]
 name = "zervo"
-version = "0.1.1"
+version = "0.1.1+1"
 dependencies = [
  "cgl",
  "dirs",
@@ -11880,7 +11880,7 @@ dependencies = [
 
 [[package]]
 name = "zervo-core"
-version = "0.1.1"
+version = "0.1.1+1"
 dependencies = [
  "egui",
  "fluent-bundle",

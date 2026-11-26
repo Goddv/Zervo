@@ -667,6 +667,7 @@ updates-notification-body = Version { $version } is available. Click to see the 
 updates-remind-tomorrow = Remind Me Tomorrow
 updates-reminder-scheduled = Reminder scheduled for tomorrow.
 updates-unavailable = Automatic updates are unavailable in this build.
+updates-install-required = Copy Heion to Applications and open it from there to receive updates.
 updates-idle = Ready to check for updates.
 updates-checking = Checking for updates…
 updates-current = You’re up to date.

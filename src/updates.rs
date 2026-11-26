@@ -7,6 +7,7 @@ use serde::Deserialize;
 pub(crate) enum Status {
     #[default]
     Unavailable,
+    InstallRequired,
     Idle,
     Checking,
     Current,
@@ -62,12 +63,13 @@ pub(crate) struct Snapshot {
 
 impl Snapshot {
     pub fn enabled(&self) -> bool {
-        !matches!(self.status, Status::Unavailable)
+        !matches!(self.status, Status::Unavailable | Status::InstallRequired)
     }
 
     pub fn label(&self) -> &'static str {
         crate::l10n::text(match self.status {
             Status::Unavailable => "updates-unavailable",
+            Status::InstallRequired => "updates-install-required",
             Status::Idle => "updates-idle",
             Status::Checking => "updates-checking",
             Status::Current => "updates-current",

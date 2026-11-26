@@ -42,7 +42,16 @@ func verify() throws {
     let main = try entries[0].nodes(forXPath: "enclosure")
     try require(main.count == 1, "expected one update enclosure")
     let enclosure = main[0] as? XMLElement
-    try require(enclosure?.attribute(forName: "url")?.stringValue == args[5] + args[3], "incorrect placeholder for the manual installer")
+    try require(enclosure?.attribute(forName: "url")?.stringValue == args[5] + args[3], "incorrect manual installer URL")
+    guard let archiveLength = enclosure?.attribute(forName: "length")?.stringValue.flatMap({ Int($0) }),
+          let archiveSignatureText = enclosure?.attribute(forName: "sparkle:edSignature")?.stringValue,
+          let archiveSignature = Data(base64Encoded: archiveSignatureText)
+    else {
+        throw VerificationError.invalid("incomplete manual installer enclosure")
+    }
+    let archive = try Data(contentsOf: staging.appendingPathComponent(args[3]), options: .mappedIfSafe)
+    try require(archive.count == archiveLength && key.isValidSignature(archiveSignature, for: archive),
+                "invalid manual installer signature")
     let versions = try entries[0].nodes(forXPath: "*[local-name()='version']")
     try require(versions.first?.stringValue == args[4], "incorrect bundle version")
     let notes = try entries[0].nodes(forXPath: "description")

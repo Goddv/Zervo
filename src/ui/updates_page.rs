@@ -80,6 +80,7 @@ pub(super) fn draw(
                     if matches!(
                         updates.status,
                         Status::Unavailable
+                            | Status::InstallRequired
                             | Status::Manual
                             | Status::NoCompatible
                             | Status::Failed

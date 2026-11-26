@@ -21,11 +21,10 @@
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, msg_send, runtime::AnyClass, sel};
 use objc2_app_kit::{
-    NSAnimationContext, NSAutoresizingMaskOptions, NSColor, NSGlassEffectView,
-    NSGlassEffectViewStyle, NSTitlebarSeparatorStyle, NSToolbar, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowButton, NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle,
-    NSWorkspace,
+    NSAutoresizingMaskOptions, NSColor, NSGlassEffectView, NSGlassEffectViewStyle,
+    NSTitlebarSeparatorStyle, NSToolbar, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowButton,
+    NSWindowOrderingMode, NSWindowStyleMask, NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSURL, ns_string};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -45,7 +44,22 @@ impl Vibrancy {
         self.glass.is_some()
     }
 
-    pub fn show_window_glass(&self, visible: bool) {
+    pub fn update_window_backdrop(
+        &self,
+        visible: bool,
+        new_tab_glass: bool,
+        palette: crate::theme::Palette,
+    ) {
+        use crate::theme::SystemBackdrop;
+        let material =
+            if !new_tab_glass && palette.translucency.backdrop() == SystemBackdrop::Opaque {
+                NSVisualEffectMaterial::WindowBackground
+            } else {
+                NSVisualEffectMaterial::UnderWindowBackground
+            };
+        if self.view.material() != material {
+            self.view.setMaterial(material);
+        }
         if let Some(glass) = self.glass.as_ref()
             && glass.isHidden() == visible
         {
@@ -131,22 +145,6 @@ impl Vibrancy {
                 button.setAlphaValue(opacity);
             }
         }
-    }
-
-    /// Swap material, crossfading over `duration` seconds.
-    ///
-    /// A bare `setMaterial` snaps, and the WindowServer composites this view a
-    /// frame behind our own GL output — so the snap lands one frame after
-    /// everything we draw ourselves, and the frosted panel visibly changes
-    /// last. Handing the change to AppKit inside an animation group turns it
-    /// into a crossfade, which has no single frame to be out of step on.
-    pub fn set_material_animated(&self, material: NSVisualEffectMaterial, duration: f64) {
-        NSAnimationContext::beginGrouping();
-        let context = NSAnimationContext::currentContext();
-        context.setDuration(duration);
-        context.setAllowsImplicitAnimation(true);
-        self.view.setMaterial(material);
-        NSAnimationContext::endGrouping();
     }
 }
 
