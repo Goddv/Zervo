@@ -71,7 +71,7 @@ git clone https://github.com/Goddv/Heion
 cd Heion
 # Prepare the sibling Servo checkout as described in docs/SERVO.md.
 cargo build --profile dev-fast
-./target/dev-fast/zervo
+./target/dev-fast/heion
 ```
 
 The toolchain is pinned in `rust-toolchain.toml` for local builds and CI.

@@ -561,18 +561,18 @@ impl ApplicationHandler<WakerEvent> for App {
             .nth(1)
             .map(|arg| ui::normalize_url(&arg, settings.search_engine))
             .and_then(|arg| Url::parse(&arg).ok());
-        // A zervo:// address on the command line names one of Zervo's own
+        // A heion:// address on the command line names one of Heion's own
         // pages, which the engine cannot load — handing it one produced a tab
         // that sat there empty. The window opens on the homepage and the
         // internal page is put in front of it once there is a browser to put
         // it in.
         let internal = asked_for
             .as_ref()
-            .filter(|url| url.scheme() == "zervo")
+            .filter(|url| matches!(url.scheme(), "heion" | "zervo"))
             .cloned();
         let explicit_url = asked_for.is_some();
         let start_url = asked_for
-            .filter(|url| url.scheme() != "zervo")
+            .filter(|url| !matches!(url.scheme(), "heion" | "zervo"))
             .or_else(|| Url::parse(&settings.homepage).ok())
             .unwrap_or_else(|| Url::parse("https://servo.org").expect("valid default URL"));
 
@@ -2107,7 +2107,7 @@ impl RunningApp {
             },
             UiAction::OpenAddress(address) => {
                 if let Ok(url) = Url::parse(&address) {
-                    if url.scheme() == "zervo" {
+                    if matches!(url.scheme(), "heion" | "zervo") {
                         self.apply_action(UiAction::Navigate(address));
                     } else {
                         let mut browser = state.browser.borrow_mut();
@@ -2122,11 +2122,11 @@ impl RunningApp {
                 let Ok(url) = Url::parse(&address) else {
                     return;
                 };
-                // zervo:// URLs are internal pages, never engine loads. All
+                // Internal Heion URLs never go to the engine. All
                 // four of them: every one is shown in the address bar, so
                 // every one has to be something you can type back into it.
                 // History and the new tab page both used to open Settings.
-                if url.scheme() == "zervo" {
+                if matches!(url.scheme(), "heion" | "zervo") {
                     let page = url.as_str();
                     // The four trouble pages first, and by their authority
                     // rather than by a substring: they carry a query, and

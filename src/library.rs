@@ -134,7 +134,11 @@ impl Library {
     /// reports the URL more than once for a single navigation, and a history
     /// listing full of consecutive duplicates is useless.
     pub fn record(&mut self, url: &str, title: &str, now: i64) {
-        if url.is_empty() || url.starts_with("zervo://") || url == "about:blank" {
+        if url.is_empty()
+            || url.starts_with("heion://")
+            || url.starts_with("zervo://")
+            || url == "about:blank"
+        {
             return;
         }
         if let Some(last) = self.history.last_mut()

@@ -13,7 +13,7 @@ that path is compiled in.
 Ported from Servo's own packaging (python/servo/gstreamer.py, MPL-2.0), which is
 where the plugin lists and the rpath resolution rules come from.
 
-    ./scripts/bundle-gstreamer.py target/Zervo.app
+    ./scripts/bundle-gstreamer.py target/Heion.app
 """
 
 import os
@@ -125,7 +125,7 @@ def main(app):
             "Servo only supports the official distribution; see docs/PACKAGING.md."
         )
 
-    binary = os.path.join(app, "Contents", "MacOS", "Zervo")
+    binary = os.path.join(app, "Contents", "MacOS", "Heion")
     if not os.path.exists(binary):
         raise SystemExit(f"no binary at {binary}")
 

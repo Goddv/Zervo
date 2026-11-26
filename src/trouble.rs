@@ -85,7 +85,7 @@ impl Trouble {
     }
 
     pub fn url(self) -> String {
-        format!("zervo://{}", self.slug())
+        format!("heion://{}", self.slug())
     }
 
     /// What the tab is called. Short, because it is read in a 226-point column
@@ -103,7 +103,9 @@ impl Trouble {
 
     /// Recognise one of these addresses, whatever it carries in its query.
     pub fn from_url(url: &str) -> Option<Trouble> {
-        let rest = url.strip_prefix("zervo://")?;
+        let rest = url
+            .strip_prefix("heion://")
+            .or_else(|| url.strip_prefix("zervo://"))?;
         let authority = rest
             .split(['/', '?', '#'])
             .next()

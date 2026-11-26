@@ -118,11 +118,14 @@ pub fn anchored_popup(anchor: Rect, size: Vec2, bounds: Rect, centered: bool) ->
 /// domains with https://, and send everything else to the chosen search engine.
 pub fn normalize_url(input: &str, search_engine: SearchEngine) -> String {
     let input = input.trim();
+    if let Some(internal) = input.strip_prefix("zervo://") {
+        return format!("heion://{internal}");
+    }
     if input.starts_with("http://")
         || input.starts_with("https://")
         || input.starts_with("file://")
         || input.starts_with("about:")
-        || input.starts_with("zervo://")
+        || input.starts_with("heion://")
     {
         input.to_owned()
     } else if input.starts_with('/') || input.starts_with("~/") {

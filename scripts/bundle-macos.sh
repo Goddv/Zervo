@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package Zervo as a macOS .app, and optionally a .dmg.
+# Package Heion as a macOS .app, and optionally a .dmg.
 #
 #   ./scripts/bundle-macos.sh [options]
 #
@@ -101,7 +101,7 @@ BUILD_VERSION="$((MAJOR + 1)).$MINOR.$((PATCH * 100 + 10#$REVISION))"
 # two copies.
 MIN_MACOS="$(sed -n 's/^MACOSX_DEPLOYMENT_TARGET[^"]*"\([0-9.]*\)".*/\1/p' .cargo/config.toml | head -1)"
 [ -n "$MIN_MACOS" ] || die "no MACOSX_DEPLOYMENT_TARGET in .cargo/config.toml"
-APP="$OUTPUT/Zervo.app"
+APP="$OUTPUT/Heion.app"
 BIN_DIR="$APP/Contents/MacOS"
 RES_DIR="$APP/Contents/Resources"
 
@@ -162,12 +162,12 @@ mkdir -p "$BIN_DIR" "$RES_DIR"
 
 if [ "${#PREBUILT[@]}" -gt 1 ]; then
     say "lipo: ${#PREBUILT[@]} architectures into one binary"
-    lipo -create -output "$BIN_DIR/Zervo" "${PREBUILT[@]}"
+    lipo -create -output "$BIN_DIR/Heion" "${PREBUILT[@]}"
 else
-    cp "${PREBUILT[0]}" "$BIN_DIR/Zervo"
+    cp "${PREBUILT[0]}" "$BIN_DIR/Heion"
 fi
-chmod 755 "$BIN_DIR/Zervo"
-note "$(lipo -archs "$BIN_DIR/Zervo")"
+chmod 755 "$BIN_DIR/Heion"
+note "$(lipo -archs "$BIN_DIR/Heion")"
 
 say "icon"
 ./scripts/make-icns.sh
@@ -183,7 +183,7 @@ if [ "$WITH_MEDIA" = 1 ]; then
     # In a single-architecture one it is 81 MB of code that can never run —
     # roughly a quarter of the whole bundle — so it is thinned to match the
     # binary beside it.
-    BUNDLE_ARCHS="$(lipo -archs "$BIN_DIR/Zervo")"
+    BUNDLE_ARCHS="$(lipo -archs "$BIN_DIR/Heion")"
     case "$BUNDLE_ARCHS" in
         *" "*) : ;;
         *)
@@ -226,7 +226,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>                  <string>Heion</string>
     <key>CFBundleDisplayName</key>           <string>Heion</string>
     <key>CFBundleIdentifier</key>            <string>app.zervo.browser</string>
-    <key>CFBundleExecutable</key>            <string>Zervo</string>
+    <key>CFBundleExecutable</key>            <string>Heion</string>
     <key>CFBundleIconFile</key>              <string>Zervo</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
     <key>CFBundleShortVersionString</key>    <string>$RELEASE_VERSION</string>
@@ -309,7 +309,7 @@ fi
 # is silently dropped when RUSTFLAGS is set in the environment, which is exactly
 # what CI does. This is unconditional, and a no-op when the link was already
 # right.
-BIN="$BIN_DIR/Zervo"
+BIN="$BIN_DIR/Heion"
 if otool -L "$BIN" | grep -q "@rpath/libz.1.dylib"; then
     say "repointing zlib at the system copy"
     install_name_tool -change @rpath/libz.1.dylib /usr/lib/libz.1.dylib "$BIN"
@@ -411,7 +411,7 @@ du -sh "$APP" >&2
 if [ "$MAKE_DMG" = 1 ]; then
     # "arm64", "x86_64", or "universal" when it carries both — nobody wants to
     # work out which of Zervo-0.4.1-x86_64-arm64.dmg to download.
-    ARCH_LIST="$(lipo -archs "$BIN_DIR/Zervo")"
+    ARCH_LIST="$(lipo -archs "$BIN_DIR/Heion")"
     case "$ARCH_LIST" in
         *" "*) ARCH_SLUG="universal" ;;
         *)     ARCH_SLUG="$ARCH_LIST" ;;
@@ -436,8 +436,8 @@ if [ "$MAKE_DMG" = 1 ]; then
         if [ -n "$UPDATER_FRAMEWORK" ]; then
             NOTARY_STAGE="$(mktemp -d)"
             zervo_cleanup_on_exit "$NOTARY_STAGE"
-            ditto -c -k --keepParent "$APP" "$NOTARY_STAGE/Zervo.zip"
-            notarize "$NOTARY_STAGE/Zervo.zip"
+            ditto -c -k --keepParent "$APP" "$NOTARY_STAGE/Heion.zip"
+            notarize "$NOTARY_STAGE/Heion.zip"
             xcrun stapler staple "$APP"
         fi
     fi
@@ -467,7 +467,7 @@ Heion @VERSION@
 
 2. Open Terminal and run:
 
-       xattr -dr com.apple.quarantine /Applications/Zervo.app
+       xattr -dr com.apple.quarantine /Applications/Heion.app
 
 3. Open Heion normally.
 

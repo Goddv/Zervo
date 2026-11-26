@@ -45,7 +45,7 @@ jobs:
       - run: cargo fmt --all --check
 
   core:
-    name: Lint and test zervo-core
+    name: Lint and test heion-core
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -67,10 +67,10 @@ jobs:
       - name: Clippy
         # `-D warnings` is the point: the lint policy lives in the workspace's
         # `[lints]` table, and this is what makes it mean something.
-        run: cargo clippy -p zervo-core --all-targets --locked -- -D warnings
+        run: cargo clippy -p heion-core --all-targets --locked -- -D warnings
 
       - name: Tests
-        run: cargo test -p zervo-core --locked
+        run: cargo test -p heion-core --locked
 
   deny:
     name: Advisories and licences

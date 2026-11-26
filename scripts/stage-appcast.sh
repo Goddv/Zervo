@@ -13,9 +13,15 @@ case "$arch" in arm64|x86_64) ;; *) die "unsupported architecture: $arch" ;; esa
 mkdir -p "$stage"
 mount="$(mktemp -d)"
 trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true; rmdir "$mount"' EXIT
-app="$mount/Zervo.app"
-plist="$app/Contents/Info.plist"
-executable="$app/Contents/MacOS/Zervo"
+find_mounted_app() {
+    app="$mount/Heion.app"
+    [ -d "$app" ] || app="$mount/Zervo.app"
+    plist="$app/Contents/Info.plist"
+    local binary
+    binary="$(plutil -extract CFBundleExecutable raw "$plist")"
+    case "$binary" in Heion|Zervo) ;; *) die "unexpected application executable" ;; esac
+    executable="$app/Contents/MacOS/$binary"
+}
 team_requirement=""
 signature_kind() {
     local info
@@ -47,6 +53,7 @@ verify_mounted_app() {
 }
 
 hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$candidate" >&2
+find_mounted_app
 mode="$(signature_kind)"
 verify_mounted_app Heion
 if [ "$mode" = developer-id ]; then
@@ -68,6 +75,7 @@ for version in 0.6.1.2 0.6.1.3; do
         gh release download heion-v0.1.0 --pattern "Legacy-Zervo-$version-$arch.dmg" --output "$baseline" >&2
     fi
     hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$baseline" >&2
+    find_mounted_app
     [ "$(signature_kind)" = "$mode" ] || die "Zervo $version uses a different signature type"
     verify_mounted_app Zervo
     case "$version" in
@@ -89,6 +97,7 @@ while IFS= read -r prior; do
     baseline="$stage/Zervo-$version-$arch-sparkle.dmg"
     gh release download "$prior" --pattern "Heion-$version-$arch.dmg" --output "$baseline" >&2
     hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$baseline" >&2
+    find_mounted_app
     if [ "$(signature_kind)" != "$mode" ]; then
         hdiutil detach "$mount" >&2
         rm "$baseline"

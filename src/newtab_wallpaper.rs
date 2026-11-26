@@ -209,7 +209,7 @@ fn gradient_texture(
 ) -> TextureHandle {
     // The static swatches keep their own texture and never re-upload as the
     // full-size wallpaper animates. Both use a small, linearly filtered map.
-    let id = Id::new((
+    let id = Id::unique((
         "wallpaper-gradient",
         background as u8,
         dark,

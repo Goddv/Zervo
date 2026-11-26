@@ -121,7 +121,7 @@ if (-not $NoBuild) {
     if ($LASTEXITCODE -ne 0) { Die "cargo build failed with $LASTEXITCODE" }
 }
 
-$Exe = Join-Path $BuildDir 'zervo.exe'
+$Exe = Join-Path $BuildDir 'heion.exe'
 if (-not (Test-Path $Exe)) { Die "no binary at $Exe" }
 
 # ── Stage ─────────────────────────────────────────────────────────────────

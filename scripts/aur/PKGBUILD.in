@@ -135,7 +135,7 @@ check() {
 package() {
     cd "$pkgname-$pkgver"
 
-    install -Dm755 target/release/zervo "$pkgdir/usr/bin/zervo"
+    install -Dm755 target/release/heion "$pkgdir/usr/bin/zervo"
     install -Dm644 assets/linux/app.zervo.Zervo.desktop \
         "$pkgdir/usr/share/applications/app.zervo.Zervo.desktop"
     install -Dm644 assets/icon/zervo-icon-default.svg \

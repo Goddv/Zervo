@@ -72,7 +72,7 @@ func verify() throws {
             throw VerificationError.invalid("incomplete delta enclosure")
         }
         let name = String(url.dropFirst(args[5].count))
-        try require(name.range(of: #"^Zervo[0-9.]+-[0-9.]+-(arm64|x86_64)\.delta$"#, options: .regularExpression) != nil &&
+        try require(name.range(of: #"^(Heion|Zervo)[0-9.]+-[0-9.]+-(arm64|x86_64)\.delta$"#, options: .regularExpression) != nil &&
             url == args[5] + name && baselines.insert(from).inserted, "unexpected or duplicate delta")
         let patch = staging.appendingPathComponent(name)
         let data = try Data(contentsOf: patch, options: .mappedIfSafe)

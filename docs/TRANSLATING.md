@@ -50,7 +50,7 @@ ZERVO_LOCALES_DIR=/absolute/path/to/catalogues /Applications/Zervo.app/Contents/
 ```
 
 Quit Heion before launching the preview. Restart it after editing the file.
-If you already contribute code, `cargo test -p zervo-core --locked l10n`
+If you already contribute code, `cargo test -p heion-core --locked l10n`
 checks catalogue syntax, duplicate IDs, placeholders, formatting, and English
 fallback.
 
@@ -83,7 +83,7 @@ feed.
    `Portuguese (Brazil) — pt-BR`, and say whether you previewed it in Heion.
 3. Keep message IDs, variable names, URLs, and shortcut keys unchanged.
    Translate the text in each plural form and keep the Fluent syntax intact.
-4. Run `cargo test -p zervo-core --locked l10n` when the Rust toolchain is
+4. Run `cargo test -p heion-core --locked l10n` when the Rust toolchain is
    available. Maintainers will run the same check in CI.
 
 Small pull requests are welcome. You can add a single missing sentence,

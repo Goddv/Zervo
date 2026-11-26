@@ -653,7 +653,7 @@ pub(crate) fn appearance_specimen(ui: &Ui, palette: &Palette, rect: Rect) {
     painter.text(
         pos2(chrome.min.x + 13.0, y + 9.5),
         Align2::LEFT_CENTER,
-        "zervo://newtab",
+        "heion://newtab",
         FontId::proportional(8.0),
         palette.text_muted,
     );

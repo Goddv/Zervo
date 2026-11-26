@@ -25,7 +25,7 @@ def main() -> None:
         display_version.text = version
         for delta in item.findall(f"{{{namespace}}}deltas/enclosure"):
             source = delta.attrib["url"].removeprefix(prefix)
-            if not re.fullmatch(r"Zervo[0-9.]+-[0-9.]+\.delta", source):
+            if not re.fullmatch(r"(?:Heion|Zervo)[0-9.]+-[0-9.]+\.delta", source):
                 raise SystemExit(f"Unexpected Sparkle delta name: {source}")
             target = stage / f"{source.removesuffix('.delta')}-{arch}.delta"
             (stage / source).rename(target)

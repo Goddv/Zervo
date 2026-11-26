@@ -1,5 +1,5 @@
 [package]
-name = "zervo-core"
+name = "heion-core"
 # Tracks the binary's version: `net`'s user agent is built from it, and a
 # wallpaper host should be told the version of the browser that is asking.
 version = "0.1.1+1"

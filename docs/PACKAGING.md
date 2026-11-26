@@ -88,7 +88,7 @@ places worth clearing it are the `.dmg` before mounting, or the installed app
 afterwards:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Zervo.app
+xattr -dr com.apple.quarantine /Applications/Heion.app
 ```
 
 Without that, macOS can report that the app is damaged and cannot be opened, which reads
@@ -164,7 +164,7 @@ an rpath.
 signing. To fix a binary you built yourself:
 
 ```bash
-install_name_tool -change @rpath/libz.1.dylib /usr/lib/libz.1.dylib target/release/zervo
+install_name_tool -change @rpath/libz.1.dylib /usr/lib/libz.1.dylib target/release/heion
 ```
 
 The obvious fix — a linker flag in `.cargo/config.toml` — is not used, for two
@@ -188,7 +188,7 @@ sudo installer -pkg /tmp/gstreamer-devel.pkg -target /
 ```
 
 `scripts/bundle-gstreamer.py` then copies the libraries and plugins into
-`Zervo.app/Contents/MacOS/lib` and rewrites their install names, so the bundle
+`Heion.app/Contents/MacOS/lib` and rewrites their install names, so the bundle
 runs on machines that have never heard of GStreamer. `bundle-macos.sh` calls it
 for you. The plugins are loaded by name at runtime and never show up in `otool`
 output, so they are listed explicitly in that script; if playback breaks after a

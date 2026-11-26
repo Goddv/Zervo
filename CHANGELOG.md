@@ -7,6 +7,8 @@
 - Frosted and Liquid Glass show the native macOS backdrop wherever supported.
 - Corrected the installer URL in the signed update feed. Heion now explains
   how to install the app when it is running from a read-only disk image.
+- New installers contain Heion.app. The command-line executable is `heion`,
+  and internal pages use `heion://` addresses.
 
 ## 0.1.1
 

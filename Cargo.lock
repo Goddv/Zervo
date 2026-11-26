@@ -11847,7 +11847,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zervo"
+name = "heion"
 version = "0.1.1+1"
 dependencies = [
  "cgl",
@@ -11875,11 +11875,11 @@ dependencies = [
  "url",
  "webpki-roots",
  "winit",
- "zervo-core",
+ "heion-core",
 ]
 
 [[package]]
-name = "zervo-core"
+name = "heion-core"
 version = "0.1.1+1"
 dependencies = [
  "egui",

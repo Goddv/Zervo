@@ -201,7 +201,8 @@ jobs:
         env:
           WANT_ARCH: ${{ matrix.arch }}
         run: |
-          BIN=target/Zervo.app/Contents/MacOS/Zervo
+          APP=target/Heion.app
+          BIN="$APP/Contents/MacOS/Heion"
           echo "--- architecture ---"
           ARCHS="$(lipo -archs "$BIN")"
           echo "$ARCHS"
@@ -221,22 +222,22 @@ jobs:
             *) echo "more than one minimum macOS in one slice: $MINOS"; exit 1 ;;
           esac
 
-          PLIST_MIN="$(plutil -extract LSMinimumSystemVersion raw target/Zervo.app/Contents/Info.plist)"
+          PLIST_MIN="$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")"
           echo "Info.plist says $PLIST_MIN"
           if [ -n "$MINOS" ] && [ "$PLIST_MIN" != "$(echo "$MINOS" | tr -d ' ')" ]; then
             echo "::warning::Info.plist claims macOS $PLIST_MIN but the binary was built for $MINOS"
           fi
 
           echo "--- app icon ---"
-          test -s target/Zervo.app/Contents/Resources/Assets.car
-          test "$(plutil -extract CFBundleIconName raw target/Zervo.app/Contents/Info.plist)" = Heion
+          test -s "$APP/Contents/Resources/Assets.car"
+          test "$(plutil -extract CFBundleIconName raw "$APP/Contents/Info.plist")" = Heion
 
           echo "--- signature ---"
-          codesign -dv --verbose=4 target/Zervo.app 2>&1 | head -20
-          codesign --verify --strict --verbose=2 target/Zervo.app
+          codesign -dv --verbose=4 "$APP" 2>&1 | head -20
+          codesign --verify --strict --verbose=2 "$APP"
 
           echo "--- Info.plist ---"
-          plutil -p target/Zervo.app/Contents/Info.plist | head -30
+          plutil -p "$APP/Contents/Info.plist" | head -30
 
       # Banked before anything optional runs. `timeout-minutes` on the job is a
       # cancellation rather than a failure, so a lint that overruns takes the
@@ -285,5 +286,5 @@ jobs:
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
       - name: Report sizes
-        run: du -sh target/Zervo.app target/*.dmg
+        run: du -sh target/Heion.app target/*.dmg
 

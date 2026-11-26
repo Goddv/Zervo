@@ -214,10 +214,10 @@ impl AppState {
     }
 
     /// Create the engine view for a tab and make it the active one.
-    /// Internal (zervo://) tabs never get a webview.
+    /// Internal Heion tabs never get a webview.
     pub fn open_tab(self: &Rc<Self>, tab_id: TabId, url: Url) {
         log::debug!("ZERVO open_tab tab={tab_id} url={url}");
-        if url.scheme() == "zervo" {
+        if matches!(url.scheme(), "heion" | "zervo") {
             self.activate_tab(tab_id);
             return;
         }

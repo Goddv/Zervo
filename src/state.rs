@@ -103,7 +103,7 @@ impl Tab {
                 .internal_title()
                 .unwrap_or_default()
                 .to_owned(),
-            url: "zervo://settings".to_owned(),
+            url: "heion://settings".to_owned(),
             webview: None,
             loading: false,
             can_go_back: false,
@@ -122,7 +122,7 @@ impl Tab {
                 .internal_title()
                 .unwrap_or_default()
                 .to_owned(),
-            url: "zervo://history".to_owned(),
+            url: "heion://history".to_owned(),
             webview: None,
             loading: false,
             can_go_back: false,
@@ -141,7 +141,7 @@ impl Tab {
                 .internal_title()
                 .unwrap_or_default()
                 .to_owned(),
-            url: "zervo://downloads".to_owned(),
+            url: "heion://downloads".to_owned(),
             webview: None,
             loading: false,
             can_go_back: false,
@@ -153,6 +153,10 @@ impl Tab {
     /// failure in its query string, so the address bar and the page agree and
     /// either can be typed back in.
     pub fn new_trouble(id: TabId, trouble: crate::trouble::Trouble, url: String) -> Self {
+        let url = match url.strip_prefix("zervo://") {
+            Some(rest) => format!("heion://{rest}"),
+            None => url,
+        };
         Self {
             id,
             kind: TabKind::Trouble(trouble),
@@ -179,7 +183,7 @@ impl Tab {
                 .internal_title()
                 .unwrap_or_default()
                 .to_owned(),
-            url: "zervo://newtab".to_owned(),
+            url: "heion://newtab".to_owned(),
             webview: None,
             loading: false,
             can_go_back: false,
@@ -369,7 +373,7 @@ impl BrowserState {
         let url = Url::parse(&saved.url).ok()?;
         let id = self.next_tab_id;
         let mut tab = match url.scheme() {
-            "zervo" => match url.host_str()? {
+            "heion" | "zervo" => match url.host_str()? {
                 "newtab" => Tab::new_zervo_page(id),
                 "settings" => Tab::new_settings(id),
                 "history" => Tab::new_history(id),
@@ -377,7 +381,7 @@ impl BrowserState {
                 "updates" => Tab {
                     kind: TabKind::Updates,
                     title: tr("updates-title").into(),
-                    ..Tab::new(id, &saved.url)
+                    ..Tab::new(id, "heion://updates")
                 },
                 _ => Tab::new_trouble(
                     id,
@@ -574,7 +578,7 @@ impl BrowserState {
             TabKind::Updates => Tab {
                 kind,
                 title: tr("updates-title").into(),
-                ..Tab::new(id, "zervo://updates")
+                ..Tab::new(id, "heion://updates")
             },
             TabKind::Trouble(trouble) => Tab::new_trouble(id, trouble, trouble.url()),
             _ => Tab::new_settings(id),
@@ -927,7 +931,7 @@ mod tests {
             "https://example.org/first"
         );
         assert_eq!(restored.workspaces[0].tabs.len(), 3);
-        assert_eq!(restored.workspaces[0].tabs[1].url, "zervo://history");
+        assert_eq!(restored.workspaces[0].tabs[1].url, "heion://history");
         assert_eq!(
             restored.workspaces[0].tabs[2].url,
             state.tab(last).unwrap().url

@@ -90,13 +90,13 @@ engine bump or a chrome change, walk this list.
 These only exist in the middle of themselves, so the harness drives them rather
 than waiting to catch one. Debug builds only.
 
-- `ZERVO_SHOT_PEEK=1` holds the sidebar's reveal open — it is otherwise opened
-  by the pointer, which the harness does not have. `ZERVO_SHOT_PEEK=<pass>`
+- `HEION_SHOT_PEEK=1` holds the sidebar's reveal open — it is otherwise opened
+  by the pointer, which the harness does not have. `HEION_SHOT_PEEK=<pass>`
   lets go at that pass, so the closing half can be photographed too.
-- `ZERVO_SHOT_CYCLE=<n>` presses ⌘S every `n` frames.
-- `ZERVO_SHOT_NAV=<url>` navigates `ZERVO_SHOT_NAV_BEFORE` frames before the
+- `HEION_SHOT_CYCLE=<n>` presses ⌘S every `n` frames.
+- `HEION_SHOT_NAV=<url>` navigates `HEION_SHOT_NAV_BEFORE` frames before the
   picture, for the page transitions.
-- `ZERVO_SHOT_SETUP=<n>` opens the first run on that step. Every step after the
+- `HEION_SHOT_SETUP=<n>` opens the first run on that step. Every step after the
   first is reached by pressing a button, so without it only the welcome card
   can be photographed.
 
@@ -105,8 +105,8 @@ the reveal pinned open while the layout cycles underneath it puts the reveal and
 the docked sidebar on screen at the same time, over and over, which by hand is a
 matter of having the pointer in the right place at the right moment.
 
-- [ ] Every preset × every starting layout, `ZERVO_SHOT_CYCLE=6
-      ZERVO_SHOT_PEEK=1 ZERVO_SHOT_FRAME=260`, exits zero.
+- [ ] Every preset × every starting layout, `HEION_SHOT_CYCLE=6
+      HEION_SHOT_PEEK=1 HEION_SHOT_FRAME=260`, exits zero.
 
 ## Between two pages
 
@@ -133,8 +133,8 @@ motions rather than one. Settings → Appearance → Seam, then navigate.
       beside it. Move the corner scale to both ends; the window's corner must
       not move with it, and every other surface must.
 - [ ] The framed layouts keep their gap: Heion's eight points, Flat's six.
-- [ ] Full-page mode, `zervo://settings`, `zervo://history` and
-      `zervo://downloads`: each page's heading clears the close, minimise and
+- [ ] Full-page mode, `heion://settings`, `heion://history` and
+      `heion://downloads`: each page's heading clears the close, minimise and
       zoom buttons. A web page is deliberately *not* inset.
 - [ ] Appearance: the specimen's four corners are all round and all the same,
       and scrolling the page does not smear its bottom edge.
@@ -142,29 +142,29 @@ motions rather than one. Settings → Appearance → Seam, then navigate.
 ## When a page will not load
 
 Each is reachable by typing its address, which is how to check them without an
-engine failure to hand. Only `zervo://crashed` is constructed automatically:
+engine failure to hand. Only `heion://crashed` is constructed automatically:
 there is no load-failure callback and no certificate hook in Servo 0.5.0, so
 nothing can tell the embedder why an ordinary load ended. See PARITY.md.
 
-- [ ] `zervo://unsupported` — the amber badge, the roadmap of bricks under the
+- [ ] `heion://unsupported` — the amber badge, the roadmap of bricks under the
       message, and a score that counts up as they are cleared. Press a brick
       directly; move the pointer into the panel and the paddle follows it and
       the ball plays. Move the pointer out and the ball parks rather than
       running in the background.
-- [ ] `zervo://unsupported?host=watch.example.com&detail=Media%20Source%20Extensions`
+- [ ] `heion://unsupported?host=watch.example.com&detail=Media%20Source%20Extensions`
       — the host is set in monospace, the missing feature in monospace amber,
       and the three buttons appear. "Open in Safari" opens Safari and not
       Heion; "Try again" navigates *this* tab to the site.
-- [ ] `zervo://offline` — no buttons at all, and the count of waiting tabs is
+- [ ] `heion://offline` — no buttons at all, and the count of waiting tabs is
       the real one. Toolbar Reload is enabled and is the only way to try again.
-- [ ] `zervo://certificate?host=mail.example.com&detail=*.cdn.net` — the danger
+- [ ] `heion://certificate?host=mail.example.com&detail=*.cdn.net` — the danger
       colour, no glow on the card or the button, no game, and the way past is
       one line of plain text under the card. It is deliberately inert and says
       so on hover.
-- [ ] `zervo://notfound?host=srvo.org` — with `servo.org` in the history, the
+- [ ] `heion://notfound?host=srvo.org` — with `servo.org` in the history, the
       page offers it by name with the visit count and a button that goes there.
       With no history it says so instead of offering nothing.
-- [ ] `zervo://crashed?host=servo.org&detail=SIGSEGV` — the engine's own words
+- [ ] `heion://crashed?host=servo.org&detail=SIGSEGV` — the engine's own words
       are quoted in the danger colour, "Load it again" goes back to the host,
       and there is no game (a crash is not a wait). The real path: crash a
       content process and check the tab is rewritten in place, keeps its pin
@@ -268,7 +268,7 @@ holds permission. Any local file with a few buttons on it does.
       page must not be able to choose it.
 - [ ] A `text/plain` link without `download` still renders.
 - [ ] Downloading the same file twice produces `file (1).ext`.
-- [ ] Cancel, reveal and open work from `zervo://downloads` and from the
+- [ ] Cancel, reveal and open work from `heion://downloads` and from the
       downloads card.
 
 ## Media (`--features media`)

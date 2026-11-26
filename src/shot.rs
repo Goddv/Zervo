@@ -10,14 +10,14 @@
 //! Debug builds only, and only when asked:
 //!
 //! ```text
-//! ZERVO_SHOT=/tmp/chrome.png ZERVO_SHOT_FRAME=90 zervo zervo://newtab
+//! HEION_SHOT=/tmp/chrome.png HEION_SHOT_FRAME=90 heion heion://newtab
 //! ```
 //!
-//! `ZERVO_SHOT_NAV` navigates somewhere `ZERVO_SHOT_NAV_BEFORE` frames before
+//! `HEION_SHOT_NAV` navigates somewhere `HEION_SHOT_NAV_BEFORE` frames before
 //! the picture, which is the only way to photograph a page transition: one
 //! exists solely in the middle of itself.
 //!
-//! It waits `ZERVO_SHOT_FRAME` frames — the default is enough for a wallpaper
+//! It waits `HEION_SHOT_FRAME` frames — the default is enough for a wallpaper
 //! to arrive and an aurora to settle — then writes the file and asks the event
 //! loop to quit. Combined with a throwaway `HOME`, which is where the settings
 //! file lives, that makes any arrangement reachable and comparable without
@@ -45,9 +45,9 @@ pub struct Shot {
 /// harness has no pointer — so the one piece of chrome that only exists while
 /// something is being hovered was the one piece it could never photograph.
 /// Debug builds only, like everything else here.
-/// `ZERVO_SHOT_PEEK=<pass>` holds it open until that pass and then lets go, so
+/// `HEION_SHOT_PEEK=<pass>` holds it open until that pass and then lets go, so
 /// the *closing* half — which is where two address pills briefly exist at once
-/// — can be photographed too. Bare `ZERVO_SHOT_PEEK=1` holds it open for good.
+/// — can be photographed too. Bare `HEION_SHOT_PEEK=1` holds it open for good.
 pub fn peek_forced(pass: u64) -> bool {
     /// Read once. This is asked on every frame, from the middle of the
     /// chrome's layout, and an environment lookup per frame is a cost the
@@ -56,7 +56,7 @@ pub fn peek_forced(pass: u64) -> bool {
         if !cfg!(debug_assertions) {
             return None;
         }
-        match std::env::var("ZERVO_SHOT_PEEK") {
+        match std::env::var("HEION_SHOT_PEEK") {
             // Anything that is not a pass number means "hold it open".
             Ok(value) => Some(
                 value
@@ -73,14 +73,14 @@ pub fn peek_forced(pass: u64) -> bool {
 
 /// Which step of the first run to open on.
 ///
-/// `ZERVO_SHOT_SETUP=<n>`. The setup is six cards deep and every one of them is
+/// `HEION_SHOT_SETUP=<n>`. The setup is six cards deep and every one of them is
 /// reached by pressing a button, so without this the harness can photograph the
 /// welcome card and nothing behind it. Debug builds only.
 pub fn setup_step() -> Option<u8> {
     if !cfg!(debug_assertions) {
         return None;
     }
-    std::env::var("ZERVO_SHOT_SETUP")
+    std::env::var("HEION_SHOT_SETUP")
         .ok()
         .and_then(|value| value.parse().ok())
 }
@@ -93,8 +93,8 @@ impl Shot {
         if !cfg!(debug_assertions) {
             return None;
         }
-        let path = PathBuf::from(std::env::var_os("ZERVO_SHOT")?);
-        let at = std::env::var("ZERVO_SHOT_FRAME")
+        let path = PathBuf::from(std::env::var_os("HEION_SHOT")?);
+        let at = std::env::var("HEION_SHOT_FRAME")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(90);
@@ -102,10 +102,10 @@ impl Shot {
             path,
             at,
             frame: 0,
-            nav: std::env::var("ZERVO_SHOT_NAV")
+            nav: std::env::var("HEION_SHOT_NAV")
                 .ok()
                 .filter(|url| !url.is_empty()),
-            nav_before: std::env::var("ZERVO_SHOT_NAV_BEFORE")
+            nav_before: std::env::var("HEION_SHOT_NAV_BEFORE")
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(6),
@@ -114,12 +114,12 @@ impl Shot {
 
     /// Whether this frame should change the layout.
     ///
-    /// `ZERVO_SHOT_CYCLE=<n>` presses ⌘S every `n` frames. The sidebar's morph
+    /// `HEION_SHOT_CYCLE=<n>` presses ⌘S every `n` frames. The sidebar's morph
     /// — the animation that opens and closes it — only exists between two
     /// layouts, so without this the harness can photograph both ends of it and
     /// never the middle, which is where anything that goes wrong goes wrong.
     pub fn cycle(&self) -> bool {
-        let Ok(every) = std::env::var("ZERVO_SHOT_CYCLE") else {
+        let Ok(every) = std::env::var("HEION_SHOT_CYCLE") else {
             return false;
         };
         every

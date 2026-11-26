@@ -5,7 +5,7 @@ Thanks for looking. Heion is small and there is a lot of low-hanging fruit.
 ## Getting set up
 
 ```bash
-cargo build --profile dev-fast && ./target/dev-fast/zervo
+cargo build --profile dev-fast && ./target/dev-fast/heion
 ```
 
 The first build compiles the Servo engine and takes about an hour. After that,
@@ -23,8 +23,8 @@ pull requests do not need to include Rust changes.
 ## Ground rules
 
 - **`cargo fmt` and `cargo clippy` clean.** CI enforces both — `cargo fmt
-  --all --check` and `cargo clippy -p zervo-core --all-targets -- -D warnings`
-  run on every pull request, along with `cargo test -p zervo-core` and
+  --all --check` and `cargo clippy -p heion-core --all-targets -- -D warnings`
+  run on every pull request, along with `cargo test -p heion-core` and
   `cargo deny`. The whole of that takes under a minute, because `zervo-core`
   holds the engine-independent half of the browser and does not need Servo.
   The half that *does* need it is linted and tested in the release build.

@@ -1,7 +1,7 @@
 # macOS updates
 
 Open **Settings → About → Check for Updates** to check and install. **Release
-Notes** opens `zervo://updates`, which shows the installed version, update
+Notes** opens `heion://updates`, which shows the installed version, update
 status, the size and notes of an available patch, and the bundled changelog.
 Updater-enabled builds check daily by default. In About you can choose hourly,
 six-hourly, daily, or weekly checks and independently enable installation on
@@ -23,7 +23,7 @@ stays outside the bundle.
 
 Updater-enabled Zervo 0.6.1.2 and 0.6.1.3 and Heion 0.1.0 and 0.1.1 can
 update directly to Heion 0.1.1.1. GitHub redirects the old repository’s appcast URLs
-to Heion. The bundle identifier, executable, keychain
+to Heion. The bundle identifier, keychain
 service, profile directory, and Ed25519 key carry forward. The updater installs
 the new bundle at the existing app path. Sparkle compares the internal build
 number, which starts at `1.1.0` in Heion so it sorts above the legacy builds.

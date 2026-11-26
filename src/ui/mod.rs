@@ -395,7 +395,7 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
     };
 
     let outer = root.available_rect_before_wrap();
-    if native_sidebar && !chrome.native_glass.window_backdrop {
+    if native_sidebar && !chrome.native_glass.window_backdrop && !new_tab_native_backdrop {
         if chrome.native_glass.sidebar_captured
             && let Some(sidebar) = chrome.native_glass.sidebar
         {
@@ -410,14 +410,12 @@ pub fn draw(root: &mut Ui, chrome: &mut ChromeContext) -> UiOutput {
                 palette.bg.gamma_multiply(0.16),
             );
         }
-        if !new_tab_native_backdrop {
-            paint_chrome_base(
-                root,
-                &chrome.palette,
-                chrome_tint,
-                chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
-            );
-        }
+        paint_chrome_base(
+            root,
+            &chrome.palette,
+            chrome_tint,
+            chrome.native_glass.sidebar.map(|sidebar| sidebar.right()),
+        );
     }
     let top_margin = theme::content_margin(&chrome.palette) * present;
     let content_rect = paint_content_backdrop(root, outer, &chrome.palette, top_margin);
@@ -754,7 +752,13 @@ fn draw_sidebar(
                     ));
                 }
                 if let Some(rect) = chrome.native_glass.sidebar {
-                    let glass = crate::overlay_glass::Surface::begin(ui);
+                    // A translucent New Tab in Frosted mode already shares
+                    // AppKit's backing with the native frosted sidebar.
+                    let glass = crate::overlay_glass::Surface::begin_if(
+                        ui,
+                        !chrome.native_glass.new_tab_backdrop
+                            || chrome.native_glass.window_backdrop,
+                    );
                     chrome.native_glass.sidebar_captured = glass.is_native();
                     sidebar_body(ui, chrome, actions, glass.is_native());
                     let role = if chrome.native_glass.window_backdrop {

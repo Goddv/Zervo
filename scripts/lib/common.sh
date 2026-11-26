@@ -44,7 +44,7 @@ zervo_repo_root() {
     CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd
 }
 
-# The version of the `zervo` binary package.
+# The version of the Heion binary package.
 #
 # Parsed out of the [package] section specifically. The old one-line
 # `sed -n 's/^version = "\(.*\)"/\1/p' | head -1` took the first `version =` at
@@ -105,7 +105,7 @@ zervo_binary_path() {
     local profile="$1" triple="${2:-}" dir
     dir="$(zervo_target_dir)"
     [ -n "$triple" ] && dir="$dir/$triple"
-    printf '%s/%s/zervo%s\n' "$dir" "$(zervo_profile_dir "$profile")" "${3:-}"
+    printf '%s/%s/heion%s\n' "$dir" "$(zervo_profile_dir "$profile")" "${3:-}"
 }
 
 # ── Building ──────────────────────────────────────────────────────────────
