@@ -9,7 +9,7 @@ use egui::{Color32, Context, CornerRadius, Id, Painter, Rect, TextureHandle, Ui,
 use image::{DynamicImage, ImageDecoder as _, ImageReader, RgbaImage};
 
 use crate::settings::NewTabBackground;
-use crate::theme::{self, Palette};
+use crate::theme;
 use crate::{WakerEvent, l10n::text as tr};
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
@@ -162,7 +162,6 @@ pub(crate) fn paint(
     painter: &Painter,
     rect: Rect,
     corners: CornerRadius,
-    palette: &Palette,
     background: NewTabBackground,
     photo: Option<&TextureHandle>,
     animation: Option<f32>,
@@ -181,15 +180,13 @@ pub(crate) fn paint(
                 painter.add(
                     RectShape::filled(rect, corners, Color32::WHITE).with_texture(texture.id(), uv),
                 );
-                let veil = if palette.dark { 0.55 } else { 0.48 };
-                painter.rect_filled(rect, corners, theme::page_veil(palette, veil));
             }
         },
         background if background.animated() => {
             // Let the same antialiased rounded path that draws the frame
             // clip the wallpaper. Moving the corner of a coarse gradient
             // mesh leaves a diagonal notch when the viewport grows.
-            let texture = gradient_texture(painter.ctx(), background, palette.dark, animation);
+            let texture = gradient_texture(painter.ctx(), background, animation);
             painter.add(
                 RectShape::filled(rect, corners, Color32::WHITE).with_texture(
                     texture.id(),
@@ -204,17 +201,11 @@ pub(crate) fn paint(
 fn gradient_texture(
     ctx: &Context,
     background: NewTabBackground,
-    dark: bool,
     animation: Option<f32>,
 ) -> TextureHandle {
     // The static swatches keep their own texture and never re-upload as the
     // full-size wallpaper animates. Both use a small, linearly filtered map.
-    let id = Id::unique((
-        "wallpaper-gradient",
-        background as u8,
-        dark,
-        animation.is_some(),
-    ));
+    let id = Id::unique(("wallpaper-gradient", background as u8, animation.is_some()));
     let phase = animation.unwrap_or(0.5);
     let cached = ctx.data(|data| data.get_temp::<(f32, TextureHandle)>(id));
     if let Some((last_phase, texture)) = &cached
@@ -226,13 +217,7 @@ fn gradient_texture(
     let pixels = (0..SIDE * SIDE)
         .map(|index| {
             let unit = |value: usize| (value as f32 + 0.5) / SIDE as f32;
-            shade(
-                background,
-                dark,
-                unit(index % SIDE),
-                unit(index / SIDE),
-                phase,
-            )
+            shade(background, unit(index % SIDE), unit(index / SIDE), phase)
         })
         .collect();
     let image = egui::ColorImage::new([SIDE, SIDE], pixels);
@@ -246,7 +231,7 @@ fn gradient_texture(
     texture
 }
 
-fn shade(background: NewTabBackground, dark: bool, x: f32, y: f32, t: f32) -> Color32 {
+fn shade(background: NewTabBackground, x: f32, y: f32, t: f32) -> Color32 {
     let rgb = Color32::from_rgb;
     let (base, light, peak, curve) = match background {
         NewTabBackground::Aurora => (
@@ -271,10 +256,5 @@ fn shade(background: NewTabBackground, dark: bool, x: f32, y: f32, t: f32) -> Co
     let haze = (-curve.powi(2) * 17.0).exp();
     let ribbon = (-(curve - 0.09).powi(2) * 72.0).exp();
     let colour = theme::mix(base, light, haze * (0.45 + 0.40 * x));
-    let colour = theme::mix(colour, peak, ribbon * (0.36 + 0.28 * (x * 4.0 - t).cos()));
-    if dark {
-        theme::mix(colour, base, 0.16)
-    } else {
-        theme::mix(colour, rgb(241, 240, 255), 0.54)
-    }
+    theme::mix(colour, peak, ribbon * (0.36 + 0.28 * (x * 4.0 - t).cos()))
 }

@@ -30,6 +30,7 @@ pub fn draw(
     } else {
         chrome.settings.new_tab_background
     };
+    let has_wallpaper = background.animated() || background == NewTabBackground::CustomImage;
     let material = match background.material() {
         _ if chrome.native_glass.reduce_transparency => Translucency::Solid,
         Translucency::LiquidGlass if !chrome.native_glass.window_backdrop => Translucency::Frosted,
@@ -57,7 +58,7 @@ pub fn draw(
         .show(&mut dashboard, |ui| {
             let width = ui.available_width();
             ui.add_space(chrome.window_controls_room());
-            header(ui, chrome, &palette, width, actions);
+            header(ui, chrome, &palette, width, has_wallpaper, actions);
             ui.add_space((area.height() * 0.10).clamp(20.0, 76.0));
             search(ui, chrome, &palette, width, actions);
             if chrome.settings.new_tab_show_widgets {
@@ -103,7 +104,6 @@ fn backdrop(
             &painter,
             page,
             corners,
-            palette,
             background,
             chrome.wallpaper.texture.as_ref(),
             animation,
@@ -158,22 +158,37 @@ fn header(
     chrome: &mut ChromeContext,
     palette: &Palette,
     width: f32,
+    has_wallpaper: bool,
     actions: &mut Vec<UiAction>,
 ) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 40.0), Sense::hover());
     let badge = Rect::from_center_size(rect.left_center() + vec2(19.0, 0.0), vec2(38.0, 38.0));
     crate::ui::paint_application_icon(ui, badge, palette.dark);
-    text(
-        ui,
-        rect.shrink2(vec2(46.0, 0.0)),
-        zervo_core::APP_NAME,
-        20.0,
-        palette.text,
-    );
     let settings = Rect::from_center_size(rect.right_center() - vec2(19.0, 0.0), vec2(38.0, 38.0));
     let label = tr("newtab-customize-page");
     let response = button(ui, settings, "newtab_settings", label, palette).on_hover_text(label);
-    draw_icon(ui, settings.center(), Icon::Sliders, palette.text);
+    let name = rect.shrink2(vec2(46.0, 0.0));
+    let draw_labels = |offset, ink| {
+        text(ui, name.translate(offset), zervo_core::APP_NAME, 20.0, ink);
+        draw_icon(ui, settings.center() + offset, Icon::Sliders, ink);
+    };
+    let ink = if has_wallpaper {
+        // These two sit directly on the wallpaper. Outline the foreground
+        // so it reads over both bright and dark parts of an image.
+        let outline = palette.ink_on(Color32::WHITE).0;
+        for offset in [
+            vec2(-1.0, 0.0),
+            vec2(1.0, 0.0),
+            vec2(0.0, -1.0),
+            vec2(0.0, 1.0),
+        ] {
+            draw_labels(offset, outline);
+        }
+        palette.ink_on(Color32::BLACK).0
+    } else {
+        palette.text
+    };
+    draw_labels(egui::Vec2::ZERO, ink);
 
     let popup = egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -300,15 +315,7 @@ fn wallpaper_preview(
         _ => theme::page_base(palette),
     };
     if background.animated() {
-        crate::newtab_wallpaper::paint(
-            ui.painter(),
-            thumbnail,
-            radius,
-            palette,
-            background,
-            None,
-            None,
-        );
+        crate::newtab_wallpaper::paint(ui.painter(), thumbnail, radius, background, None, None);
     } else {
         ui.painter().rect_filled(thumbnail, radius, tint);
     }
