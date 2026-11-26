@@ -43,10 +43,12 @@ pub fn draw(
     }
 
     let inset = (content.width() * 0.045).clamp(18.0, 48.0);
-    let viewport = content.shrink2(vec2(inset, 12.0));
-    let width = viewport.width().min(1040.0);
+    let viewport = content.shrink2(vec2(0.0, 12.0));
+    let width = (viewport.width() - 2.0 * inset).min(1040.0);
     let area = Rect::from_center_size(viewport.center(), vec2(width, viewport.height()));
     let mut dashboard = root.new_child(UiBuilder::new().id_salt("newtab_dashboard").max_rect(area));
+    // Keep the gutters available for paint. The column controls layout, while
+    // the wider clip allows the outer cards' shadows to fade out into the page.
     dashboard.set_clip_rect(root.clip_rect().intersect(viewport));
     egui::ScrollArea::vertical()
         .id_salt("newtab_scroll")
@@ -61,7 +63,12 @@ pub fn draw(
             if chrome.settings.new_tab_show_widgets {
                 ui.add_space(22.0);
                 cards(ui, chrome, &palette, width, actions);
-                ui.add_space(10.0);
+                // Leave space for the final row's shadow at the bottom of the
+                // scroll range.
+                let shadow_reach = palette.material.shadow_reach
+                    + f32::from(Role::DashboardCard.radius())
+                        * palette.material.shadow_reach_per_radius;
+                ui.add_space(shadow_reach.ceil().max(10.0));
             }
         });
 }

@@ -4,6 +4,7 @@
 
 - Fixed gaps around New Tab wallpapers in light and dark mode. Grid dots are
   easier to see and stay inside the page frame.
+- New Tab card shadows now fade fully into the surrounding space.
 - Frosted and Liquid Glass show the native macOS backdrop wherever supported.
 - Corrected the installer URL in the signed update feed. Heion now explains
   how to install the app when it is running from a read-only disk image.
