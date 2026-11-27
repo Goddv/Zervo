@@ -205,12 +205,12 @@ fn contrast(ink: Color32, brightness: f32) -> f32 {
 /// line in Settings, so when it is too dim it is most of the words in the
 /// application.
 const LIGHT_INK: (Color32, Color32) = (
-    Color32::from_rgb(238, 238, 242),
-    Color32::from_rgb(182, 182, 192),
+    Color32::from_rgb(250, 250, 252),
+    Color32::from_rgb(214, 214, 223),
 );
 
 /// Text for a light background.
-const DARK_INK: (Color32, Color32) = (Color32::from_rgb(20, 20, 24), Color32::from_rgb(78, 78, 88));
+const DARK_INK: (Color32, Color32) = (Color32::from_rgb(17, 17, 21), Color32::from_rgb(54, 54, 65));
 
 /// How many cells across the backdrop's luminance map is.
 pub const LUMA_CELLS: usize = 8;
@@ -912,7 +912,6 @@ impl Preset {
                 motion: 0.14,
                 candy: 0.045,
                 workspace_accent: true,
-                sweep: true,
                 pill_progress: true,
                 spine: Spine::Favicons,
                 align_nav: false,
@@ -935,7 +934,6 @@ impl Preset {
                 // The window becomes the space you are in." Left off, Candy is
                 // one lavender room rather than five.
                 workspace_accent: true,
-                sweep: true,
                 pill_progress: true,
                 spine: Spine::TabTicks,
                 align_nav: true,
@@ -954,7 +952,6 @@ impl Preset {
                 motion: 0.06,
                 candy: 0.02,
                 workspace_accent: false,
-                sweep: false,
                 pill_progress: false,
                 spine: Spine::Nothing,
                 align_nav: false,
@@ -973,7 +970,6 @@ impl Preset {
                 motion: 0.14,
                 candy: 0.045,
                 workspace_accent: false,
-                sweep: false,
                 pill_progress: true,
                 spine: Spine::TabTicks,
                 align_nav: false,
@@ -992,7 +988,6 @@ impl Preset {
                 motion: 0.2,
                 candy: 0.1,
                 workspace_accent: false,
-                sweep: false,
                 pill_progress: false,
                 spine: Spine::Favicons,
                 align_nav: false,
@@ -1043,8 +1038,6 @@ pub struct Appearance {
     // ── How it moves
     /// How long a hover, a selection, a morph or a fade takes to settle.
     pub motion: f32,
-    /// A brief reflection while the sidebar docks or undocks.
-    pub sweep: bool,
     /// Progress inside the address pill, which gives it back the points it
     /// reserves for a spinner.
     pub pill_progress: bool,
@@ -2257,7 +2250,7 @@ pub fn apply(ctx: &Context, palette: &Palette) {
     // a theme colour: it is the muted tier, which is what a hint has always
     // been, and setting it once means a field added later gets it too.
     visuals.weak_text_color = Some(palette.text_muted);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text_muted);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text);
     visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
     visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.text);
@@ -2266,6 +2259,7 @@ pub fn apply(ctx: &Context, palette: &Palette) {
     visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.text);
     visuals.widgets.active.weak_bg_fill = palette.active;
     visuals.widgets.active.bg_fill = palette.active;
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, palette.text);
     visuals.widgets.open.weak_bg_fill = palette.surface_hover;
 
     ctx.set_global_style(style);

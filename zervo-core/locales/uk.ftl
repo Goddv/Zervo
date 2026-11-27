@@ -125,8 +125,6 @@ settings-off-nothing-animates-what-reduce-motion-should = Вимикає всі 
 settings-under-a-tenth-of-a-second-reads = Менш ніж за десяту частку секунди перехід сприймається як спалах. Поверхня має плавно ставати на місце.
 settings-slow-enough-to-notice-you-are-waiting = Достатньо повільно, щоб затримка інтерфейсу стала помітною.
 settings-what-shipped-is-0-14-hovers-selections = Типове значення — 0,14 секунди. Воно діє для наведення, вибору, зміни форми й плавної появи або зникнення.
-settings-sidebar-specular-sweep = Рухомий відблиск під час переходів бічної панелі
-settings-sidebar-specular-sweep-help = Під час закріплення або відкріплення бічної панелі з’являється короткий відблиск. Для цього потрібно ввімкнути анімацію.
 settings-load-in-the-address-pill-not-a = Показувати перебіг завантаження в полі адреси
 settings-gives-the-pill-back-the-width-it = Показує перебіг завантаження сторінки в полі адреси.
 settings-chrome = Інтерфейс браузера
@@ -583,7 +581,8 @@ settings-wallpaper-credit = Зображення: { $credit }, джерело: {
 ## Дії жестів
 
 gesture-toggle-sidebar = Показати або приховати бічну панель
-gesture-widget-shelf = Панель віджетів
+gesture-refresh-page = Оновити сторінку
+settings-pull-to-refresh = Потягніть униз на початку сторінки, а потім відпустіть, щоб оновити її.
 gesture-next-workspace = Наступний простір
 gesture-previous-workspace = Попередній простір
 
@@ -646,13 +645,10 @@ sidebar-unload-pin-title = Вивантажити «{ $title }»
 
 layout-customize = Налаштувати компонування
 layout-sidebar-sections = Розділи бічної панелі
-layout-reorder-sections = Закріплені вкладки залишаються над папками. Перетягуйте інші розділи або змінюйте їхній порядок стрілками.
 layout-sidebar-tools = Інструменти бічної панелі
 layout-show-site-icons = Показувати піктограми сайтів у бічній панелі
 layout-widget-shelf = Панель віджетів
 layout-reset-sidebar = Відновити типові параметри бічної панелі
-layout-move-up = Перемістити «{ $name }» вище
-layout-move-down = Перемістити «{ $name }» нижче
 
 setup-switch-between-layouts = Будь-коли перемикайтеся між режимами «Бічна панель» і «На всю сторінку».
 settings-reset-sidebar-widgets-and-new-tab = Відновлює розділи й ширину бічної панелі, віджети на панелі та дошку нової вкладки.

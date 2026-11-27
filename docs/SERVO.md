@@ -1,6 +1,6 @@
 # Living with the Servo engine
 
-Heion uses [Servo main at `3f21bf4ee33`](https://github.com/servo/servo/commit/3f21bf4ee339d4423873317aa6c9a5e14316c077).
+Heion uses the Servo main revision recorded in [upstream-revision](../patches/servo/upstream-revision).
 The engine still identifies itself as Servo 0.8.0. The local build uses the
 patched Servo checkout beside the Heion checkout. The path is set in
 `.cargo/config.toml`.
@@ -22,13 +22,17 @@ Place a fresh Servo checkout at `../servo` relative to the Heion checkout,
 then prepare it before running Cargo from Heion.
 
 ```sh
-git -C ../servo switch --detach 3f21bf4ee339d4423873317aa6c9a5e14316c077
+git -C ../servo switch --detach "$(cat patches/servo/upstream-revision)"
 git -C ../servo apply "$PWD/patches/servo/0001-embedder-file-downloads.patch"
 git -C ../servo apply "$PWD/patches/servo/0002-script-show-notification-without-resources.patch"
 cargo build --locked --profile dev-fast --features engine-downloads,media
 ```
 
-CI prepares the same sibling checkout with `scripts/prepare-servo.sh`. Update
-`patches/servo/upstream-revision` and refresh `Cargo.lock` together when advancing
-the engine. Check both feature sets and run [the smoke checklist](TESTING.md),
-including redirects, attachments, and a notification without an icon.
+CI prepares the same sibling checkout with `scripts/prepare-servo.sh`. At the
+start of each development cycle and before cutting a release, check the tip of
+[`servo/servo` main](https://github.com/servo/servo/commits/main/). Pin the
+latest revision in `patches/servo/upstream-revision`, review the local patches
+against it, and refresh `Cargo.lock` in the same change. Check both feature
+sets and run [the smoke checklist](TESTING.md), including redirects,
+attachments, and a notification without an icon. The explicit pin keeps CI
+and local builds reproducible.

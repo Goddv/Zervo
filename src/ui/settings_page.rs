@@ -1049,17 +1049,6 @@ pub(crate) fn settings_appearance(
             },
         );
 
-        ui.add_space(10.0);
-        if widgets::toggle(
-            ui,
-            &mut chrome.settings.appearance.sweep,
-            tr("settings-sidebar-specular-sweep"),
-            palette,
-        ) {
-            actions.push(UiAction::SettingsChanged);
-        }
-        note(ui, palette, tr("settings-sidebar-specular-sweep-help"));
-
         ui.add_space(8.0);
         if widgets::toggle(
             ui,
@@ -1615,10 +1604,16 @@ pub(crate) fn settings_layout(
                 &mut chrome.settings.gestures.left,
                 palette,
             );
+            let refresh_hint =
+                if chrome.settings.gestures.down == crate::gestures::GestureAction::Reload {
+                    tr("settings-pull-to-refresh")
+                } else {
+                    ""
+                };
             changed |= gesture_row(
                 ui,
                 tr("settings-swipe-down"),
-                "",
+                refresh_hint,
                 &mut chrome.settings.gestures.down,
                 palette,
             );

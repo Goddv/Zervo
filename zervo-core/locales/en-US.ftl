@@ -125,8 +125,6 @@ settings-off-nothing-animates-what-reduce-motion-should = Off — nothing animat
 settings-under-a-tenth-of-a-second-reads = Under a tenth of a second reads as flicker; a surface should settle, not pop.
 settings-slow-enough-to-notice-you-are-waiting = Slow enough to notice you are waiting for the chrome.
 settings-what-shipped-is-0-14-hovers-selections = What shipped is 0.14. Hovers, selections, morphs and fades all take it.
-settings-sidebar-specular-sweep = Specular sweep on sidebar transitions
-settings-sidebar-specular-sweep-help = Shows a brief reflection as the sidebar docks or undocks. The reflection requires animations to be enabled.
 settings-load-in-the-address-pill-not-a = Show loading progress in the address field
 settings-gives-the-pill-back-the-width-it = Displays page loading progress inside the address field.
 settings-chrome = Chrome
@@ -176,7 +174,7 @@ settings-fetching-one = Fetching one…
 settings-nothing-fetched-yet = Nothing fetched yet.
 settings-trackpad = Trackpad
 settings-two-finger-swipes = Two-finger swipes
-settings-a-quick-straight-flick-a-slow-or = A quick, straight flick. A slow or wandering one is a scroll and is left alone.
+settings-a-quick-straight-flick-a-slow-or = Use a quick, straight flick for navigation.
 settings-swipe-right = Swipe right
 settings-sidebar-space-swipes = Swipe left or right over the sidebar to switch spaces.
 settings-outside-sidebar = Outside the sidebar.
@@ -567,7 +565,8 @@ settings-wallpaper-credit = Showing { $credit } from { $source }.
 ## Gesture actions
 
 gesture-toggle-sidebar = Toggle sidebar
-gesture-widget-shelf = Widget shelf
+gesture-refresh-page = Refresh page
+settings-pull-to-refresh = Pull down from the top of a page, then release to refresh.
 gesture-next-workspace = Next Space
 gesture-previous-workspace = Previous Space
 
@@ -630,13 +629,10 @@ sidebar-unload-pin-title = Unload { $title }
 
 layout-customize = Customise layout
 layout-sidebar-sections = Sidebar sections
-layout-reorder-sections = Pinned tabs stay above folders. Drag the other sections or use the arrows to reorder them.
 layout-sidebar-tools = Sidebar tools
 layout-show-site-icons = Show website icons in the sidebar
 layout-widget-shelf = Widget shelf
 layout-reset-sidebar = Restore sidebar defaults
-layout-move-up = Move { $name } up
-layout-move-down = Move { $name } down
 
 setup-switch-between-layouts = Switch between Sidebar and Full Page at any time.
 settings-reset-sidebar-widgets-and-new-tab = Restores sidebar sections, width, shelf widgets, and the New Tab board.
@@ -770,6 +766,12 @@ browsing-data-cleared = The selected browsing data was cleared.
 # New Tab customization
 newtab-customize-page = Customize New Tab
 newtab-customize-widgets = Show dashboard widgets
+newtab-edit-widgets = Edit widgets
+newtab-size-small = Small (1 × 1)
+newtab-size-pill = Pill (2 × 1)
+newtab-size-medium = Medium (2 × 2)
+newtab-size-wide = Wide (4 × 2)
+newtab-size-large = Large (4 × 4)
 newtab-wallpaper-aurora = Aurora
 newtab-wallpaper-tidelight = Tidelight
 newtab-wallpaper-afterglow = Afterglow

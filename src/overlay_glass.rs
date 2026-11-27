@@ -20,6 +20,7 @@ pub(crate) enum Role {
     Tab,
     SearchPill,
     DashboardCard,
+    DashboardControl,
 }
 
 impl Role {
@@ -34,6 +35,7 @@ impl Role {
             Self::Tab => 10,
             Self::SearchPill => 27,
             Self::DashboardCard => 23,
+            Self::DashboardControl => 64,
         }
     }
 
@@ -356,7 +358,10 @@ mod macos {
 
     impl Role {
         fn is_content(self) -> bool {
-            matches!(self, Self::DashboardCard | Self::SearchPill | Self::Field)
+            matches!(
+                self,
+                Self::DashboardCard | Self::DashboardControl | Self::SearchPill | Self::Field
+            )
         }
 
         fn frost(self) -> Option<NSVisualEffectMaterial> {
@@ -780,9 +785,11 @@ mod macos {
             let screen = ctx.content_rect();
             let surface_width = rect.width();
             let clip = match role {
-                Role::Field | Role::Tab | Role::SearchPill | Role::DashboardCard => {
-                    painter.clip_rect()
-                },
+                Role::Field
+                | Role::Tab
+                | Role::SearchPill
+                | Role::DashboardCard
+                | Role::DashboardControl => painter.clip_rect(),
                 _ => screen,
             };
             let rect = rect.intersect(screen).intersect(clip);

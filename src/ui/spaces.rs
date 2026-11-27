@@ -398,7 +398,7 @@ fn pinned_tile(
     ui: &mut Ui,
     style: TabRowStyle<'_>,
     palette: &Palette,
-    favicon: Option<&TextureHandle>,
+    favicon: Option<&crate::favicons::SiteIcon>,
     actions: &mut Vec<UiAction>,
 ) -> TabRowOut {
     let (rect, response) = ui.allocate_exact_size(vec2(42.0, 42.0), Sense::click_and_drag());
@@ -421,11 +421,11 @@ fn pinned_tile(
     }
     response.clone().on_hover_cursor(CursorIcon::PointingHand);
     if let Some(favicon) = favicon {
-        ui.painter().image(
-            favicon.id(),
+        favicon.paint(
+            ui.painter(),
             Rect::from_center_size(rect.center(), vec2(20.0, 20.0)),
-            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-            Color32::WHITE,
+            palette.dark,
+            1.0,
         );
     } else {
         ui.painter().text(
@@ -481,9 +481,9 @@ fn pinned_tile(
     out
 }
 
-fn favourites(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) {
+pub(super) fn favourites(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) {
     let sites = &chrome.library.favourites;
-    if sites.is_empty() {
+    if !chrome.settings.show_essentials || sites.is_empty() {
         return;
     }
     let palette = &chrome.palette;
@@ -530,16 +530,8 @@ fn favourites(ui: &mut Ui, chrome: &ChromeContext, actions: &mut Vec<UiAction>) 
                     .flat_map(|space| &space.tabs)
                     .find(|tab| tab.url == site.url);
                 let icon_rect = Rect::from_center_size(rect.center(), vec2(18.0, 18.0));
-                if let Some(favicon) = open
-                    .filter(|_| chrome.settings.show_tab_favicons)
-                    .and_then(|tab| chrome.favicons.get(&tab.id))
-                {
-                    ui.painter().image(
-                        favicon.id(),
-                        icon_rect,
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
+                if let Some(favicon) = open.and_then(|tab| chrome.tab_icon(ui.ctx(), tab)) {
+                    favicon.paint(ui.painter(), icon_rect, palette.dark, 1.0);
                 } else if !chrome.settings.show_tab_favicons
                     || !paint_site_icon(ui, chrome.saved_favicons, &site.url, icon_rect)
                 {
@@ -625,14 +617,11 @@ pub(super) fn body(
             dragging,
             native_overlay,
         };
-        let favicon = chrome
-            .favicons
-            .get(&tab.id)
-            .filter(|_| chrome.settings.show_tab_favicons);
+        let favicon = chrome.tab_icon(ui.ctx(), tab);
         let out = if tab.pinned {
-            pinned_tile(ui, style, &palette, favicon, actions)
+            pinned_tile(ui, style, &palette, favicon.as_ref(), actions)
         } else {
-            tab_row(ui, style, &palette, favicon, actions)
+            tab_row(ui, style, &palette, favicon.as_ref(), actions)
         };
         if out.drag_started {
             ctx.data_mut(|data| data.insert_temp(drag_id, tab.id));
@@ -731,22 +720,14 @@ pub(super) fn body(
                 ui.separator();
                 ui.add_space(5.0);
             }
-            for section in chrome.settings.sidebar_sections {
-                use crate::settings::SidebarSection;
-                if section == SidebarSection::Pinned || !section.visible(chrome.settings) {
-                    continue;
-                }
-                if section == SidebarSection::Favourites {
-                    favourites(ui, chrome, actions);
-                    continue;
-                }
+            if chrome.settings.show_open_tabs {
                 let tabs = space
                     .tabs
                     .iter()
                     .enumerate()
                     .filter(|(_, tab)| tab.folder.is_none() && !tab.pinned);
                 if tabs.clone().next().is_some() {
-                    heading(ui, section.label(), &palette);
+                    heading(ui, tr("sidebar-open-tabs"), &palette);
                 }
                 for (index, tab) in tabs {
                     target = draw_tab(ui, index, tab, actions).or(target);
@@ -820,7 +801,7 @@ pub(super) fn body(
                         vec2(viewport.width() - 8.0, 30.0),
                     ),
                     &tab.title,
-                    chrome.favicons.get(&tab.id),
+                    chrome.tab_icon(ui.ctx(), tab).as_ref(),
                     &palette,
                 );
                 ctx.request_repaint();

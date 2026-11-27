@@ -24,9 +24,9 @@
 //!
 //! And a direction is only offered where nothing scrolls that way. Horizontal
 //! is free: no part of the chrome scrolls sideways, and on a page it is the
-//! gesture every browser already uses for back and forward. Vertical is
-//! scrolling almost everywhere, so it is recognised only over the strip above
-//! the web page, where there is nothing to scroll.
+//! gesture browsers use for back and forward. Vertical flicks stay above the
+//! page. A downward pull within the page is tracked separately so the caller
+//! can check the scroll position and wait for release.
 
 use crate::l10n::text as tr;
 use std::time::{Duration, Instant};
@@ -46,6 +46,7 @@ const CROSS_RATIO: f32 = 0.5;
 const MIN_SPEED: f32 = 320.0;
 /// Inertia begins this soon after the fingers lift, and nothing else does.
 const MOMENTUM_GAP: Duration = Duration::from_millis(160);
+const PULL_TRAVEL: f32 = 92.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Direction {
@@ -76,8 +77,8 @@ pub enum GestureAction {
     Back,
     Forward,
     ToggleSidebar,
-    /// Open or close the sidebar widget shelf.
-    ToggleShelf,
+    #[serde(alias = "ToggleShelf")]
+    Reload,
     NextWorkspace,
     PreviousWorkspace,
     NewTab,
@@ -89,7 +90,7 @@ impl GestureAction {
         GestureAction::Back,
         GestureAction::Forward,
         GestureAction::ToggleSidebar,
-        GestureAction::ToggleShelf,
+        GestureAction::Reload,
         GestureAction::NextWorkspace,
         GestureAction::PreviousWorkspace,
         GestureAction::NewTab,
@@ -101,7 +102,7 @@ impl GestureAction {
             GestureAction::Back => tr("common-back"),
             GestureAction::Forward => tr("common-forward"),
             GestureAction::ToggleSidebar => tr("gesture-toggle-sidebar"),
-            GestureAction::ToggleShelf => tr("gesture-widget-shelf"),
+            GestureAction::Reload => tr("gesture-refresh-page"),
             GestureAction::NextWorkspace => tr("gesture-next-workspace"),
             GestureAction::PreviousWorkspace => tr("gesture-previous-workspace"),
             GestureAction::NewTab => tr("common-new-tab-action"),
@@ -116,8 +117,8 @@ pub struct Gestures {
     /// Two fingers moving left and right outside the sidebar.
     pub left: GestureAction,
     pub right: GestureAction,
-    /// Two fingers moving up and down, over the bar above the page only —
-    /// everywhere else that is scrolling.
+    /// Vertical flicks over the bar above the page. Reload uses a downward
+    /// pull within the web page instead.
     pub up: GestureAction,
     pub down: GestureAction,
 }
@@ -131,7 +132,7 @@ impl Default for Gestures {
             right: GestureAction::Back,
             left: GestureAction::Forward,
             up: GestureAction::None,
-            down: GestureAction::ToggleShelf,
+            down: GestureAction::Reload,
         }
     }
 }
@@ -145,7 +146,7 @@ impl Gestures {
             (Direction::Left, _) => self.left,
             (Direction::Right, _) => self.right,
             (Direction::Up, Region::TopStrip) => self.up,
-            (Direction::Down, Region::TopStrip) => self.down,
+            (Direction::Down, Region::TopStrip) if self.down != GestureAction::Reload => self.down,
             _ => GestureAction::None,
         }
     }
@@ -168,6 +169,24 @@ pub struct Recognizer {
 }
 
 impl Recognizer {
+    pub fn stroke_start(&self) -> Option<Instant> {
+        self.started
+    }
+
+    /// Progress while a direct downward scroll is still held.
+    pub fn pull_progress(&self) -> f32 {
+        if !self.open
+            || self.inertia
+            || self.started.is_none()
+            || self.origin != Region::Content
+            || self.travel.y <= 0.0
+            || self.travel.x.abs() > self.travel.y * CROSS_RATIO
+        {
+            return 0.0;
+        }
+        (self.travel.y / PULL_TRAVEL).min(1.0)
+    }
+
     /// Feed one scroll event. Returns a direction only on the frame the
     /// fingers lift, and only if the whole stroke was a flick.
     pub fn feed(
@@ -195,21 +214,8 @@ impl Recognizer {
                         .settled
                         .is_some_and(|end| now.saturating_duration_since(end) < MOMENTUM_GAP);
                 }
-                None
             },
-            TouchPhase::Moved => {
-                // The clock runs from the first real movement, not from the
-                // fingers landing. Resting them for a moment before flicking
-                // is ordinary, and charging that pause to the flick's budget
-                // makes the same gesture work or not depending on how long
-                // you hesitated first.
-                if self.started.is_none() && delta.length() > 0.5 {
-                    self.started = Some(now);
-                    self.origin = region;
-                }
-                self.travel += delta;
-                None
-            },
+            TouchPhase::Moved => {},
             TouchPhase::Ended | TouchPhase::Cancelled => {
                 let started = self.started.take();
                 let moved = self.travel.length() > 1.0;
@@ -225,9 +231,17 @@ impl Recognizer {
                     .and_then(|start| self.recognise(now.saturating_duration_since(start)));
                 self.open = false;
                 self.travel = Vec2::ZERO;
-                direction.map(|direction| (direction, self.origin))
+                return direction.map(|direction| (direction, self.origin));
             },
         }
+        // AppKit can report the first movement with Began. Only the first
+        // real movement starts the clock, so resting fingers costs no time.
+        if self.started.is_none() && delta.length() > 0.5 {
+            self.started = Some(now);
+            self.origin = region;
+        }
+        self.travel += delta;
+        None
     }
 
     fn recognise(&self, elapsed: Duration) -> Option<Direction> {
@@ -319,5 +333,38 @@ mod tests {
                 None,
             );
         }
+    }
+
+    #[test]
+    fn slow_downward_pull_arms_at_distance_and_ignores_momentum() {
+        let mut swipe = Recognizer::default();
+        let now = Instant::now();
+        let region = Region::Content;
+        swipe.feed(Vec2::ZERO, TouchPhase::Started, now, region);
+        swipe.feed(Vec2::new(0.0, 8.0), TouchPhase::Started, now, region);
+        assert!(swipe.pull_progress() > 0.0);
+        swipe.feed(Vec2::new(1.0, 35.0), TouchPhase::Moved, now, region);
+        assert!(swipe.pull_progress() < 1.0);
+        let later = now + Duration::from_millis(700);
+        swipe.feed(Vec2::new(2.0, 65.0), TouchPhase::Moved, later, region);
+        assert_eq!(swipe.pull_progress(), 1.0);
+        assert_eq!(
+            swipe.feed(Vec2::ZERO, TouchPhase::Ended, later, region),
+            None
+        );
+        let inertia = later + Duration::from_millis(20);
+        swipe.feed(Vec2::ZERO, TouchPhase::Started, inertia, region);
+        swipe.feed(Vec2::new(0.0, 120.0), TouchPhase::Moved, inertia, region);
+        assert_eq!(swipe.pull_progress(), 0.0);
+    }
+
+    #[test]
+    fn legacy_shelf_binding_is_refresh_without_a_top_strip_action() {
+        let gestures: Gestures = serde_json::from_str(r#"{"down":"ToggleShelf"}"#).unwrap();
+        assert_eq!(gestures.down, GestureAction::Reload);
+        assert_eq!(
+            gestures.action(Direction::Down, Region::TopStrip),
+            GestureAction::None
+        );
     }
 }

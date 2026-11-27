@@ -244,7 +244,7 @@ pub struct ChromeContext<'a> {
     pub sidebar_presence: f32,
     pub device_pixels_per_css_pixel: f32,
     pub native_glass: NativeGlass,
-    pub favicons: &'a HashMap<TabId, TextureHandle>,
+    pub favicons: &'a HashMap<TabId, crate::favicons::LiveIcon>,
     pub saved_favicons: &'a crate::favicons::Store,
     pub wallpaper: &'a crate::newtab_wallpaper::State,
     pub downloads: &'a crate::downloads::DownloadManager,
@@ -264,6 +264,20 @@ pub struct ChromeContext<'a> {
 }
 
 impl ChromeContext<'_> {
+    pub(crate) fn tab_icon(
+        &self,
+        ctx: &egui::Context,
+        tab: &crate::state::Tab,
+    ) -> Option<crate::favicons::SiteIcon> {
+        if !self.settings.show_tab_favicons || tab.kind != TabKind::Web {
+            return None;
+        }
+        self.favicons
+            .get(&tab.id)
+            .and_then(|icon| icon.for_url(&tab.url))
+            .or_else(|| self.saved_favicons.get(ctx, &tab.url))
+    }
+
     fn uses_native_sidebar(&self) -> bool {
         self.native_glass.vibrancy_available
             && self.palette.translucency.is_translucent()
@@ -787,10 +801,6 @@ fn draw_sidebar(
             // Halfway through leaving is not something to click on.
             body.disable();
             sidebar_body(&mut body, chrome, actions, false);
-            // Catching the light on the way out. The phase runs with the
-            // panel's own width, so the light crosses it exactly once over the
-            // morph rather than on a clock of its own.
-            paint_specular(ui.painter(), ui.max_rect(), &chrome.palette, 1.0 - reveal);
         });
     root.set_style(style);
 
@@ -832,11 +842,6 @@ fn sidebar_body(
     actions: &mut Vec<UiAction>,
     native_overlay: bool,
 ) {
-    let original_palette = chrome.palette;
-    if chrome.palette.dark {
-        chrome.palette.text = Color32::WHITE;
-        chrome.palette.text_muted = Color32::WHITE;
-    }
     let palette = chrome.palette;
     let drag = ui.interact(
         ui.max_rect(),
@@ -1037,8 +1042,8 @@ fn sidebar_body(
         draw_favourites_card(ui, chrome, actions, star);
     }
 
+    spaces::favourites(ui, chrome, actions);
     spaces::body(ui, chrome, actions, native_overlay);
-    chrome.palette = original_palette;
 }
 
 /// Paint a cached icon in a visible row and let the caller choose its fallback.
@@ -1051,12 +1056,7 @@ pub(crate) fn paint_site_icon(
     if ui.is_rect_visible(rect)
         && let Some(texture) = cache.get(ui.ctx(), url)
     {
-        ui.painter().image(
-            texture.id(),
-            rect,
-            Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
+        texture.paint(ui.painter(), rect, ui.visuals().dark_mode, 1.0);
         return true;
     }
     false
@@ -2204,17 +2204,17 @@ fn draw_spine(root: &Ui, chrome: &ChromeContext) {
         let at = pos2(window.left() + SPINE_INSET, y);
         if favicons {
             let rect = Rect::from_min_size(at, vec2(SPINE_FAVICON, SPINE_FAVICON));
-            match chrome.favicons.get(&tab) {
-                Some(texture) => {
-                    painter.image(
-                        texture.id(),
-                        rect,
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        // Faded the same way the ticks are: the tab you are on
-                        // is the one meant to stand out.
-                        Color32::WHITE.gamma_multiply(if on { 1.0 } else { 0.55 }),
-                    );
-                },
+            match chrome
+                .browser
+                .tab(tab)
+                .and_then(|tab| chrome.tab_icon(root.ctx(), tab))
+            {
+                Some(texture) => texture.paint(
+                    &painter,
+                    rect,
+                    chrome.palette.dark,
+                    if on { 1.0 } else { 0.55 },
+                ),
                 // No favicon yet, and a blank gap would lose the count. The
                 // workspace's own colour stands in for it.
                 None => {
@@ -2597,29 +2597,6 @@ fn draw_sidebar_shelf(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec
 /// longer object: a light that crossed a 460pt pill three times a second would
 /// read as an alarm rather than as progress.
 const SWEEP_PERIOD: f64 = 1.5;
-
-/// One pass of light across the sidebar as it docks or undocks.
-///
-/// Real glass catches the light when it moves, and this is the cheapest way to
-/// say a thing is glass and not a rectangle: no shader, one gradient, and it
-/// rides the clock the change is already on rather than introducing a second.
-/// `phase` is that clock, 0 to 1; outside it nothing is drawn.
-fn paint_specular(painter: &egui::Painter, rect: Rect, palette: &Palette, phase: f32) {
-    if !palette.appearance.sweep || !(0.0..1.0).contains(&phase) || !rect.is_positive() {
-        return;
-    }
-    // Narrow, and travelling further than the surface is wide so it enters and
-    // leaves rather than appearing in the middle of it.
-    let width = (rect.width() * 0.35).max(24.0);
-    let x = rect.min.x - width + (rect.width() + width * 2.0) * phase;
-    paint_sweep(
-        &painter.with_clip_rect(rect),
-        Rect::from_min_size(pos2(x, rect.min.y), vec2(width, rect.height())),
-        // White rather than the accent: this is a highlight on the material,
-        // not a thing the material is saying.
-        Color32::WHITE.gamma_multiply(0.10),
-    );
-}
 
 /// A band of light, brightest in the middle and gone at both ends.
 fn paint_sweep(painter: &egui::Painter, rect: Rect, colour: Color32) {
@@ -3069,7 +3046,7 @@ fn paint_tab_ghost(
     painter: &egui::Painter,
     rect: Rect,
     title: &str,
-    favicon: Option<&TextureHandle>,
+    favicon: Option<&crate::favicons::SiteIcon>,
     palette: &Palette,
 ) {
     for shape in glass::shapes(
@@ -3084,11 +3061,11 @@ fn paint_tab_ghost(
     }
     let icon_center = pos2(rect.min.x + 19.0, rect.center().y);
     if let Some(texture) = favicon {
-        painter.image(
-            texture.id(),
+        texture.paint(
+            painter,
             Rect::from_center_size(icon_center, vec2(15.0, 15.0)),
-            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-            Color32::WHITE,
+            palette.dark,
+            1.0,
         );
     } else {
         icons::draw_icon(
@@ -3114,7 +3091,7 @@ fn tab_row(
     ui: &mut Ui,
     style: TabRowStyle,
     palette: &Palette,
-    favicon: Option<&TextureHandle>,
+    favicon: Option<&crate::favicons::SiteIcon>,
     actions: &mut Vec<UiAction>,
 ) -> TabRowOut {
     let row_height = if style.compact { 28.0 } else { 34.0 };
@@ -3261,12 +3238,7 @@ fn tab_row(
         icons::draw_icon(painter, icon_rect, glyph, ink_muted);
     } else if let Some(texture) = favicon {
         let icon_rect = Rect::from_center_size(icon_center, vec2(15.0, 15.0));
-        painter.image(
-            texture.id(),
-            icon_rect,
-            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
+        texture.paint(painter, icon_rect, palette.dark, 1.0);
     } else {
         let icon_rect = Rect::from_center_size(icon_center, vec2(14.0, 14.0));
         icons::draw_icon(painter, icon_rect, Icon::Globe, ink_muted);

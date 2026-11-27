@@ -16,11 +16,6 @@
   "show_forward_button": true,
   "show_reload_button": true,
   "show_essentials": true,
-  "sidebar_sections": [
-    "Pinned",
-    "Favourites",
-    "Tabs"
-  ],
   "show_pinned_section": false,
   "show_tab_favicons": true,
   "show_open_tabs": true,
@@ -64,7 +59,6 @@
     "corners": 1.2,
     "glow": 0.0,
     "motion": 0.19634147,
-    "sweep": true,
     "pill_progress": true,
     "candy": 0.1,
     "workspace_accent": false,
@@ -76,6 +70,6 @@
     "left": "Forward",
     "right": "Back",
     "up": "None",
-    "down": "ToggleShelf"
+    "down": "Reload"
   }
 }

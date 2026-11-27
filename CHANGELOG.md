@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.2
+
+- Refreshed Servo to upstream main at `9c793b64a` and kept Heion's download
+  and notification patches.
+- Restored cached favicons for unloaded tabs and centered New Tab's pinned
+  labels. Low-contrast monochrome icons get a backing when needed.
+- New Tab widgets can be moved, resized, removed, and added from Customize.
+  Layouts persist across restarts. Five grid sizes include a compact pill,
+  and the Add card menu stays above native glass widgets.
+- Frosted and Liquid Glass use separate native macOS materials and respect
+  Reduce Transparency.
+- Moved Favourites below the sidebar address bar, raised text contrast in
+  both themes, and removed the sidebar transition sweep.
+- Swiping down from the top of a web page refreshes it on release.
+- New Tab's dotted grid glows near the pointer and leaves a short fading trail.
+
 ## 0.1.1.1
 
 - Fixed gaps around New Tab wallpapers in light and dark mode. Grid dots are

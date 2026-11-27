@@ -125,8 +125,6 @@ settings-off-nothing-animates-what-reduce-motion-should = Отключает в�
 settings-under-a-tenth-of-a-second-reads = При длительности меньше одной десятой секунды переход похож на вспышку. Поверхность должна плавно вставать на место.
 settings-slow-enough-to-notice-you-are-waiting = Достаточно медленно, чтобы задержка интерфейса стала заметна.
 settings-what-shipped-is-0-14-hovers-selections = Значение по умолчанию — 0,14 секунды. Оно применяется при наведении, выборе, изменении формы и плавном появлении или исчезновении.
-settings-sidebar-specular-sweep = Движущийся блик при переходах боковой панели
-settings-sidebar-specular-sweep-help = При закреплении или откреплении боковой панели появляется короткий блик. Для этого нужно включить анимацию.
 settings-load-in-the-address-pill-not-a = Показывать ход загрузки в адресном поле
 settings-gives-the-pill-back-the-width-it = Показывает ход загрузки страницы в адресном поле.
 settings-chrome = Интерфейс браузера
@@ -583,7 +581,8 @@ settings-wallpaper-credit = Изображение: { $credit }, источни�
 ## Действия жестов
 
 gesture-toggle-sidebar = Показать или скрыть боковую панель
-gesture-widget-shelf = Панель виджетов
+gesture-refresh-page = Обновить страницу
+settings-pull-to-refresh = Потяните вниз в начале страницы, затем отпустите, чтобы обновить её.
 gesture-next-workspace = Следующее пространство
 gesture-previous-workspace = Предыдущее пространство
 
@@ -646,13 +645,10 @@ sidebar-unload-pin-title = Выгрузить «{ $title }»
 
 layout-customize = Настроить компоновку
 layout-sidebar-sections = Разделы боковой панели
-layout-reorder-sections = Закреплённые вкладки остаются над папками. Перетаскивайте остальные разделы или меняйте их порядок стрелками.
 layout-sidebar-tools = Инструменты боковой панели
 layout-show-site-icons = Показывать значки сайтов в боковой панели
 layout-widget-shelf = Панель виджетов
 layout-reset-sidebar = Восстановить настройки боковой панели по умолчанию
-layout-move-up = Переместить «{ $name }» выше
-layout-move-down = Переместить «{ $name }» ниже
 
 setup-switch-between-layouts = Переключайтесь между режимами «Боковая панель» и «Вся страница» в любой момент.
 settings-reset-sidebar-widgets-and-new-tab = Восстанавливает разделы и ширину боковой панели, виджеты панели и доску новой вкладки.

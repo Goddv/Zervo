@@ -1,20 +1,28 @@
 //! Native New Tab dashboard. The browser owns search, and the profile owns
 //! the cards' data so the page needs no network requests of its own.
 
+use std::time::Duration;
+
 use egui::{
-    Color32, CursorIcon, FontId, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
+    Color32, CursorIcon, FontId, Id, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2,
+    vec2,
 };
 
 use crate::glass::{self, Glass};
+use crate::grid::{Cell, Metrics};
 use crate::icons::{self, Icon};
 use crate::l10n::text as tr;
+use crate::newtab_widgets::{self as widgets, Kind, Widget};
 use crate::overlay_glass::{self, Role, Surface};
 use crate::settings::{NewTabBackground, SearchEngine};
 use crate::theme::{self, Palette, Tier, Translucency};
 use crate::ui::{ChromeContext, UiAction};
 
 const GAP: f32 = 16.0;
-const CARD_HEIGHT: f32 = 178.0;
+
+fn editing_id() -> Id {
+    Id::unique("new_tab_edit_widgets")
+}
 
 pub fn draw(
     root: &mut Ui,
@@ -38,7 +46,7 @@ pub fn draw(
     };
     let mut palette = chrome.palette.with_translucency(material);
     palette.material.animation = chrome.palette.material.animation;
-    backdrop(root, chrome, page, &palette, background);
+    backdrop(root, chrome, page, content, &palette, background);
     if content.width() < 140.0 || content.height() < 80.0 {
         return;
     }
@@ -78,6 +86,7 @@ fn backdrop(
     ui: &Ui,
     chrome: &ChromeContext,
     page: Rect,
+    content: Rect,
     palette: &Palette,
     background: NewTabBackground,
 ) {
@@ -93,13 +102,12 @@ fn backdrop(
         theme::content_corners(palette)
     };
 
+    let motion_enabled =
+        chrome.settings.new_tab_animate_background && palette.material.animation > 0.0;
     if background.animated() || background == NewTabBackground::CustomImage {
-        let animation = background.animated().then(|| {
-            crate::newtab_wallpaper::phase(
-                ui,
-                chrome.settings.new_tab_animate_background && palette.material.animation > 0.0,
-            )
-        });
+        let animation = background
+            .animated()
+            .then(|| crate::newtab_wallpaper::phase(ui, motion_enabled));
         crate::newtab_wallpaper::paint(
             &painter,
             page,
@@ -111,20 +119,104 @@ fn backdrop(
     } else if !chrome.native_glass.new_tab_backdrop {
         painter.rect_filled(page, corners, theme::page_base(palette));
     }
+    let glow = GridGlow::sample(
+        ui,
+        content,
+        background == NewTabBackground::Grid && motion_enabled,
+    );
     if background == NewTabBackground::Grid {
-        paint_grid(&painter, page, corners, palette);
+        paint_grid(&painter, page, corners, palette, &glow);
     }
     if let Some(capture) = &chrome.capture {
         crate::backdrop::capture_into(&painter, page, capture);
     }
 }
 
-fn paint_grid(painter: &egui::Painter, page: Rect, corners: egui::CornerRadius, palette: &Palette) {
+const GRID_TRAIL_SECONDS: f64 = 0.38;
+
+#[derive(Clone, Copy, Default)]
+struct GridGlow {
+    cursor: Option<Pos2>,
+    trail: [Option<(Pos2, f64)>; 8],
+    time: f64,
+}
+
+impl GridGlow {
+    fn sample(ui: &Ui, content: Rect, enabled: bool) -> Self {
+        let id = ui.scope_id().with("new_tab_grid_glow");
+        let (cursor, time, focused) =
+            ui.input(|input| (input.pointer.hover_pos(), input.time, input.focused));
+        if !enabled || !focused {
+            ui.ctx().data_mut(|data| data.remove::<Self>(id));
+            return Self::default();
+        }
+
+        let cursor = cursor.filter(|point| content.contains(*point));
+        let glow = ui.ctx().data_mut(|data| {
+            let glow = data.get_temp_mut_or_default::<Self>(id);
+            glow.update(cursor, time);
+            *glow
+        });
+        // Pointer events move the glow. The trail alone needs timed repaints.
+        if glow.trail[0].is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+        glow
+    }
+
+    fn update(&mut self, cursor: Option<Pos2>, time: f64) {
+        self.time = time;
+        for sample in &mut self.trail {
+            if sample.is_some_and(|(_, at)| time - at >= GRID_TRAIL_SECONDS) {
+                *sample = None;
+            }
+        }
+        if let Some(previous) = self.cursor
+            && cursor != self.cursor
+            && (cursor.is_none()
+                || self.trail[0]
+                    .is_none_or(|(last, _)| last.distance_sq(previous) > 16.0_f32.powi(2)))
+        {
+            self.trail.rotate_right(1);
+            self.trail[0] = Some((previous, time));
+        }
+        self.cursor = cursor;
+    }
+
+    fn brightness(&self, point: Pos2) -> f32 {
+        let falloff = |center: Pos2, radius: f32| {
+            (1.0 - point.distance_sq(center) / (radius * radius))
+                .max(0.0)
+                .powi(2)
+        };
+        let head = self.cursor.map_or(0.0, |cursor| falloff(cursor, 112.0));
+        self.trail
+            .iter()
+            .flatten()
+            .fold(head, |light, &(center, at)| {
+                let life = (1.0 - (self.time - at) / GRID_TRAIL_SECONDS) as f32;
+                light.max(falloff(center, 80.0) * life * life * 0.65)
+            })
+    }
+}
+
+fn paint_grid(
+    painter: &egui::Painter,
+    page: Rect,
+    corners: egui::CornerRadius,
+    palette: &Palette,
+    glow: &GridGlow,
+) {
     const SPACING: f32 = 29.0;
     const DOT: f32 = 1.15;
-    let tint = palette
-        .accent
-        .gamma_multiply(if palette.dark { 0.55 } else { 0.42 });
+    let opacity = if palette.dark { 0.55 } else { 0.42 };
+    let tint = palette.accent.gamma_multiply(opacity);
+    let highlight = if palette.dark {
+        theme::mix(palette.accent, Color32::WHITE, 0.36)
+    } else {
+        palette.accent
+    };
+    let active = glow.cursor.is_some() || glow.trail[0].is_some();
     let mut y = page.top() + SPACING;
     while y < page.bottom() - DOT {
         // Leave room for the entire dot at the corners, even with large
@@ -145,7 +237,27 @@ fn paint_grid(painter: &egui::Painter, page: Rect, corners: egui::CornerRadius, 
         let mut x = page.left() + SPACING;
         while x < right {
             if x > left {
-                painter.circle_filled(pos2(x, y), DOT, tint);
+                let dot = pos2(x, y);
+                let light = if active { glow.brightness(dot) } else { 0.0 };
+                if light > 0.0 {
+                    let room = (x - left)
+                        .min(right - x)
+                        .min(page.bottom() - y - DOT)
+                        .max(DOT);
+                    painter.circle_filled(
+                        dot,
+                        (3.0 + 4.0 * light).min(room),
+                        highlight.gamma_multiply(light * 0.18),
+                    );
+                    painter.circle_filled(
+                        dot,
+                        (DOT + 1.45 * light).min(room),
+                        theme::mix(palette.accent, highlight, light)
+                            .gamma_multiply(opacity + (1.0 - opacity) * light),
+                    );
+                } else {
+                    painter.circle_filled(dot, DOT, tint);
+                }
             }
             x += SPACING;
         }
@@ -292,6 +404,16 @@ fn wallpaper_settings(
         tr("newtab-customize-widgets"),
         palette,
     );
+    if widgets_changed && !chrome.settings.new_tab_show_widgets {
+        ui.ctx().data_mut(|data| data.remove::<bool>(editing_id()));
+    }
+    if ui.button(tr("newtab-edit-widgets")).clicked() {
+        chrome.settings.new_tab_show_widgets = true;
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(editing_id(), true));
+        actions.push(UiAction::PersistSettings);
+        ui.close();
+    }
     if chosen != chrome.settings.new_tab_background || motion_changed || widgets_changed {
         chrome.settings.new_tab_background = chosen;
         actions.push(UiAction::PersistSettings);
@@ -505,69 +627,423 @@ fn cards(
     actions: &mut Vec<UiAction>,
 ) {
     let columns = if width >= 770.0 {
-        3
+        widgets::COLUMNS
     } else if width >= 490.0 {
-        2
+        8
     } else {
-        1
+        ((width + GAP) / 76.0).floor().clamp(2.0, 6.0) as u8
     };
-    let mut index = 0;
-    while index < 5 {
-        let count = columns.min(5 - index);
-        let (row, _) = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
-        let cell = (width - GAP * (count - 1) as f32) / count as f32;
-        for col in 0..count {
-            let rect = Rect::from_min_size(
-                row.min + vec2((cell + GAP) * col as f32, 0.0),
-                vec2(cell, CARD_HEIGHT),
-            );
-            if !ui.is_rect_visible(rect) {
-                continue;
+    let mut placed = widgets::arrange(&chrome.settings.new_tab_widgets, columns);
+    let editing = ui.ctx().data(|data| data.get_temp::<bool>(editing_id())) == Some(true);
+    if editing {
+        ui.horizontal_wrapped(|ui| {
+            let add = ui.button(tr("newtab-add-card"));
+            overlay_glass::popup(egui::Popup::menu(&add), ui.ctx(), |ui| {
+                for kind in Kind::ALL {
+                    let available = placed.iter().all(|widget| widget.kind != kind);
+                    if ui
+                        .add_enabled(available, egui::Button::new(kind.label()))
+                        .clicked()
+                        && widgets::add(&mut placed, kind, columns)
+                    {
+                        save_widgets(chrome, &placed, actions);
+                        ui.close();
+                    }
+                }
+            });
+            if ui.button(tr("common-done")).clicked() {
+                ui.ctx().data_mut(|data| data.remove::<bool>(editing_id()));
             }
-            let surface = glass_surface(ui, rect, palette, Role::DashboardCard);
-            let mut card = ui.new_child(
-                UiBuilder::new()
-                    .id_salt(("newtab_card", index + col))
-                    .max_rect(rect),
-            );
-            card.set_clip_rect(ui.clip_rect().intersect(rect));
+        });
+        ui.add_space(8.0);
+    }
+    if placed.is_empty() && !editing {
+        return;
+    }
+    let occupied = placed
+        .iter()
+        .map(|widget| widget.cell.row + widget.span.h)
+        .max()
+        .unwrap_or(0);
+    let rows = if editing {
+        (occupied + 3).min(widgets::ROWS)
+    } else {
+        occupied
+    };
+    let cell = (width - GAP * f32::from(columns - 1)) / f32::from(columns);
+    let height = cell * f32::from(rows) + GAP * f32::from(rows.saturating_sub(1));
+    let (board, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let grid = Metrics {
+        rows,
+        ..Metrics::new(board, columns, cell, GAP)
+    };
+    let mut change = None;
+    for (index, widget) in placed.iter().enumerate() {
+        let rect = grid.rect(widget.cell, widget.span);
+        if !ui.is_rect_visible(rect) {
+            continue;
+        }
+        let control = widget.span.h == 1;
+        let role = if control {
+            Role::DashboardControl
+        } else {
+            Role::DashboardCard
+        };
+        let surface = glass_surface(ui, rect, palette, role);
+        let mut card = ui.new_child(
+            UiBuilder::new()
+                .id_salt(("newtab_card", widget.kind))
+                .max_rect(rect),
+        );
+        card.set_clip_rect(ui.clip_rect().intersect(rect));
+        if editing {
+            card.disable();
+            card.set_opacity(ui.opacity());
+        }
+        if control || rect.width() < 126.0 || rect.height() < 108.0 {
+            compact_widget(&card, chrome, palette, rect, *widget, editing, actions);
+        } else {
             let inner = rect.shrink(15.0);
-            match index + col {
-                0 => clock(&card, palette, inner),
-                1 => recent(&card, chrome, palette, inner, actions),
-                2 => pinned(&card, chrome, palette, inner, actions),
-                3 => checklist(&mut card, chrome, palette, inner),
-                4 => pulse(&card, chrome, palette, inner),
-                _ => unreachable!(),
+            match widget.kind {
+                Kind::Clock => clock(&card, palette, inner),
+                Kind::Recent => recent(&card, chrome, palette, inner, actions),
+                Kind::Pinned => pinned(&card, chrome, palette, inner, actions),
+                Kind::Checklist => checklist(&mut card, chrome, palette, inner),
+                Kind::Workspace => pulse(&card, chrome, palette, inner),
             }
-            surface.finish(ui, rect, Role::DashboardCard);
         }
-        index += count;
-        if index < 5 {
-            ui.add_space(GAP);
+        if editing {
+            change = edit_widget(ui, palette, grid, &placed, index).or(change);
         }
+        surface.finish(ui, rect, role);
+    }
+    if let Some(next) = change {
+        save_widgets(chrome, &next, actions);
     }
 }
 
+fn save_widgets(chrome: &mut ChromeContext, widgets: &[Widget], actions: &mut Vec<UiAction>) {
+    chrome.settings.new_tab_widgets = widgets.to_vec();
+    actions.push(UiAction::PersistSettings);
+}
+
+fn edit_widget(
+    ui: &Ui,
+    palette: &Palette,
+    grid: Metrics,
+    placed: &[Widget],
+    index: usize,
+) -> Option<Vec<Widget>> {
+    let widget = placed[index];
+    let rect = grid.rect(widget.cell, widget.span);
+    let compact = widget.span.w == 1 || widget.span.h == 1;
+    let close = if compact {
+        Rect::from_min_size(rect.right_top() + vec2(-22.0, 2.0), vec2(20.0, 20.0))
+    } else {
+        Rect::from_min_size(rect.right_top() + vec2(-27.0, 8.0), vec2(22.0, 22.0))
+    };
+    let remove = tr("newtab-take-this-card-off");
+    draw_icon(ui, close.center(), Icon::Close, palette.text);
+    if button(
+        ui,
+        close,
+        ("newtab_remove_widget", widget.kind),
+        remove,
+        palette,
+    )
+    .on_hover_text(remove)
+    .clicked()
+    {
+        return Some(
+            placed
+                .iter()
+                .copied()
+                .filter(|other| other.kind != widget.kind)
+                .collect(),
+        );
+    }
+
+    let grip = if widget.span.w == 1 {
+        close.translate(vec2(rect.left() + 2.0 - close.left(), 0.0))
+    } else {
+        close.translate(vec2(-24.0, 0.0))
+    };
+    let resize = Rect::from_min_size(
+        pos2(close.left(), rect.bottom() - close.width() - 2.0),
+        close.size(),
+    );
+    let move_label = tr("newtab-widget-options");
+    let resize_label = tr("newtab-resize-widget");
+    let drag = ui.interact(
+        grip,
+        ui.scope_id().with(("move_widget", widget.kind)),
+        Sense::click_and_drag(),
+    );
+    drag.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, move_label));
+    let corner = ui.interact(
+        resize,
+        ui.scope_id().with(("resize_widget", widget.kind)),
+        Sense::drag(),
+    );
+    draw_icon(ui, grip.center(), Icon::DragHandle, palette.text);
+    draw_icon(ui, resize.center(), Icon::Resize, palette.text);
+    let drag = drag
+        .on_hover_cursor(CursorIcon::Grab)
+        .on_hover_text(tr("newtab-drag-widget"));
+    let corner = corner
+        .on_hover_cursor(CursorIcon::ResizeNwSe)
+        .on_hover_text(resize_label);
+
+    let mut change = None;
+    overlay_glass::popup(egui::Popup::menu(&drag), ui.ctx(), |ui| {
+        for (label, col, row) in [
+            ("newtab-move-left", -1, 0),
+            ("newtab-move-right", 1, 0),
+            ("newtab-move-up", 0, -1),
+            ("newtab-move-down", 0, 1),
+        ] {
+            let candidate = Widget {
+                cell: Cell::new(
+                    widget.cell.col.saturating_add_signed(col),
+                    widget.cell.row.saturating_add_signed(row),
+                ),
+                ..widget
+            };
+            let next = widgets::reposition(placed, index, candidate, grid.columns, grid.rows);
+            if ui
+                .add_enabled(next.is_some(), egui::Button::new(tr(label)))
+                .clicked()
+            {
+                change = next;
+                ui.close();
+            }
+        }
+        ui.separator();
+        for (span, label) in widgets::SIZES {
+            let candidate = Widget { span, ..widget };
+            let next = widgets::reposition(placed, index, candidate, grid.columns, grid.rows);
+            if ui
+                .add_enabled(
+                    next.is_some(),
+                    egui::Button::new(tr(label)).selected(span == widget.span),
+                )
+                .clicked()
+            {
+                change = next;
+                ui.close();
+            }
+        }
+    });
+    for (response, resizing) in [(drag, false), (corner, true)] {
+        let delta = if let Some(delta) = response.total_drag_delta() {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(response.id, delta));
+            delta
+        } else if response.drag_stopped() {
+            ui.ctx()
+                .data_mut(|data| data.remove_temp::<egui::Vec2>(response.id))
+                .unwrap_or_default()
+        } else {
+            continue;
+        };
+        let mut candidate = widget;
+        if resizing {
+            let stride = grid.cell + egui::Vec2::splat(GAP);
+            let steps = delta / stride;
+            if steps.x.abs().max(steps.y.abs()) < 0.5 {
+                continue;
+            }
+            let size = vec2(f32::from(widget.span.w), f32::from(widget.span.h)) + steps;
+            let Some(span) = widgets::snap_size(
+                size,
+                grid.columns - widget.cell.col,
+                grid.rows - widget.cell.row,
+            ) else {
+                continue;
+            };
+            candidate.span = span;
+        } else {
+            candidate.cell = grid.cell_at(rect.min + delta, widget.span);
+        }
+        if let Some(next) = widgets::reposition(placed, index, candidate, grid.columns, grid.rows) {
+            if response.drag_stopped() {
+                change = Some(next);
+            } else {
+                ui.ctx()
+                    .layer_painter(egui::LayerId::new(egui::Order::Foreground, response.id))
+                    .with_clip_rect(ui.clip_rect())
+                    .rect_stroke(
+                        grid.rect(candidate.cell, candidate.span),
+                        Role::DashboardCard.radius(),
+                        Stroke::new(2.0, palette.accent),
+                        StrokeKind::Inside,
+                    );
+            }
+        }
+    }
+    change
+}
+
 fn clock(ui: &Ui, palette: &Palette, rect: Rect) {
-    let now = jiff::ZonedDateTime::now();
+    let now = local_clock(ui);
+    let date_top = rect.height() - 25.0;
+    let time_height = date_top - 25.0;
     heading(ui, rect, palette, Icon::Clock, tr("newtab-clock"));
     text(
         ui,
-        band(rect, 35.0, 67.0),
+        band(rect, 22.0, time_height),
         &now.strftime("%H:%M").to_string(),
-        55.0,
+        (time_height - 5.0).clamp(20.0, 55.0),
         palette.text,
     );
     text(
         ui,
-        band(rect, 115.0, 24.0),
+        band(rect, date_top, 24.0),
         &crate::dashboard::calendar_date(&now, false),
         13.0,
         palette.text_muted,
     );
+}
+
+fn local_clock(ui: &Ui) -> jiff::ZonedDateTime {
+    let now = jiff::ZonedDateTime::now();
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_secs((60 - now.second()) as u64));
+    now
+}
+
+fn compact_widget(
+    ui: &Ui,
+    chrome: &mut ChromeContext,
+    palette: &Palette,
+    rect: Rect,
+    widget: Widget,
+    editing: bool,
+    actions: &mut Vec<UiAction>,
+) {
+    let (glyph, value, icon, action) = match widget.kind {
+        Kind::Clock => (
+            Icon::Clock,
+            local_clock(ui).strftime("%H:%M").to_string(),
+            None,
+            None,
+        ),
+        Kind::Recent => {
+            let last = chrome.library.history.last();
+            (
+                Icon::Recent,
+                last.map_or("", |visit| {
+                    crate::ui::display_name(&visit.title, &visit.url)
+                })
+                .to_owned(),
+                last.and_then(|visit| chrome.saved_favicons.get(ui.ctx(), &visit.url)),
+                last.map(|visit| UiAction::Navigate(visit.url.clone())),
+            )
+        },
+        Kind::Pinned => {
+            let pin = chrome
+                .browser
+                .workspaces
+                .iter()
+                .flat_map(|space| &space.tabs)
+                .find(|tab| tab.pinned);
+            (
+                Icon::Pin,
+                pin.map_or("", |tab| crate::ui::display_name(&tab.title, &tab.url))
+                    .to_owned(),
+                pin.and_then(|tab| chrome.tab_icon(ui.ctx(), tab)),
+                pin.map(|tab| UiAction::SelectTab(tab.id)),
+            )
+        },
+        Kind::Checklist => (
+            Icon::Todo,
+            format!(
+                "{}/{}",
+                chrome.library.tasks.iter().filter(|task| task.done).count(),
+                chrome.library.tasks.len()
+            ),
+            None,
+            None,
+        ),
+        Kind::Workspace => (
+            Icon::TrendUp,
+            chrome
+                .browser
+                .workspaces
+                .get(chrome.browser.active_workspace)
+                .map_or("", |space| space.name.as_str())
+                .to_owned(),
+            None,
+            None,
+        ),
+    };
+    let title = widget.kind.label();
+    let label = if value.is_empty() {
+        title.to_owned()
+    } else {
+        format!("{title} · {value}")
+    };
+    let checklist = widget.kind == Kind::Checklist;
+    if action.is_some() || checklist {
+        let response = button(ui, rect, ("newtab_compact", widget.kind), &label, palette)
+            .on_hover_text(&label);
+        if let Some(action) = action
+            && response.clicked()
+        {
+            actions.push(action);
+        }
+        if checklist {
+            overlay_glass::popup(egui::Popup::menu(&response).width(280.0), ui.ctx(), |ui| {
+                let (bounds, _) = ui.allocate_exact_size(vec2(280.0, 148.0), Sense::hover());
+                self::checklist(ui, chrome, palette, bounds);
+            });
+        }
+    } else {
+        ui.interact(rect, ui.scope_id().with("compact_summary"), Sense::hover())
+            .on_hover_text(label);
+    }
+    let horizontal = rect.width() >= rect.height() * 1.5;
+    let icon_at = if editing && widget.span.w == 1 {
+        rect.center()
+    } else if horizontal {
+        rect.left_center() + vec2(20.0, 0.0)
+    } else {
+        rect.center_top() + vec2(0.0, rect.height() * 0.32)
+    };
+    if let Some(icon) = icon {
+        icon.paint(
+            ui.painter(),
+            Rect::from_center_size(icon_at, vec2(19.0, 19.0)),
+            palette.dark,
+            1.0,
+        );
+    } else {
+        draw_icon(ui, icon_at, glyph, palette.accent);
+    }
+    if editing && widget.span.w == 1 {
+        return;
+    }
+    if horizontal {
+        let end = rect.right() - if editing { 42.0 } else { 12.0 };
+        let labels = rect.with_min_x(rect.left() + 35.0).with_max_x(end);
+        if value.is_empty() {
+            text(ui, labels, title, 12.5, palette.text);
+        } else {
+            let mid = labels.center().y;
+            text(ui, labels.with_max_y(mid), title, 10.0, palette.text_muted);
+            text(ui, labels.with_min_y(mid), &value, 13.0, palette.text);
+        }
+    } else {
+        let label = if value.is_empty() { title } else { &value };
+        let bounds = rect.shrink2(vec2(5.0, 0.0));
+        centered_text(
+            ui,
+            band(bounds, rect.height() * 0.5, rect.height() * 0.34),
+            label,
+            12.0,
+            palette.text,
+        );
+    }
 }
 
 fn recent(
@@ -579,16 +1055,18 @@ fn recent(
 ) {
     heading(ui, rect, palette, Icon::Recent, tr("newtab-recent"));
     let mut shown = std::collections::HashSet::with_capacity(3);
+    let dense = rect.height() < 137.0;
+    let (top, step) = if dense { (24.0, 23.0) } else { (35.0, 37.0) };
     for (index, visit) in chrome
         .library
         .history
         .iter()
         .rev()
         .filter(|visit| shown.insert(visit.url.as_str()))
-        .take(3)
+        .take(((rect.height() - top) / step).floor().max(1.0) as usize)
         .enumerate()
     {
-        let row = band(rect, 35.0 + index as f32 * 37.0, 35.0);
+        let row = band(rect, top + index as f32 * step, step - 2.0);
         let title = crate::ui::display_name(&visit.title, &visit.url);
         if button(ui, row, ("newtab_visit", index), title, palette)
             .on_hover_text(title)
@@ -604,14 +1082,18 @@ fn recent(
         let labels = row
             .with_min_x(row.left() + 30.0)
             .with_max_x(row.right() - 4.0);
-        text(ui, band(labels, 1.0, 18.0), title, 12.5, palette.text);
-        text(
-            ui,
-            band(labels, 18.0, 14.0),
-            &crate::ui::host_of(&visit.url),
-            10.5,
-            palette.text_muted,
-        );
+        if dense {
+            text(ui, labels, title, 12.5, palette.text);
+        } else {
+            text(ui, band(labels, 1.0, 18.0), title, 12.5, palette.text);
+            text(
+                ui,
+                band(labels, 18.0, 14.0),
+                &crate::ui::host_of(&visit.url),
+                10.5,
+                palette.text_muted,
+            );
+        }
     }
     if shown.is_empty() {
         text(
@@ -639,10 +1121,12 @@ fn pinned(
         .flat_map(|space| &space.tabs)
         .filter(|tab| tab.pinned);
     let mut count = 0;
-    let width = (rect.width() - 16.0) / 3.0;
-    for tab in tabs.take(6) {
-        let x = count % 3;
-        let y = count / 3;
+    let columns = ((rect.width() + 8.0) / 72.0).floor().max(1.0) as usize;
+    let rows = ((rect.height() - 31.0) / 55.0).floor().max(1.0) as usize;
+    let width = (rect.width() - 8.0 * (columns - 1) as f32) / columns as f32;
+    for tab in tabs.take(columns * rows) {
+        let x = count % columns;
+        let y = count / columns;
         let tile = Rect::from_min_size(
             rect.min + vec2((width + 8.0) * x as f32, 37.0 + 55.0 * y as f32),
             vec2(width, 49.0),
@@ -657,23 +1141,18 @@ fn pinned(
             actions.push(UiAction::SelectTab(tab.id));
         }
         let mark = tile.center_top() + vec2(0.0, 15.0);
-        if let Some(icon) = chrome.favicons.get(&tab.id) {
-            ui.painter().image(
-                icon.id(),
+        if let Some(icon) = chrome.tab_icon(ui.ctx(), tab) {
+            icon.paint(
+                ui.painter(),
                 Rect::from_center_size(mark, vec2(16.0, 16.0)),
-                Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
+                palette.dark,
+                1.0,
             );
         } else {
             draw_icon(ui, mark, Icon::Globe, palette.text_muted);
         }
-        text(
-            ui,
-            band(tile.shrink2(vec2(5.0, 0.0)), 25.0, 16.0),
-            title,
-            10.5,
-            palette.text,
-        );
+        let label = band(tile.shrink2(vec2(5.0, 0.0)), 25.0, 16.0);
+        centered_text(ui, label, title, 10.5, palette.text);
         count += 1;
     }
     if count == 0 {
@@ -689,7 +1168,7 @@ fn pinned(
 
 fn checklist(ui: &mut Ui, chrome: &mut ChromeContext, palette: &Palette, rect: Rect) {
     heading(ui, rect, palette, Icon::Todo, tr("newtab-checklist"));
-    let list = band(rect, 30.0, 82.0);
+    let list = band(rect, 30.0, rect.height() - 68.0);
     let mut body = ui.new_child(UiBuilder::new().id_salt("newtab_task_list").max_rect(list));
     body.set_clip_rect(ui.clip_rect().intersect(list));
     if chrome.library.tasks.is_empty() {
@@ -767,7 +1246,7 @@ fn checklist(ui: &mut Ui, chrome: &mut ChromeContext, palette: &Palette, rect: R
         ui.ctx().request_repaint();
     }
 
-    let input = band(rect, 117.0, 32.0);
+    let input = band(rect, rect.height() - 32.0, 32.0);
     let id = Id::unique("newtab_task_draft");
     let mut draft = ui
         .ctx()
@@ -830,22 +1309,29 @@ fn pulse(ui: &Ui, chrome: &ChromeContext, palette: &Palette, rect: Rect) {
         ),
     ];
     let width = (rect.width() - 14.0) / 3.0;
+    let height = (rect.height() - 52.0).clamp(24.0, 77.0);
     for (index, (value, label)) in stats.into_iter().enumerate() {
         let box_rect = Rect::from_min_size(
-            rect.min + vec2((width + 7.0) * index as f32, 61.0),
-            vec2(width, 77.0),
+            rect.min + vec2((width + 7.0) * index as f32, 52.0),
+            vec2(width, height),
         );
         ui.painter()
             .rect_filled(box_rect, 12, palette.surface_hover.gamma_multiply(0.44));
         let body = box_rect.shrink2(vec2(8.0, 0.0));
         text(
             ui,
-            band(body, 8.0, 37.0),
+            band(body, 2.0, height - 19.0),
             &value.to_string(),
-            28.0,
+            (height - 22.0).clamp(14.0, 28.0),
             palette.text,
         );
-        text(ui, band(body, 48.0, 21.0), label, 11.0, palette.text_muted);
+        text(
+            ui,
+            band(body, height - 19.0, 17.0),
+            label,
+            10.5,
+            palette.text_muted,
+        );
     }
 }
 
@@ -857,7 +1343,10 @@ fn glass_surface(ui: &Ui, rect: Rect, palette: &Palette, role: Role) -> Surface 
             rect,
             palette,
             Glass::tier(Tier::Card)
-                .radius_exact(role.radius())
+                .radius_exact(
+                    role.radius()
+                        .min((rect.width().min(rect.height()) * 0.5) as u8),
+                )
                 .border(palette.border)
                 .opaque(palette.surface),
         );
@@ -921,4 +1410,13 @@ fn draw_icon(ui: &Ui, center: egui::Pos2, icon: Icon, ink: egui::Color32) {
 
 fn text(ui: &Ui, rect: Rect, label: &str, size: f32, ink: egui::Color32) {
     overlay_glass::row_label(ui, rect, label, FontId::proportional(size), ink);
+}
+
+fn centered_text(ui: &Ui, rect: Rect, label: &str, size: f32, ink: Color32) {
+    let mut job =
+        egui::text::LayoutJob::simple_singleline(label.to_owned(), FontId::proportional(size), ink);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width().max(0.0));
+    let galley = ui.painter().layout_job(job);
+    ui.painter()
+        .galley(rect.center() - galley.size() * 0.5, galley, ink);
 }

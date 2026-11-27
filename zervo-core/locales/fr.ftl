@@ -125,8 +125,6 @@ settings-off-nothing-animates-what-reduce-motion-should = Désactive toutes les 
 settings-under-a-tenth-of-a-second-reads = En dessous d’un dixième de seconde, la transition ressemble à un flash. Une surface doit se mettre en place progressivement.
 settings-slow-enough-to-notice-you-are-waiting = Les transitions sont assez lentes pour que l’attente se fasse sentir.
 settings-what-shipped-is-0-14-hovers-selections = La valeur par défaut est de 0,14 seconde. Elle s’applique aux survols, aux sélections, aux changements de forme et aux fondus.
-settings-sidebar-specular-sweep = Reflet animé lors des transitions de la barre latérale
-settings-sidebar-specular-sweep-help = Un bref reflet apparaît quand la barre latérale s’ancre ou se détache. Les animations doivent être activées.
 settings-load-in-the-address-pill-not-a = Afficher la progression du chargement dans le champ d’adresse
 settings-gives-the-pill-back-the-width-it = Affiche la progression du chargement de la page dans le champ d’adresse.
 settings-chrome = Interface du navigateur
@@ -563,7 +561,8 @@ settings-wallpaper-credit = Image de { $credit }, provenant de { $source }.
 ## Actions des gestes
 
 gesture-toggle-sidebar = Afficher ou masquer la barre latérale
-gesture-widget-shelf = Volet des widgets
+gesture-refresh-page = Actualiser la page
+settings-pull-to-refresh = Tirez vers le bas depuis le haut d’une page, puis relâchez pour l’actualiser.
 gesture-next-workspace = Espace suivant
 gesture-previous-workspace = Espace précédent
 
@@ -626,13 +625,10 @@ sidebar-unload-pin-title = Décharger « { $title } »
 
 layout-customize = Personnaliser la disposition
 layout-sidebar-sections = Sections de la barre latérale
-layout-reorder-sections = Les onglets épinglés restent au-dessus des dossiers. Faites glisser les autres sections ou utilisez les flèches pour les réorganiser.
 layout-sidebar-tools = Outils de la barre latérale
 layout-show-site-icons = Afficher les icônes des sites dans la barre latérale
 layout-widget-shelf = Volet des widgets
 layout-reset-sidebar = Rétablir la barre latérale par défaut
-layout-move-up = Monter « { $name } »
-layout-move-down = Descendre « { $name } »
 
 setup-switch-between-layouts = Passez à tout moment du mode Barre latérale au mode Page entière et inversement.
 settings-reset-sidebar-widgets-and-new-tab = Rétablit les sections et la largeur de la barre latérale, les widgets du volet et le tableau du nouvel onglet.

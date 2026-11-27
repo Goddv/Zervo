@@ -455,13 +455,15 @@ as a draft unless you ask otherwise, which is how to rehearse one.
 
 ### Cutting a release
 
-1. Follow the [release version rules](UPDATES.md#release-versions) to bump the
+1. Refresh the [Servo pin and patches](SERVO.md#reproduce-the-pinned-local-build)
+   against the current upstream main branch.
+2. Follow the [release version rules](UPDATES.md#release-versions) to bump the
    application and core versions, refresh `Cargo.lock`, and add a
    `CHANGELOG.md` entry. Update the AppStream entry for releases that include
    Linux packages.
-2. Commit and push the matching `heion-v<version>` tag.
-3. Watch. A cold build is hours; a warm one considerably less.
-4. Check the draft, then let it publish — or publish it yourself if you ran the
+3. Commit and push the matching `heion-v<version>` tag.
+4. Watch. A cold build is hours; a warm one considerably less.
+5. Check the draft, then let it publish — or publish it yourself if you ran the
    workflow by hand.
 
 ### What CI checks before any of that

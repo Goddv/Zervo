@@ -4,6 +4,9 @@ Thanks for looking. Heion is small and there is a lot of low-hanging fruit.
 
 ## Getting set up
 
+At the start of a development cycle, check the latest Servo main revision and
+refresh the pin as described in [docs/SERVO.md](docs/SERVO.md).
+
 ```bash
 cargo build --profile dev-fast && ./target/dev-fast/heion
 ```

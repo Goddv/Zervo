@@ -89,42 +89,6 @@ impl Layout {
     }
 }
 
-/// Sections in the scrollable part of the sidebar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SidebarSection {
-    Favourites,
-    Pinned,
-    Tabs,
-}
-
-impl SidebarSection {
-    pub const ALL: [Self; 3] = [Self::Favourites, Self::Pinned, Self::Tabs];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Favourites => tr("common-favourites"),
-            Self::Pinned => tr("sidebar-pinned-tabs"),
-            Self::Tabs => tr("sidebar-open-tabs"),
-        }
-    }
-
-    pub fn visible(self, settings: &Settings) -> bool {
-        match self {
-            Self::Favourites => settings.show_essentials,
-            Self::Pinned => settings.show_pinned_section,
-            Self::Tabs => settings.show_open_tabs,
-        }
-    }
-
-    pub fn set_visible(self, settings: &mut Settings, visible: bool) {
-        match self {
-            Self::Favourites => settings.show_essentials = visible,
-            Self::Pinned => settings.show_pinned_section = visible,
-            Self::Tabs => settings.show_open_tabs = visible,
-        }
-    }
-}
-
 /// What a freshly opened tab shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NewTabPage {
@@ -210,13 +174,16 @@ pub struct Settings {
     pub new_tab_background: NewTabBackground,
     pub new_tab_animate_background: bool,
     pub new_tab_show_widgets: bool,
+    #[serde(rename = "new_tab_grid_widgets")]
+    pub new_tab_widgets: Vec<crate::newtab_widgets::Widget>,
+    #[serde(rename = "new_tab_widgets", skip_serializing)]
+    legacy_new_tab_widgets: Option<Vec<crate::newtab_widgets::Widget>>,
     /// Show tab close buttons always, instead of only on hover.
     pub always_show_tab_close: bool,
     pub show_forward_button: bool,
     pub show_reload_button: bool,
     /// Show global favourites in the sidebar.
     pub show_essentials: bool,
-    pub sidebar_sections: [SidebarSection; 3],
     pub show_pinned_section: bool,
     pub show_tab_favicons: bool,
     pub show_open_tabs: bool,
@@ -342,7 +309,6 @@ fn use_native_material(appearance: &mut crate::theme::Appearance) {
         },
         gap: appearance.gap,
         motion: appearance.motion,
-        sweep: appearance.sweep,
         pill_progress: appearance.pill_progress,
         candy: appearance.candy,
         workspace_accent: appearance.workspace_accent,
@@ -364,11 +330,12 @@ impl Default for Settings {
             new_tab_background: NewTabBackground::Grid,
             new_tab_animate_background: true,
             new_tab_show_widgets: true,
+            new_tab_widgets: crate::newtab_widgets::defaults(),
+            legacy_new_tab_widgets: None,
             always_show_tab_close: false,
             show_forward_button: true,
             show_reload_button: true,
             show_essentials: true,
-            sidebar_sections: SidebarSection::ALL,
             show_pinned_section: true,
             show_tab_favicons: true,
             show_open_tabs: true,
@@ -414,10 +381,9 @@ impl Settings {
     }
 
     pub fn reset_sidebar_sections(&mut self) {
-        self.sidebar_sections = SidebarSection::ALL;
-        for section in SidebarSection::ALL {
-            section.set_visible(self, true);
-        }
+        self.show_essentials = true;
+        self.show_pinned_section = true;
+        self.show_open_tabs = true;
         self.show_sidebar_tools = true;
         self.show_sidebar_widgets = true;
     }
@@ -459,13 +425,6 @@ pub fn load() -> Settings {
 fn migrate(settings: &mut Settings) {
     use crate::theme::{Preset, Translucency};
 
-    if !SidebarSection::ALL
-        .iter()
-        .all(|section| settings.sidebar_sections.contains(section))
-    {
-        settings.sidebar_sections = SidebarSection::ALL;
-    }
-
     if settings.appearance.preset == Some(Preset::LiquidGlass)
         && settings.appearance.translucency == Translucency::Frosted
         && settings.appearance.blur == 0.0
@@ -474,6 +433,9 @@ fn migrate(settings: &mut Settings) {
     }
 
     crate::dashboard::normalize_layout(&mut settings.sidebar_widgets);
+    if let Some(widgets) = settings.legacy_new_tab_widgets.take() {
+        settings.new_tab_widgets = crate::newtab_widgets::migrate_wide_cells(widgets);
+    }
 
     let Some(translucency) = settings.legacy_translucency.take() else {
         return;
@@ -671,16 +633,15 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_layout_repairs_duplicate_sections_and_keeps_legacy_visibility() {
+    fn sidebar_layout_keeps_legacy_visibility() {
         let mut settings: Settings = serde_json::from_str(
             r#"{"show_essentials":false,"sidebar_sections":["Pinned","Pinned","Tabs"]}"#,
         )
         .unwrap();
         migrate(&mut settings);
-        assert_eq!(settings.sidebar_sections, SidebarSection::ALL);
-        assert!(!SidebarSection::Favourites.visible(&settings));
+        assert!(!settings.show_essentials);
         settings.reset_sidebar_sections();
-        assert!(SidebarSection::Favourites.visible(&settings));
+        assert!(settings.show_essentials);
     }
 }
 
@@ -702,7 +663,6 @@ mod first_run_tests {
         assert_eq!(settings.search_engine, SearchEngine::Google);
         assert_eq!(settings.appearance.spine, crate::theme::Spine::Favicons);
         assert_eq!(settings.appearance.candy, 0.10);
-        assert_eq!(settings.sidebar_sections[0], SidebarSection::Pinned);
         assert!(!settings.show_pinned_section);
         assert!(settings.show_tab_favicons);
     }

@@ -47,16 +47,23 @@ impl Vibrancy {
     pub fn update_window_backdrop(
         &self,
         visible: bool,
-        new_tab_glass: bool,
+        new_tab_backdrop: bool,
         palette: crate::theme::Palette,
     ) {
         use crate::theme::SystemBackdrop;
-        let material =
-            if !new_tab_glass && palette.translucency.backdrop() == SystemBackdrop::Opaque {
-                NSVisualEffectMaterial::WindowBackground
-            } else {
-                NSVisualEffectMaterial::UnderWindowBackground
-            };
+        // One system material samples the desktop on a transparent New Tab.
+        // A visual-effect view under Liquid Glass would blur its input twice.
+        let native_liquid = new_tab_backdrop && visible;
+        if self.view.isHidden() != native_liquid {
+            self.view.setHidden(native_liquid);
+        }
+        let material = if new_tab_backdrop {
+            NSVisualEffectMaterial::Sidebar
+        } else if palette.translucency.backdrop() == SystemBackdrop::Opaque {
+            NSVisualEffectMaterial::WindowBackground
+        } else {
+            NSVisualEffectMaterial::UnderWindowBackground
+        };
         if self.view.material() != material {
             self.view.setMaterial(material);
         }

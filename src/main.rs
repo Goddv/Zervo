@@ -46,7 +46,7 @@ mod favicons;
 // and the tests can run on a pull request without compiling Servo first.
 // Re-exported at the root rather than referred to by its own name, so every
 // `crate::theme::…` in the tree carries on resolving and nothing had to move.
-pub use zervo_core::{gestures, glass, grid, l10n, net, store, theme};
+pub use zervo_core::{gestures, glass, grid, l10n, net, newtab_widgets, store, theme};
 // Stays here rather than in the core crate: it reads the window's live GL
 // context, which is the half of the browser the core crate exists to avoid.
 mod gpu;
@@ -62,6 +62,7 @@ mod notifications;
 mod overlay_glass;
 mod passwords;
 mod phosphor;
+mod pull_refresh;
 mod transition;
 mod trouble;
 mod updates;
@@ -206,7 +207,7 @@ struct RunningApp {
     /// and a second borrow there would be a panic rather than a colour.
     space: usize,
     /// Favicon textures by tab, rebuilt when the engine reports changes.
-    favicons: HashMap<TabId, egui::TextureHandle>,
+    favicons: HashMap<TabId, favicons::LiveIcon>,
     saved_favicons: favicons::Store,
     wallpaper: newtab_wallpaper::State,
     /// Whether the settings page currently covers the content area.
@@ -229,6 +230,7 @@ struct RunningApp {
     controls_open: bool,
     /// Accumulates scroll events into trackpad swipes.
     swipe: gestures::Recognizer,
+    pull_refresh: Option<pull_refresh::Pending>,
     /// Whichever side the pointer went down on keeps it until the button
     /// comes back up, wherever it has travelled to since.
     ///
@@ -670,6 +672,7 @@ impl ApplicationHandler<WakerEvent> for App {
             page_rect_points: egui::Rect::ZERO,
             controls_open: false,
             swipe: gestures::Recognizer::default(),
+            pull_refresh: None,
             pointer_owner: PointerOwner::Free,
             library_saved_at: std::time::Instant::now(),
             pending_repaint_at: None,
@@ -733,6 +736,9 @@ impl ApplicationHandler<WakerEvent> for App {
         };
         match event {
             WakerEvent::Engine => app.state.servo.spin_event_loop(),
+            WakerEvent::PullRefreshChecked { stroke, at_top } => {
+                app.resolve_pull_refresh(stroke, at_top);
+            },
             #[cfg(target_os = "macos")]
             WakerEvent::SystemAppearanceChanged => {
                 app.update_system_theme(system_is_dark(&app.state.window));
@@ -916,6 +922,7 @@ impl RunningApp {
             if !focused {
                 self.pointer_owner = PointerOwner::Free;
                 self.leave_webview();
+                self.cancel_pull_refresh();
             }
             if let Some(webview) = state.active_webview() {
                 webview.set_focused(*focused);
@@ -953,9 +960,22 @@ impl RunningApp {
                 Some(_) => gestures::Region::Content,
                 None => gestures::Region::Blocked,
             };
-            if let Some((direction, origin)) =
-                self.swipe
-                    .feed(step / scale, *phase, std::time::Instant::now(), region)
+            let previous_stroke = self.swipe.stroke_start();
+            let previous_progress = self.swipe.pull_progress();
+            let flick = self
+                .swipe
+                .feed(step / scale, *phase, std::time::Instant::now(), region);
+            self.update_pull_refresh(
+                *phase,
+                previous_stroke,
+                previous_progress,
+                pointer_on_page
+                    && region == gestures::Region::Content
+                    && matches!(delta, MouseScrollDelta::PixelDelta(_))
+                    && self.modifiers.is_empty(),
+                scale,
+            );
+            if let Some((direction, origin)) = flick
                 && region != gestures::Region::Blocked
             {
                 self.apply_gesture(self.settings.gestures.action(direction, origin));
@@ -1497,6 +1517,7 @@ impl RunningApp {
         if self.egui_glow.egui_ctx.theme() != widget_theme {
             self.egui_glow.egui_ctx.set_theme(widget_theme);
         }
+        let pull_progress = self.visible_pull_progress();
         self.egui_glow.run(&state.window, |root| {
             let settings = &mut self.settings;
             let mut browser = state.browser.borrow_mut();
@@ -1554,6 +1575,7 @@ impl RunningApp {
                 },
             };
             let output = ui::draw(root, &mut chrome);
+            pull_refresh::paint(root, output.content_rect, &palette, pull_progress);
             drop(browser);
             drop(controls);
             drop(library);
@@ -1919,7 +1941,13 @@ impl RunningApp {
             if let Some((ref native, zoom, _)) = native_geometry
                 && let Some(backdrop) = &self._vibrancy
             {
-                backdrop.update_sidebar(native.sidebar.filter(|_| !native.sidebar_captured), zoom);
+                let shared_frost = native.new_tab_backdrop && !native.window_backdrop;
+                backdrop.update_sidebar(
+                    native
+                        .sidebar
+                        .filter(|_| !native.sidebar_captured && !shared_frost),
+                    zoom,
+                );
                 backdrop.update_address(native.address, zoom);
             }
             if let Some(backdrop) = &self._vibrancy {
@@ -2746,17 +2774,7 @@ impl RunningApp {
                     forward: matches!(action, Action::NextWorkspace),
                 });
             },
-            Action::ToggleShelf => {
-                if !self.settings.show_sidebar_widgets {
-                    return;
-                }
-                self.settings.sidebar_shelf_height = if self.settings.sidebar_shelf_height > 1.0 {
-                    0.0
-                } else {
-                    dashboard::open_height(&self.settings.sidebar_widgets)
-                };
-                self.settings.save();
-            },
+            Action::Reload => self.apply_action(UiAction::Reload),
         }
         state.window.request_redraw();
     }
@@ -2897,11 +2915,12 @@ impl RunningApp {
                 continue;
             };
             let texture = favicons::upload(&self.egui_glow.egui_ctx, &image);
-            if let Some(url) = webview.url() {
-                self.saved_favicons
-                    .remember(url.as_str(), &image, texture.clone());
+            if let Some(url) = webview.url()
+                && let Some(icon) = favicons::LiveIcon::new(url.as_str(), texture.clone())
+            {
+                self.saved_favicons.remember(url.as_str(), &image, texture);
+                self.favicons.insert(tab.id, icon);
             }
-            self.favicons.insert(tab.id, texture);
         }
     }
 }
@@ -3001,6 +3020,10 @@ struct Waker(winit::event_loop::EventLoopProxy<WakerEvent>);
 enum WakerEvent {
     /// The engine has something to do; spin its event loop.
     Engine,
+    PullRefreshChecked {
+        stroke: std::time::Instant,
+        at_top: bool,
+    },
     WallpaperLoaded {
         result: Result<image::RgbaImage, newtab_wallpaper::Error>,
         select: bool,

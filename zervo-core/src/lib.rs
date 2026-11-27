@@ -24,5 +24,6 @@ pub mod grid;
 pub mod l10n;
 pub mod morph;
 pub mod net;
+pub mod newtab_widgets;
 pub mod store;
 pub mod theme;
