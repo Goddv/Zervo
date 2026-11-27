@@ -85,6 +85,26 @@ jobs:
           scripts/prepare-servo.sh
           mv ../servo .ci-servo
           sed -i 's|../servo/components/servo|.ci-servo/components/servo|' .cargo/config.toml
+          # Give cargo-deny version constraints for inherited Git dependencies
+          # in the audit checkout. Cargo still uses the same locked revisions.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import tomllib
+
+          locked = tomllib.loads(Path("Cargo.lock").read_text())["package"]
+          versions = {
+              entry["name"]: entry["version"]
+              for entry in locked
+              if entry.get("source", "").startswith("git+https://github.com/servo/stylo?")
+          }
+          manifest = Path(".ci-servo/Cargo.toml")
+          pattern = re.compile(r'(?m)^(\w+) = \{ git = "https://github\.com/servo/stylo"')
+          manifest.write_text(pattern.sub(
+              lambda match: f'{match[1]} = {{ version = "={versions[match[1]]}", git = "https://github.com/servo/stylo"',
+              manifest.read_text(),
+          ))
+          PY
 
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:

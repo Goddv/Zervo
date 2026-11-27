@@ -36,7 +36,7 @@ multiple-versions = "allow"   # Servo's graph guarantees plenty; not news.
 wildcards = "deny"            # A `*` version in our own manifests is.
 
 [[bans.features]]
-crate = "cookie@<0.18.3"
+crate = "cookie:<0.18.3"
 deny = ["private", "secure"]
 
 [licenses]
@@ -71,4 +71,4 @@ confidence-threshold = 0.9
 unknown-registry = "deny"
 # These revisions carry fixes that haven't shipped in the upstream releases.
 unknown-git = "deny"
-allow-git = ["https://github.com/Goddv/servo", "https://github.com/emilk/egui"]
+allow-git = ["https://github.com/Goddv/servo", "https://github.com/emilk/egui", "https://github.com/servo/stylo"]
