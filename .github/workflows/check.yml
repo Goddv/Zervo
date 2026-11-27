@@ -79,12 +79,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Prepare Servo for the audit container
-        # The container mounts this workspace but cannot see its sibling.
+      - name: Prepare Servo for the dependency audit
         run: |
           scripts/prepare-servo.sh
-          mv ../servo .ci-servo
-          sed -i 's|../servo/components/servo|.ci-servo/components/servo|' .cargo/config.toml
           # Give cargo-deny version constraints for inherited Git dependencies
           # in the audit checkout. Cargo still uses the same locked revisions.
           python3 - <<'PY'
@@ -98,7 +95,7 @@ jobs:
               for entry in locked
               if entry.get("source", "").startswith("git+https://github.com/servo/stylo?")
           }
-          manifest = Path(".ci-servo/Cargo.toml")
+          manifest = Path("../servo/Cargo.toml")
           pattern = re.compile(r'(?m)^(\w+) = \{ git = "https://github\.com/servo/stylo"')
           manifest.write_text(pattern.sub(
               lambda match: f'{match[1]} = {{ version = "={versions[match[1]]}", git = "https://github.com/servo/stylo"',
@@ -106,15 +103,20 @@ jobs:
           ))
           PY
 
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          # The action runs in a musl container, which does not have the
-          # toolchain `rust-toolchain.toml` pins — and does not need it, since
-          # this reads `Cargo.lock` and compiles nothing. Saying so keeps a
-          # confusing "toolchain is not installed" error out of a passing log.
-          rust-version: stable
-          arguments: --all-features --locked
-          command: check advisories bans licenses sources
+      - name: Run cargo-deny
+        # Keep Servo in its own workspace outside the Heion checkout.
+        run: |
+          version=0.20.2
+          archive="cargo-deny-$version-x86_64-unknown-linux-musl"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$version/$archive.tar.gz" \
+            --output "$RUNNER_TEMP/$archive.tar.gz"
+          (
+            cd "$RUNNER_TEMP"
+            printf '%s  %s\n' 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f "$archive.tar.gz" | sha256sum --check
+            tar -xf "$archive.tar.gz" "$archive/cargo-deny"
+          )
+          "$RUNNER_TEMP/$archive/cargo-deny" --all-features --locked check advisories bans licenses sources
 
   scripts:
     name: Packaging scripts
