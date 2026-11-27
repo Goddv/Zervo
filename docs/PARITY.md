@@ -57,8 +57,9 @@ this engine version reports — there is still no load-failure callback and no
 certificate hook, which is why the other four pages in `src/trouble.rs` are
 reachable by address and nothing else.
 
-As of 0.1.1: Spaces and tabs restore their order and selection. History and
-Favourites reuse a bounded on-disk favicon cache. **Settings → General →
+As of 0.1.2, Spaces and tabs restore their order and selection. Restored tabs,
+History, Favourites, and New Tab reuse a bounded on-disk favicon cache.
+**Settings → General →
 Browsing data** clears cookies, local storage, and session storage using
 Servo’s site-data manager.
 

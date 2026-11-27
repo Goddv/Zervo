@@ -239,7 +239,7 @@ panel:
 | `workspace_accent` | Take the accent from the active workspace instead of one global choice. |
 | `spine` | What a hidden sidebar leaves at the window's edge: nothing, tab ticks, or favicons. |
 | `align_nav` | Centre the sidebar's nav row on the macOS window controls. |
-| `sweep`, `pill_progress` | The sidebar resize highlight and address field progress. |
+| `pill_progress` | Address field loading progress. |
 
 ### The seam
 
@@ -296,6 +296,11 @@ framebuffer. The chrome paints a thin tint over it. That is why the chrome's
 blur is the system's rather than ours, and why it is at full strength however
 opaque the tint is.
 
+New Tab's Frosted backdrop uses AppKit vibrancy, and Liquid Glass selects the
+native glass window backdrop when available. Both honor Reduce Transparency.
+The Grid backdrop uses the workspace accent for its cursor glow and follows
+Reduce Motion and Animate wallpapers.
+
 **The content card's corners are cut out of the framebuffer**, not painted
 over. The page arrives as a square blit, so its corners have to be
 rounded by something; anything painted over them has to be opaque, and the
@@ -310,7 +315,7 @@ reasoning that what sits above the card is opaque toolbar furniture and an
 opaque patch would therefore match it. It does not: with a translucent
 material the chrome up there is the same thin tint as everywhere else, so the
 mask read as a dark notch hugging the arc — visible on a web page, where the
-card is a blit that needs masking, and never on `zervo://settings` or the new
+card is a blit that needs masking, and never on `heion://settings` or the new
 tab page, which round themselves and are never masked at all.
 
 The window backdrop covers the whole frame, including the top and bottom

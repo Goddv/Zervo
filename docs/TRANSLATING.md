@@ -3,7 +3,8 @@
 Heion uses [Fluent](https://projectfluent.org/fluent/guide/) for its interface.
 Translations are ordinary UTF-8 text files in
 [`zervo-core/locales/`](../zervo-core/locales/). English is the reference
-catalogue. Japanese is a starter translation open to corrections and additions.
+catalogue. French, Japanese, Russian, and Ukrainian are open to corrections
+and additions.
 Every language file is discovered automatically at build time, and an
 incomplete translation safely falls back to English.
 
@@ -31,8 +32,8 @@ sidebar-new-space-name = Espace { $number }
 Work down the section headings in [the English catalogue](../zervo-core/locales/en-US.ftl).
 Start with shared controls, setup, Settings, and the command bar. Continue
 with New Tab, History, Downloads, site prompts, error pages, and software
-updates. New Tab also has labels for wallpaper selection and the dashboard. A
-language can give each site permission prompt its own wording and word order.
+updates. The New Tab catalogue also covers wallpapers, widget names, and the
+widget size menu. Trackpad actions and the pull-to-refresh hint are in Settings.
 
 Heion supplies the copy on its Updates page and in its own update reminders.
 Sparkle supplies the installer dialogs. macOS supplies system permission

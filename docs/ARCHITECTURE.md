@@ -72,21 +72,20 @@ are selected.
 
 Loaded tabs share the window’s offscreen context. Switching shows and focuses
 the selected view and hides the others. The last reference to a view closes it.
-`favicons.rs` stores small thumbnails keyed by HTTP origin. History and
-Favourites read them from disk when a visible row needs an icon.
+`favicons.rs` stores small thumbnails keyed by HTTP origin. Restored tabs,
+History, Favourites, and New Tab reuse cached icons before a page loads.
 
-Internal pages — `zervo://settings`, `zervo://newtab`, `zervo://history`,
-`zervo://downloads`, and the four in `trouble.rs` — are tabs with no `WebView`
-at all; they are drawn by egui in the content rect, and the blit is skipped.
+Internal pages such as `heion://settings`, `heion://newtab`, and
+`heion://history` are drawn by egui directly in the content rect.
 
 The four trouble pages (`unsupported`, `offline`, `certificate`, `notfound`)
 are the ones a load that did not work lands on. Each carries what is known
-about the failure in its own query string — `zervo://unsupported?host=…&
+about the failure in its own query string — `heion://unsupported?host=…&
 detail=…` — rather than in a field beside the tab, for two reasons: the address
 bar shows it, so it has to be something you can type back in; and it means the
 page reads its own address rather than a side channel, which is how the engine
 will hand the detail over on the day it can report one. Today it cannot:
-`WebViewDelegate` in Servo 0.5.0 has no load-failure callback and no
+`WebViewDelegate` has no load-failure callback and no
 certificate hook, so nothing in the tree constructs these addresses
 automatically and `trouble::address` is marked as having no caller yet.
 
@@ -166,6 +165,11 @@ match the chrome beside it exactly. Both are described in
 picker. The dashboard reads the clock, history, pinned tabs, and Spaces locally.
 The checklist persists in the profile alongside history and favourites.
 
+`heion_core::newtab_widgets` handles grid placement, resizing, and overlap
+checks. Older six-column placements migrate on load. The dotted backdrop
+paints the pointer glow in the background layer before the glass surfaces
+sample it. Its trail requests frames until it fades.
+
 `newtab_wallpaper.rs` draws the procedural gradients and prepares custom images
 on a worker before uploading a texture. Imported images are resized and stored
 inside the profile. The Apple Silicon bundle loads the Swift Image Playground
@@ -173,6 +177,13 @@ bridge only when the framework is available.
 Clicking the search capsule sends its bounds with `UiAction::OpenCommandFrom`.
 `ui/command.rs` uses those bounds to animate the search field into place and
 keeps the results scrollable when the window is short.
+
+## Trackpad
+
+The core gesture recognizer reads phased scroll events. `pull_refresh.rs`
+checks the active page and its scroll container before tracking a downward
+pull. It requests a reload on release when the threshold is reached and the
+same page is still active.
 
 ## State and events
 

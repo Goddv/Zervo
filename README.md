@@ -11,7 +11,7 @@
 [![Engine](https://img.shields.io/badge/engine-Servo-informational)](https://servo.org)
 ![Rust](https://img.shields.io/badge/rust-1.100-orange)
 
-[macOS downloads](https://github.com/Goddv/Heion/releases) · [Latest preview builds](https://github.com/Goddv/Heion/actions/workflows/release.yml)
+[Website](https://goddv.github.io/Heion/) · [macOS downloads](https://github.com/Goddv/Heion/releases/latest) · [Preview builds](https://github.com/Goddv/Heion/actions/workflows/release.yml)
 · [Changelog](CHANGELOG.md)
 
 </div>
@@ -24,9 +24,10 @@ built on Servo, an independent web engine written in Rust.
 ## Get Heion
 
 Download the disk image for Apple Silicon or Intel from the
-[latest release](https://github.com/Goddv/Heion/releases/latest). Existing
-updater-enabled installs can update from **Settings → About → Check for
-Updates**. Signed incremental updates keep your profile and saved logins.
+[latest release](https://github.com/Goddv/Heion/releases/latest). Drag Heion
+into Applications before opening it. Existing updater-enabled installs can
+update from **Settings → About → Check for Updates**. Signed incremental
+updates keep your profile and saved logins.
 See [Installation and updates](docs/UPDATES.md).
 
 ## Browse with Spaces
@@ -39,8 +40,12 @@ See [Installation and updates](docs/UPDATES.md).
 - **Sidebar.** Press ⌘S to dock or hide it. In Full Page mode, reveal it by
   moving the pointer to the left edge. **Settings → Layout** controls its
   sections, tools, and widget shelf.
-- **Favourites and History.** Star a page to save it. Search History by
-  title or address. Both lists reuse locally cached website icons.
+- **Favourites and History.** Star a page to save it just below the sidebar
+  address field. Search History by title or address. Restored tabs, favourites,
+  and history reuse locally cached website icons.
+- **Pull to refresh.** At the top of a web page, pull down with two fingers
+  and release when the indicator fills. Change the gesture in
+  **Settings → Layout → Trackpad**.
 - **Browsing data.** **Settings → General → Browsing data** clears cookies,
   session cookies, or cookies and website storage. Use History to clear visits.
 
@@ -49,13 +54,16 @@ See [Installation and updates](docs/UPDATES.md).
 The search capsule expands into the command bar. Pick a search engine on its
 left, or use the sliders in the upper right to open **Customize New Tab**.
 
-- Choose Grid, Frosted, Liquid Glass, or one of three animated wallpapers
-  named Aurora, Tidelight, and Afterglow. Animation follows Reduce Motion and
-  can also be paused here.
+- Grid dots light up around the pointer and leave a short fading trail.
+  Frosted and Liquid Glass use the macOS window backdrop. Aurora, Tidelight,
+  and Afterglow are animated wallpapers. Motion follows Reduce Motion and
+  the **Animate wallpapers** setting.
 - Choose a PNG, JPEG, or WebP image, or create a wallpaper with Apple’s
   Image Playground on a supported Apple Silicon Mac.
-- Show or hide the dashboard with its clock, recent pages, pinned tabs,
-  checklist, and Space counts.
+- Open **Edit widgets** to add, remove, drag, or resize the clock, recent
+  pages, pinned tabs, checklist, and Space counts. Resize from the corner or
+  open the grip for exact sizes, including a two-column pill. Heion saves the
+  layout, and the whole dashboard can be hidden.
 
 **Settings → Appearance** controls the window theme, accent, and page frame.
 AppKit Liquid Glass is available on macOS 26 and later. See the
@@ -115,7 +123,9 @@ See [Packaging and distribution](docs/PACKAGING.md).
 | `zervo-core/src/theme.rs` | palettes, accents, and the material every surface is built from |
 | `zervo-core/src/glass.rs` | the one place a surface is drawn |
 | `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
-| `src/newtab.rs`, `src/newtab_wallpaper.rs` | New Tab controls, dashboard, and wallpapers |
+| `src/newtab.rs`, `src/newtab_wallpaper.rs` | New Tab dashboard, grid animation, and wallpapers |
+| `zervo-core/src/newtab_widgets.rs` | Saved dashboard layouts and resize presets |
+| `src/pull_refresh.rs` | Scroll-position checks and pull-to-refresh feedback |
 | `src/favicons.rs`, `src/browsing_data.rs` | Local website icons and site-data controls |
 | `src/widgets.rs` | toggles, sliders, segmented controls |
 | `src/icons.rs`, `src/phosphor.rs` | [Phosphor][phosphor] icon rendering |

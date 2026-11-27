@@ -44,9 +44,9 @@ people do not write it twice.
   chrome has an AccessKit tree; everything inside the page is still invisible to
   VoiceOver, which is the half that matters more.
 - **Dropped files** — dragging a file onto the window should open it.
-- **More widgets, and a way to write them.** The shelf takes any grid-placed
-  widget; there are three. Notes, a downloads strip and a page-actions row are
-  obvious next ones.
+- **More dashboard widgets.** New Tab supports grid placement, resizing,
+  removal, and five built-in cards. Notes and a downloads card are candidates
+  for the next additions.
 - **Three- and four-finger swipes.** Two-finger ones are in. winit surfaces
   neither of the others, so they need an AppKit event monitor, and macOS
   assigns them to Mission Control by default — so they would arrive only for
@@ -88,17 +88,15 @@ Listed so nobody starts them expecting to finish. Details in
   and the same build script is where `longPathAware` would go, which is the
   other half of making long paths work on Windows rather than relying on a
   short workspace root.
-- **Nothing is signed, on any platform.** [PACKAGING.md](PACKAGING.md) has the
-  numbers: $99/year for an Apple Developer ID, about $10/month for Azure
-  Artifact Signing on Windows. The macOS workflow is already wired for it and
-  inert without the secrets; Windows has no signing step at all yet.
+- **Developer ID and notarization.** The macOS workflow ships ad-hoc signed
+  bundles with a separate signed update feed. Developer ID signing and
+  notarization are configured through the existing release workflow secrets.
 - **The AUR packages are generated but never published.** Every release attaches
   a ready `PKGBUILD` and `.SRCINFO` for `zervo` and `zervo-bin`. Pushing them is
   a git push over SSH to an account CI does not have, so it stays manual — but
   nobody has done it once.
-- **No automated *UI* tests.** There are sixty-seven unit tests now, and
-  `zervo-core` runs its fifty-three on every pull request — but they cover
-  arithmetic, colour, bytes and files, not anything drawn. [TESTING.md](TESTING.md)
+- **Automated UI tests.** Core and application tests cover behaviour and
+  persistent state. [TESTING.md](TESTING.md)
   is still a checklist someone walks by hand for everything else. A harness that
   drives egui and asserts on layout (`egui_kittest`) would pay for itself
   quickly, and the sidebar refactor below is waiting on one.

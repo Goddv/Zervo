@@ -33,6 +33,9 @@ engine bump or a chrome change, walk this list.
       suggested filename.
 - [ ] Allow notifications from a test page. A notification with only a title
       and body appears in the window and in the notification tray.
+- [ ] On a long page, pull down at the top and release after the indicator
+      fills. The page reloads once. Repeat partway down the page and with a
+      short pull. Normal scrolling continues.
 
 ## Material
 - [ ] Solid and Frosted both apply to everything: the window, cards, menus,
@@ -60,13 +63,19 @@ engine bump or a chrome change, walk this list.
 - [ ] On a Mac with Image Playground available, generate a wallpaper and apply
       it. Cancel a second generation and verify the first wallpaper stays.
 - [ ] Turn off Animate wallpapers and enable system Reduce Motion separately.
-      Each keeps the animated presets still. Toggle the dashboard widgets.
+      Each keeps the animated presets and Grid dots still. With motion on,
+      move across Grid in both themes and watch the trail fade.
+- [ ] Switch between Frosted and Liquid Glass. Move the window over different
+      desktop content and check both materials with Reduce Transparency.
 - [ ] Click the centered search pill. It moves into the command bar and the
       search field accepts typing immediately. Escape returns to the pill.
 - [ ] At normal window height, all seven actions are visible. At minimum
       height, scroll the list and use the arrow keys to reach the last action.
 - [ ] Check the dashboard and app icon in light and dark modes. Resize the
       window and scroll to reach all five cards.
+- [ ] In Edit widgets, open Add card over the first card and choose an item.
+      Remove an item, drag one into an empty slot, and resize one into a
+      two-column pill. Restart and check that the layout returns.
 - [ ] Choose a search engine, then search from the capsule. Open a pinned tab
       and a recent page from their cards.
 - [ ] Add, complete, and remove checklist items. Reopen the browser and check
@@ -82,8 +91,9 @@ engine bump or a chrome change, walk this list.
 - [ ] In a disposable profile, visit a page that sets both kinds of cookie,
       local storage, and session storage. Clear session cookies alone, then
       clear all cookies and website storage. Reload the page after each step.
-- [ ] Visit and favourite a site with a favicon. Restart and open History and
-      Favourites before opening the site. Both show the saved icon.
+- [ ] Visit, pin, and favourite a site with a favicon. Restart on New Tab and
+      check the restored tab, dashboard pin, History, and Favourites before
+      selecting the site. Each shows the saved icon.
 
 ## The chrome's own animations
 

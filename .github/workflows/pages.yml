@@ -1,0 +1,83 @@
+name: Heion website
+
+on:
+  push:
+    branches: [main]
+    paths: [docs/index.html, 'docs/site/**', .github/workflows/pages.yml]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: heion-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Check downloads and stage website
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'workflow_dispatch' &&
+       github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    outputs:
+      ready: ${{ steps.release.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the public installers
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(sed -n 's/.*name="heion-release" content="\([^"]*\)".*/\1/p' docs/index.html)"
+          [[ "$tag" =~ ^heion-v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+          release="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest")"
+          latest="$(jq -r .tag_name <<< "$release")"
+          if [ "$latest" != "$tag" ]; then
+            echo "::notice::The site will deploy when $tag is the latest public release."
+            exit 0
+          fi
+          for arch in arm64 x86_64; do
+            filename="Heion-${tag#heion-v}-$arch.dmg"
+            jq -e --arg name "$filename" 'any(.assets[]; .name == $name and .state == "uploaded")' <<< "$release"
+            grep -Fq "/releases/download/$tag/$filename" docs/index.html
+          done
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Stage static files
+        if: steps.release.outputs.ready == 'true'
+        run: |
+          mkdir _site
+          cp -R docs/index.html docs/site _site/
+
+      - uses: actions/upload-pages-artifact@v5
+        if: steps.release.outputs.ready == 'true'
+        with:
+          path: _site
+
+  deploy:
+    name: Publish Heion website
+    needs: build
+    if: needs.build.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

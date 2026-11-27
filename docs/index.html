@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Heion is a calm macOS browser with Spaces, a customizable New Tab, and native glass. Built on Servo.">
+  <meta name="theme-color" content="#101422">
+  <meta name="heion-release" content="heion-v0.1.2">
+  <meta property="og:title" content="Heion — A calmer place to browse">
+  <meta property="og:description" content="A workspace-oriented macOS browser built on Servo.">
+  <meta property="og:image" content="https://goddv.github.io/Heion/site/heion-tidelight.webp">
+  <link rel="canonical" href="https://goddv.github.io/Heion/">
+  <link rel="icon" href="site/heion.png" type="image/png">
+  <link rel="stylesheet" href="site/style.css">
+  <title>Heion — A calmer place to browse</title>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header shell">
+    <a class="brand" href="./" aria-label="Heion home">
+      <img src="site/heion.png" alt="" width="36" height="36">
+      Heion
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="#features">Features</a>
+      <a href="https://github.com/Goddv/Heion">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="content">
+    <section class="hero shell" aria-labelledby="hero-title">
+      <div>
+        <p class="overline">An open-source browser for macOS</p>
+        <h1 id="hero-title">A calmer place<br class="hero-break"> to <em>browse.</em></h1>
+        <p class="intro">Keep projects in their own Spaces, make New Tab your own, and browse in a native macOS window. Built on Servo.</p>
+        <div class="actions">
+          <a class="button primary" href="#download">Download Heion</a>
+          <a class="link" href="https://github.com/Goddv/Heion/releases/tag/heion-v0.1.2">Release notes</a>
+        </div>
+      </div>
+      <figure class="hero-preview">
+        <img src="site/heion-tidelight.webp" alt="Heion in dark mode with a Studio Space in the sidebar and New Tab widgets over the blue Tidelight wallpaper." width="1540" height="1027" fetchpriority="high">
+      </figure>
+    </section>
+
+    <section class="features shell" id="features" aria-labelledby="features-title">
+      <h2 id="features-title">Room for the way you browse</h2>
+      <div class="feature-grid">
+        <article>
+          <h3>One Space per project</h3>
+          <p>Keep tabs, folders, and pins together. Heion restores your Spaces and the tabs you were using when you reopen it.</p>
+        </article>
+        <article>
+          <h3>Search from anywhere</h3>
+          <p>Press <kbd>⌘L</kbd> to search or open an address. Type <kbd>&gt;</kbd> in the command bar to find browser actions.</p>
+        </article>
+        <article>
+          <h3>Updates inside Heion</h3>
+          <p>Use About to install signed incremental updates. Your profile, history, and saved logins carry forward.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="new-tab" aria-labelledby="new-tab-title">
+      <div class="shell new-tab-layout">
+        <div>
+          <p class="overline">New Tab</p>
+          <h2 id="new-tab-title">A little more room to make it yours</h2>
+          <p>Add, move, or resize the widgets you use. The grid lights up around the pointer, and Frosted and Liquid Glass follow macOS transparency settings.</p>
+        </div>
+        <img src="site/heion-grid.webp" alt="Heion’s light New Tab showing the dashboard and a blue glow around the cursor on the dotted grid." width="1540" height="1027" loading="lazy">
+      </div>
+    </section>
+
+    <section class="downloads shell" id="download" aria-labelledby="download-title">
+      <h2 id="download-title">Get Heion 0.1.2</h2>
+      <p>Choose the disk image for your Mac, then drag Heion into Applications.</p>
+      <div class="actions">
+        <a class="button primary" href="https://github.com/Goddv/Heion/releases/download/heion-v0.1.2/Heion-0.1.2-arm64.dmg">Apple Silicon</a>
+        <a class="button secondary" href="https://github.com/Goddv/Heion/releases/download/heion-v0.1.2/Heion-0.1.2-x86_64.dmg">Intel</a>
+      </div>
+      <p class="download-links"><a href="https://github.com/Goddv/Heion/releases">All releases</a> · <a href="https://github.com/Goddv/Heion/blob/main/docs/UPDATES.md">Installation and updates</a></p>
+    </section>
+  </main>
+
+  <footer class="site-footer shell">
+    <span>Heion (平穏) · A steady, untroubled state of peace.</span>
+    <nav aria-label="Project links">
+      <a href="https://github.com/Goddv/Heion/issues">Report an issue</a>
+      <a href="https://github.com/Goddv/Heion/blob/main/LICENSE">MPL-2.0</a>
+      <a href="https://servo.org/">Servo</a>
+    </nav>
+  </footer>
+</body>
+</html>

@@ -7,7 +7,8 @@ Build a macOS app and disk image for the current architecture.
 ```
 
 GitHub Actions builds Apple Silicon and Intel disk images on every push to
-`main`. A tagged release adds the source archive and `SHA256SUMS`. Linux and
+`main`. A tagged release adds the source archive, `SHA256SUMS`, and signed
+appcasts and deltas for updater-enabled builds. Linux and
 Windows packaging is paused. Their scripts and [workflow definitions](../.github/paused-workflows)
 are retained for resuming support.
 
@@ -450,8 +451,9 @@ The long build jobs hold no write token and check out with
 `persist-credentials: false`, so the release token is never in reach of a build
 script from any of the thousand-odd crates in the dependency graph.
 
-`workflow_dispatch` on `release.yml` takes an existing tag and leaves the result
-as a draft unless you ask otherwise, which is how to rehearse one.
+`workflow_dispatch` on `release.yml` takes an existing tag. Select a workflow ref
+at the tagged commit. Set `publish` to publish after the installers and signed
+update assets pass verification. Without it the result stays a draft.
 
 ### Cutting a release
 
@@ -465,6 +467,15 @@ as a draft unless you ask otherwise, which is how to rehearse one.
 4. Watch. A cold build is hours; a warm one considerably less.
 5. Check the draft, then let it publish — or publish it yourself if you ran the
    workflow by hand.
+
+### Project website
+
+GitHub Actions deploys the landing page in `docs/index.html` to GitHub Pages.
+It pairs local screenshots and a stylesheet in `docs/site/` with the public
+installers for the release named in the page metadata. Update that metadata,
+the version, release notes link, and both installer links for a new release.
+Preview from the checkout with
+`python3 -m http.server --directory docs`.
 
 ### What CI checks before any of that
 

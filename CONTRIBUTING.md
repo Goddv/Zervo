@@ -33,11 +33,9 @@ pull requests do not need to include Rust changes.
   The half that *does* need it is linted and tested in the release build.
   Locally, `cargo clippy` over everything is a few seconds once the engine has
   been built once.
-- **The packaging half is linted too.** `shellcheck -x`, `actionlint`,
-  PSScriptAnalyzer, `desktop-file-validate`, `appstreamcli`, `mandoc -Tlint`
-  and a render of both PKGBUILDs all run on every pull request, because almost
-  none of that can be *run* on a developer's machine — and the alternative to
-  a linter is finding the typo three hours into a release build.
+- **The packaging scripts and workflows are linted too.** `shellcheck -x`
+  checks the active scripts and `actionlint` checks the active workflows on
+  every pull request.
 - **No new dependencies without a reason in the PR description.** The engine is
   already enormous; the chrome should stay small.
 - **`ui.rs` never touches the engine.** If you find yourself reaching for it
