@@ -66,14 +66,16 @@ done
 ln -s "$(pkg-config --variable=includedir gstreamer-mse-1.0)/gstreamer-1.0/gst/mse/mse-enumtypes.h" \
     include/gst/mse/mse-enumtypes.h
 
-glib-mkenums --fhead '#include <gst/mse/mse-prelude.h>' \
+# The universal SDK's script can retain Cerbero's build-machine shebang.
+mkenums="$(command -v glib-mkenums)"
+python3 "$mkenums" --fhead '#include <gst/mse/mse-prelude.h>' \
     --vhead 'GST_MSE_PRIVATE GType @enum_name@_get_type (void);\n#define @ENUMPREFIX@_TYPE_@ENUMSHORT@ (@enum_name@_get_type ())' \
     gstmediasourcetrack-private.h > include/gst/mse/mse-enumtypes-private.h
 
 make_enums() {
     local header="$1"
     shift
-    glib-mkenums --fhead "#include <$header>" --fprod '#include "@filename@"' \
+    python3 "$mkenums" --fhead "#include <$header>" --fprod '#include "@filename@"' \
         --vhead 'GType @enum_name@_get_type (void) { static gsize type; if (g_once_init_enter (&type)) { static const G@Type@Value values[] = {' \
         --vprod '{ @VALUENAME@, "@VALUENAME@", "@valuenick@" },' \
         --vtail '{0, NULL, NULL}}; GType new_type = g_@type@_register_static ("@EnumName@", values); g_once_init_leave (&type, new_type); } return type; }' \

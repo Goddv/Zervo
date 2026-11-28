@@ -17,6 +17,7 @@ where the plugin lists and the rpath resolution rules come from.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -150,6 +151,14 @@ def main(app, mse_library=None):
     if os.path.exists(libraries):
         shutil.rmtree(libraries)
     os.makedirs(libraries)
+
+    sdk = os.path.realpath(GSTREAMER_ROOT)
+    load_commands = subprocess.check_output(["/usr/bin/otool", "-l", binary], text=True)
+    rpaths = set(re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.+) \(offset \d+\)", load_commands))
+    for rpath in sorted(rpaths):
+        if rpath.startswith("/") and os.path.commonpath((sdk, os.path.realpath(rpath))) == sdk:
+            # Use the bundled libraries even when the GStreamer SDK is installed.
+            subprocess.run(["install_name_tool", "-delete_rpath", rpath, binary], check=True)
 
     # Give the binary an rpath into the bundle. Servo's carries one already;
     # ours does not, and without it any reference we fail to rewrite dangles
