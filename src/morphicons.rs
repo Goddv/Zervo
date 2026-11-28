@@ -7,7 +7,7 @@
 //! one frame with no continuity, which at seventeen points is frequently not
 //! noticed at all.
 //!
-//! The morph itself is [`zervo_core::morph`], which knows nothing about any of
+//! The morph itself is [`heion_core::morph`], which knows nothing about any of
 //! these shapes. What is here is the geometry and the two-state pairing.
 //!
 //! ## The design box
@@ -18,7 +18,7 @@
 //! stand in for, which matters when one sits in a row of them.
 
 use egui::{Color32, Pos2, Rect, Stroke, pos2, vec2};
-use zervo_core::morph::{Figure, Part, Path, Seg, figure_between};
+use heion_core::morph::{Figure, Part, Path, Seg, figure_between};
 
 /// The box the shapes below are drawn in.
 const BOX: f32 = 24.0;

@@ -142,7 +142,7 @@ fn welcome(ui: &mut Ui, chrome: &mut ChromeContext, actions: &mut Vec<UiAction>,
     }
     ui.add_space(30.0);
     ui.label(
-        RichText::new(zervo_core::APP_NAME)
+        RichText::new(heion_core::APP_NAME)
             .size(52.0)
             .color(palette.text),
     );

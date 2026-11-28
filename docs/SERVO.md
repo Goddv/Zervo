@@ -8,9 +8,16 @@ patched Servo checkout beside the Heion checkout. The path is set in
 ## Patches carried by Heion
 
 - [File downloads](../patches/servo/0001-embedder-file-downloads.patch) offers
-  attachments, unrenderable responses, and `download` links to Heion. After
-  consent, Servo streams the original response so redirects, authentication,
-  and cookies still apply. Build with `--features engine-downloads`.
+  attachments, unrenderable responses, and eligible `download` links to
+  Heion. After consent, Servo streams the original response so redirects,
+  authentication, and cookies still apply. Heion saves in the background and
+  publishes the completed file without overwriting an existing file. Cancelling
+  stops the fetch and discards the partial file. Retry sends a fresh GET as a
+  download, including when the browser would normally show the response inline.
+  The same patch gives desktop servoshell a native Save dialog and a cancellable
+  transfer. Build Heion with `--features
+  engine-downloads`. The downstream patch carries the prototype discussed in
+  [Servo issue #40210](https://github.com/servo/servo/issues/40210).
 - [Text-only web notifications](../patches/servo/0002-script-show-notification-without-resources.patch)
   delivers notifications that have no images, icons, or badges to fetch.
 - The [larger HTTP/2 header limit](https://github.com/servo/servo/pull/49981)

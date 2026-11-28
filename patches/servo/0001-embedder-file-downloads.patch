@@ -1,8 +1,90 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index f0df92e9c13..95beac8c93f 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -8247,6 +8247,7 @@ dependencies = [
+  "itertools 0.15.0",
+  "keyboard-types",
+  "log",
++ "mime",
+  "mozangle",
+  "ohos-pasteboard",
+  "parking_lot",
+@@ -10017,6 +10018,7 @@ dependencies = [
+  "ohos-vsync",
+  "ohos-window-manager-sys",
+  "ohos-window-sys",
++ "percent-encoding",
+  "raw-window-handle",
+  "rfd",
+  "rustls",
+@@ -10027,6 +10029,7 @@ dependencies = [
+  "servo-webdriver-server",
+  "signal-hook-registry",
+  "surfman",
++ "tempfile",
+  "tokio",
+  "tracing",
+  "tracing-perfetto",
+@@ -10035,6 +10038,7 @@ dependencies = [
+  "windows-sys 0.61.2",
+  "winit",
+  "winresource",
++ "xattr",
+  "xcomponent-sys",
+ ]
+
+diff --git a/components/constellation/constellation.rs b/components/constellation/constellation.rs
+index bbe83d6057e..e383c73d8cf 100644
+--- a/components/constellation/constellation.rs
++++ b/components/constellation/constellation.rs
+@@ -1352,9 +1352,8 @@ where
+             EmbedderToConstellationMessage::LoadUrl(webview_id, url_request) => {
+                 let mut load_data = LoadData::new_for_new_unrelated_webview(url_request.url);
+
+-                if !url_request.headers.is_empty() {
+-                    load_data.headers.extend(url_request.headers);
+-                }
++                load_data.headers.extend(url_request.headers);
++                load_data.download = url_request.download;
+
+                 let ctx_id = BrowsingContextId::from(webview_id);
+                 let pipeline_id = match self.browsing_contexts.get(&ctx_id) {
+@@ -3470,7 +3469,7 @@ where
+     #[servo_tracing::instrument(skip_all)]
+     fn handle_new_top_level_browsing_context(
+         &mut self,
+-        url: ServoUrl,
++        request: embedder_traits::UrlRequest,
+         NewWebViewDetails {
+             webview_id,
+             viewport_details,
+@@ -3479,7 +3478,9 @@ where
+     ) {
+         let pipeline_id = PipelineId::new();
+         let browsing_context_id = BrowsingContextId::from(webview_id);
+-        let load_data = LoadData::new_for_new_unrelated_webview(url);
++        let mut load_data = LoadData::new_for_new_unrelated_webview(request.url);
++        load_data.headers.extend(request.headers);
++        load_data.download = request.download;
+         let is_private = false;
+
+         // Register this new top-level browsing context id as a webview and set
 diff --git a/components/net/embedder.rs b/components/net/embedder.rs
-index 9912a7e9b22..b03847d0ca9 100644
+index 9912a7e9b22..f7435bbdfbb 100644
 --- a/components/net/embedder.rs
 +++ b/components/net/embedder.rs
-@@ -10,6 +10,8 @@ use embedder_traits::{
+@@ -3,6 +3,9 @@
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+ use std::path::PathBuf;
++use std::sync::Arc;
++
++use bytes::Bytes;
+
+ use cookie::Cookie;
+ use embedder_traits::{
+@@ -10,11 +13,74 @@ use embedder_traits::{
      WebResourceResponseMsg,
  };
  use net_traits::CookieOperationId;
@@ -10,8 +92,75 @@ index 9912a7e9b22..b03847d0ca9 100644
 +use net_traits::request::RequestId;
  use servo_base::id::WebViewId;
  use servo_url::ServoUrl;
- use tokio::sync::mpsc::UnboundedSender as TokioSender;
-@@ -39,4 +41,18 @@ pub enum NetToEmbedderMsg {
+-use tokio::sync::mpsc::UnboundedSender as TokioSender;
++use tokio::sync::mpsc::{self, UnboundedSender as TokioSender};
+ use tokio::sync::oneshot::Sender as TokioOneshotSender;
+
++use crate::fetch::methods::CancellationListener;
++
++type DownloadChunk = Result<Option<Bytes>, NetworkError>;
++
++pub enum DownloadDecision {
++    Accept(mpsc::Sender<DownloadChunk>),
++    Decline,
++}
++
++/// Stops the fetch, including when the server stalls between chunks.
++#[derive(Clone)]
++pub struct DownloadCancellation(pub(crate) Arc<CancellationListener>);
++
++impl DownloadCancellation {
++    pub fn is_cancelled(&self) -> bool {
++        self.0.cancelled()
++    }
++
++    pub fn cancel(&self) {
++        self.0.cancel();
++    }
++}
++
++/// A response body owned by the embedder after accepting a download.
++pub struct DownloadStream {
++    cancellation: DownloadCancellation,
++    receiver: mpsc::Receiver<DownloadChunk>,
++}
++
++impl DownloadStream {
++    pub fn accept(
++        responder: TokioOneshotSender<DownloadDecision>,
++        cancellation: DownloadCancellation,
++    ) -> Option<Self> {
++        let (sender, receiver) = mpsc::channel(8);
++        responder.send(DownloadDecision::Accept(sender)).ok()?;
++        Some(Self {
++            cancellation,
++            receiver,
++        })
++    }
++
++    pub fn cancellation(&self) -> DownloadCancellation {
++        self.cancellation.clone()
++    }
++
++    /// Read the next chunk on a blocking worker. An empty response end is
++    /// reported only after Servo has received the complete body.
++    pub fn read_chunk(&mut self) -> Result<Option<Bytes>, NetworkError> {
++        self.receiver
++            .blocking_recv()
++            .unwrap_or(Err(NetworkError::LoadCancelled))
++    }
++}
++
++impl Drop for DownloadStream {
++    fn drop(&mut self) {
++        self.cancellation.cancel();
++    }
++}
++
+ /// Messages sent from the network threads to the embedder.
+ pub enum NetToEmbedderMsg {
+     /// Open file dialog to select files. Set boolean flag to true allows to select multiple files.
+@@ -39,4 +105,17 @@ pub enum NetToEmbedderMsg {
      EmbedderCookieOperationResponseWithCookies(CookieOperationId, Vec<Cookie<'static>>),
      /// Response to an asynchronous request from SiteDataManager.
      EmbedderCookieOperationResponse(CookieOperationId),
@@ -23,15 +172,14 @@ index 9912a7e9b22..b03847d0ca9 100644
 +        url: ServoUrl,
 +        content_type: Option<mime::Mime>,
 +        default_filename: String,
-+        responder: TokioOneshotSender<bool>,
++        content_length: Option<u64>,
++        can_retry: bool,
++        cancellation: DownloadCancellation,
++        responder: TokioOneshotSender<DownloadDecision>,
 +    },
-+    /// A chunk of a response the embedder took over.
-+    FetchResponseChunk(WebViewId, RequestId, Vec<u8>),
-+    /// The end of a response the embedder took over.
-+    FetchResponseEof(WebViewId, RequestId, Result<(), NetworkError>),
  }
 diff --git a/components/net/fetch/methods.rs b/components/net/fetch/methods.rs
-index 12b3b0b9fbd..95d25e970c5 100644
+index 12b3b0b9fbd..08a7ddd607d 100644
 --- a/components/net/fetch/methods.rs
 +++ b/components/net/fetch/methods.rs
 @@ -21,9 +21,11 @@ use mime::{self, Mime};
@@ -47,56 +195,314 @@ index 12b3b0b9fbd..95d25e970c5 100644
      InsecureRequestsPolicy, InternalRequest, Origin, ParserMetadata, RedirectMode, Referrer,
      Request, RequestBody, RequestId, RequestMode, ResponseTainting, UpgradeInsecureNavigations,
      is_cors_safelisted_method, is_cors_safelisted_request_header,
-@@ -869,6 +871,45 @@ pub async fn main_fetch(
+@@ -43,7 +45,7 @@ use servo_base::generic_channel::CallbackSetter;
+ use servo_base::id::PipelineId;
+ use servo_url::{Host, ImmutableOrigin, ServoUrl};
+ use tokio::sync::Mutex as TokioMutex;
+-use tokio::sync::mpsc::{UnboundedReceiver as TokioReceiver, UnboundedSender as TokioSender};
++use tokio::sync::{Notify, mpsc};
+
+ use crate::connector::CACertificates;
+ #[cfg(feature = "devtools")]
+@@ -51,6 +53,7 @@ use crate::devtools::{DevtoolsBodyBuffer, body_for_devtools};
+ use crate::devtools::{
+     send_early_httprequest_to_devtools, send_response_to_devtools, send_security_info_to_devtools,
+ };
++use crate::embedder::DownloadDecision;
+ use crate::fetch::fetch_params::{
+     ConsumePreloadedResources, FetchParams, SharedPreloadedResources,
+ };
+@@ -117,6 +120,7 @@ pub struct FetchContext {
+ #[derive(Default)]
+ pub struct CancellationListener {
+     cancelled: AtomicBool,
++    changed: Notify,
+ }
+
+ impl CancellationListener {
+@@ -125,7 +129,17 @@ impl CancellationListener {
+     }
+
+     pub(crate) fn cancel(&self) {
+-        self.cancelled.store(true, Ordering::Relaxed)
++        self.cancelled.store(true, Ordering::Relaxed);
++        self.changed.notify_waiters();
++    }
++
++    pub(crate) async fn wait_cancelled(&self) {
++        let notified = self.changed.notified();
++        tokio::pin!(notified);
++        notified.as_mut().enable();
++        if !self.cancelled() {
++            notified.await;
++        }
+     }
+ }
+
+@@ -174,7 +188,66 @@ pub(crate) fn transfers_request_body_stream_to_later_manual_redirect(
+             .is_some_and(|status| status.is_redirection())
+ }
+
+-pub type DoneChannel = Option<(TokioSender<Data>, TokioReceiver<Data>)>;
++pub enum DataReceiver {
++    Bounded(mpsc::Receiver<Data>),
++    Unbounded(mpsc::UnboundedReceiver<Data>),
++}
++
++impl DataReceiver {
++    pub(crate) async fn recv(&mut self) -> Option<Data> {
++        match self {
++            Self::Bounded(receiver) => receiver.recv().await,
++            Self::Unbounded(receiver) => receiver.recv().await,
++        }
++    }
++}
++
++pub type DoneChannel = Option<DataReceiver>;
++
++pub(crate) fn explicit_download_applies(request: &Request, url: &ServoUrl) -> bool {
++    match request.download_handling {
++        Some(DownloadHandling::FromEmbedder) => true,
++        Some(DownloadHandling::FromLink) => {
++            matches!(url.scheme(), "data" | "blob") ||
++                matches!(&request.client, Some(client) if
++                    matches!(&client.origin, Origin::Origin(origin) if *origin == url.origin()))
++        },
++        _ => false,
++    }
++}
++
++pub(crate) fn should_offer_download(request: &Request, response: &Response) -> bool {
++    if request.download_handling.is_none()
++        || request.mode != RequestMode::Navigate
++        || request.target_webview_id.is_none()
++        || !request.integrity_metadata.is_empty()
++        || matches!(request.method, Method::HEAD | Method::CONNECT)
++        || response.is_network_error()
++    {
++        return false;
++    }
++    let response = response.actual_response();
++    if response.location_url.is_some()
++        || !response
++            .status
++            .try_code()
++            .is_some_and(|status| status.is_success())
++        || response.status == StatusCode::PARTIAL_CONTENT
++        || is_null_body_status(&response.status)
++    {
++        return false;
++    }
++
++    is_content_disposition_attachment(&response.headers)
++        || response
++            .url()
++            .is_some_and(|url| explicit_download_applies(request, url))
++        || extract_mime_type_as_mime(&response.headers).is_some_and(|mime| {
++            mime.essence_str()
++                .parse::<Mime>()
++                .is_ok_and(|mime| MimeClassifier::get_media_type(&mime).is_none())
++        })
++}
+
+ /// [Fetch](https://fetch.spec.whatwg.org#concept-fetch)
+ pub async fn fetch(request: Request, target: Target<'_>, context: &FetchContext) -> Response {
+@@ -831,7 +904,7 @@ pub async fn main_fetch(
+     let mut response_loaded = false;
+     let mut response = if !response.is_network_error() && !request.integrity_metadata.is_empty() {
+         // Step 19.1.
+-        wait_for_response(request, &mut response, target, done_chan, context).await;
++        wait_for_response(request, &mut response, target, done_chan, context, None).await;
+         response_loaded = true;
+
+         // Step 19.2.
+@@ -853,7 +926,7 @@ pub async fn main_fetch(
+         // by sync fetch, but we overload it here for simplicity
+         target.process_response(request, &response);
+         if !response_loaded {
+-            wait_for_response(request, &mut response, target, done_chan, context).await;
++            wait_for_response(request, &mut response, target, done_chan, context, None).await;
+         }
+         // overloaded similarly to process_response
+         target.process_response_eof(request, &response);
+@@ -869,6 +942,41 @@ pub async fn main_fetch(
          target.process_request_body(request);
      }
 
-+    // Let the navigation handle redirects, errors and empty responses normally.
-+    let mut download_target = None;
-+    if let Some(handling) = request.download_handling
-+        && !response_loaded
-+        && !response.is_network_error()
-+        && response.actual_response().location_url.is_none()
-+        && !is_null_body_status(&response.actual_response().status)
-+    {
-+        let unrenderable = extract_mime_type_as_mime(&response.headers)
-+            .is_some_and(|mime| MimeClassifier::get_media_type(&mime).is_none());
-+        let should_offer = match handling {
-+            DownloadHandling::Always => true,
-+            DownloadHandling::WhenUnrenderable => {
-+                is_content_disposition_attachment(&response.headers) || unrenderable
-+            },
-+        };
-+        if should_offer {
-+            download_target = context
-+                .state
-+                .offer_unsupported_response(request, &response, &context.cancellation_listener)
-+                .await;
-+        }
-+    }
-+
-+    let target = if let Some(download_target) = download_target.as_deref_mut() {
-+        // Reuse the navigation's 204 path to release its pending pipeline
-+        // while the download target continues reading the original response.
-+        let mut no_document = Response::new(
-+            request.url(),
-+            ResourceFetchTiming::new(ResourceTimingType::Navigation),
-+        );
-+        no_document.status = StatusCode::NO_CONTENT.into();
-+        target.process_response(request, &no_document);
-+        target.process_response_eof(request, &no_document);
-+        download_target
++    let decision = if !response_loaded && should_offer_download(request, &response) {
++        context
++            .state
++            .offer_unsupported_response(request, &response, &context.cancellation_listener)
++            .await
 +    } else {
-+        target
++        None
++    };
++    let mut discard = net_traits::DiscardFetch;
++    let (target, download): (Target<'_>, _) = match decision {
++        Some(decision) => {
++            if matches!(done_chan, Some(DataReceiver::Bounded(_))) {
++                // The network loader does not cache download candidates.
++                *response.actual_response().body.lock() = ResponseBody::Empty;
++            }
++            let mut no_document = Response::new(
++                request.url(),
++                ResourceFetchTiming::new(ResourceTimingType::Navigation),
++            );
++            no_document.status = StatusCode::NO_CONTENT.into();
++            no_document.is_download = matches!(decision, DownloadDecision::Accept(_));
++            target.process_response(request, &no_document);
++            target.process_response_eof(request, &no_document);
++            let download = match decision {
++                DownloadDecision::Accept(sender) => Some(sender),
++                DownloadDecision::Decline => {
++                    context.cancellation_listener.cancel();
++                    None
++                },
++            };
++            (&mut discard, download)
++        },
++        None => (target, None),
 +    };
 +
      // Step 22.
      target.process_response(request, &response);
      // Send Response to Devtools
+@@ -877,7 +985,25 @@ pub async fn main_fetch(
+
+     // Step 23.
+     if !response_loaded {
+-        wait_for_response(request, &mut response, target, done_chan, context).await;
++        wait_for_response(
++            request,
++            &mut response,
++            target,
++            done_chan,
++            context,
++            download.as_ref(),
++        )
++        .await;
++    }
++    if let Some(download) = download {
++        let result = if let Some(error) = response.get_network_error() {
++            Err(error.clone())
++        } else if response.aborted.load(Ordering::Acquire) {
++            Err(NetworkError::LoadCancelled)
++        } else {
++            Ok(None)
++        };
++        let _ = download.send(result).await;
+     }
+
+     // Step 24.
+@@ -904,15 +1030,16 @@ async fn wait_for_response(
+     target: Target<'_>,
+     done_chan: &mut DoneChannel,
+     context: &FetchContext,
++    download: Option<&mpsc::Sender<Result<Option<Bytes>, NetworkError>>>,
+ ) {
+-    if let Some(ref mut ch) = *done_chan {
++    if let Some(ch) = done_chan.as_mut() {
+         #[cfg(feature = "devtools")]
+         let mut devtools_body = context
+             .devtools_chan
+             .as_ref()
+             .map(|_| DevtoolsBodyBuffer::default());
+         loop {
+-            match ch.1.recv().await {
++            match ch.recv().await {
+                 Some(Data::ContentLength(length)) => {
+                     target.process_response_length_hint(request, length);
+                 },
+@@ -921,7 +1048,15 @@ async fn wait_for_response(
+                     if let Some(body) = devtools_body.as_mut() {
+                         body.append_chunk(&bytes);
+                     }
+-                    target.process_response_chunk(request, bytes);
++                    if let Some(download) = download {
++                        if download.send(Ok(Some(bytes))).await.is_err() {
++                            context.cancellation_listener.cancel();
++                            response.aborted.store(true, Ordering::Release);
++                            break;
++                        }
++                    } else {
++                        target.process_response_chunk(request, bytes);
++                    }
+                 },
+                 Some(Data::Error(network_error)) => {
+                     if network_error == NetworkError::DecompressionError {
+@@ -945,11 +1080,27 @@ async fn wait_for_response(
+                 },
+
+                 None => {
+-                    panic!("fetch worker should always send Done before terminating");
++                    response.set_network_error(NetworkError::ConnectionFailure);
++                    break;
+                 },
+             }
+         }
+     } else {
++        if let Some(download) = download {
++            let chunk = match *response.actual_response().body.lock() {
++                ResponseBody::Done(ref bytes) if !bytes.is_empty() => {
++                    Some(Bytes::copy_from_slice(bytes))
++                },
++                _ => None,
++            };
++            if let Some(chunk) = chunk
++                && download.send(Ok(Some(chunk))).await.is_err()
++            {
++                context.cancellation_listener.cancel();
++                response.aborted.store(true, Ordering::Release);
++            }
++            return;
++        }
+         match *response.actual_response().body.lock() {
+             ResponseBody::Done(ref vec) if !vec.is_empty() => {
+                 // in case there was no channel to wait for, the body was
+diff --git a/components/net/http_cache.rs b/components/net/http_cache.rs
+index 75d8758bddd..49e25d6f5e6 100644
+--- a/components/net/http_cache.rs
++++ b/components/net/http_cache.rs
+@@ -36,7 +36,7 @@ use tokio::sync::mpsc::{UnboundedSender as TokioSender, unbounded_channel as unb
+ use tokio::sync::{OwnedRwLockWriteGuard, RwLock as TokioRwLock};
+
+ use crate::disk_cache::DiskCache;
+-use crate::fetch::methods::{Data, DoneChannel};
++use crate::fetch::methods::{Data, DataReceiver, DoneChannel};
+
+ /// A duration in seconds.
+ ///
+@@ -639,7 +639,7 @@ fn create_cached_response(
+     if let ResponseBody::Receiving(_) = *cached_resource.body.lock() {
+         debug!("existing body is in progress");
+         let (done_sender, done_receiver) = unbounded();
+-        *done_chan = Some((done_sender.clone(), done_receiver));
++        *done_chan = Some(DataReceiver::Unbounded(done_receiver));
+         cached_resource.awaiting_body.lock().push(done_sender);
+     }
+     response
+@@ -959,7 +959,7 @@ pub fn refresh(
+         };
+         match in_progress_channel {
+             Some((done_sender, done_receiver)) => {
+-                *done_chan = Some((done_sender.clone(), done_receiver));
++                *done_chan = Some(DataReceiver::Unbounded(done_receiver));
+                 cached_resource.awaiting_body.lock().push(done_sender);
+             },
+             None => *done_chan = None,
 diff --git a/components/net/http_loader.rs b/components/net/http_loader.rs
-index cd37583373b..81a59753945 100644
+index cd37583373b..ddf661aa551 100644
 --- a/components/net/http_loader.rs
 +++ b/components/net/http_loader.rs
+@@ -13,7 +13,7 @@ use content_security_policy::percent_encoding::{AsciiSet, CONTROLS, utf8_percent
+ #[cfg(feature = "devtools")]
+ use devtools_traits::HttpResponseBody as DevtoolsHttpResponseBody;
+ use embedder_traits::{AuthenticationResponse, GenericEmbedderProxy};
+-use futures::{TryFutureExt, TryStreamExt, future};
++use futures::{StreamExt, TryFutureExt, future};
+ use headers::authorization::Basic;
+ use headers::{
+     AccessControlAllowCredentials, AccessControlAllowHeaders, AccessControlAllowMethods,
 @@ -39,6 +39,7 @@ use ipc_channel::router::ROUTER;
  use log::{debug, error, info, log_enabled, warn};
  use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
@@ -105,18 +511,24 @@ index cd37583373b..81a59753945 100644
  use net_traits::fetch::headers::get_value_from_header_list;
  use net_traits::http_status::HttpStatus;
  use net_traits::policy_container::{EmbedderPolicyValue, RequestPolicyContainer};
-@@ -96,7 +97,9 @@ use crate::embedder::NetToEmbedderMsg;
+@@ -92,11 +93,14 @@ use crate::devtools::{
+ use crate::devtools::{
+     send_early_httprequest_to_devtools, send_response_to_devtools, send_security_info_to_devtools,
+ };
+-use crate::embedder::NetToEmbedderMsg;
++use crate::embedder::{DownloadCancellation, DownloadDecision, NetToEmbedderMsg};
  use crate::fetch::cors_cache::CorsCache;
  use crate::fetch::fetch_params::FetchParams;
  use crate::fetch::headers::{SecFetchDest, SecFetchMode, SecFetchSite, SecFetchUser};
 -use crate::fetch::methods::{Data, DoneChannel, FetchContext, Target, fetch, main_fetch};
 +use crate::fetch::methods::{
-+    CancellationListener, Data, DoneChannel, FetchContext, Target, fetch, main_fetch,
++    CancellationListener, Data, DataReceiver, DoneChannel, FetchContext, Target, fetch, main_fetch,
++    should_offer_download,
 +};
  use crate::hsts::HstsList;
  use crate::http_cache::{
      CacheKey, CachedResourcesOrGuard, HttpCache, ValidationStatus, construct_response,
-@@ -184,6 +187,99 @@ impl HttpState {
+@@ -184,6 +188,62 @@ impl HttpState {
              ));
          receiver.await.ok()?
      }
@@ -125,102 +537,558 @@ index cd37583373b..81a59753945 100644
 +        &self,
 +        request: &Request,
 +        response: &Response,
-+        cancellation: &CancellationListener,
-+    ) -> Option<Box<dyn net_traits::FetchTaskTarget + Send>> {
-+        let Some(webview_id) = request.target_webview_id else {
-+            return None;
++        cancellation: &StdArc<CancellationListener>,
++    ) -> Option<DownloadDecision> {
++        let url = response.url()?;
++        let attachment = net_traits::is_content_disposition_attachment(&response.headers);
++        let trusted_name = crate::fetch::methods::explicit_download_applies(request, url);
++        let header_name = extract_filename_from_content_disposition(&response.headers);
++        let page_name = trusted_name
++            .then_some(request.download_filename.as_deref())
++            .flatten();
++        let default_filename = if attachment {
++            header_name.as_deref().or(page_name)
++        } else {
++            page_name.or(header_name.as_deref())
++        }
++        .unwrap_or_default()
++        .to_owned();
++        let content_length = if response.headers.contains_key(header::CONTENT_ENCODING) {
++            None
++        } else {
++            response
++                .headers
++                .typed_get::<headers::ContentLength>()
++                .map(|length| length.0)
 +        };
-+        let fallback_filename = response
-+            .url()
-+            .and_then(|url| url.path().rsplit_once('/'))
-+            .map(|(_, name)| name)
-+            .unwrap_or("")
-+            .to_string();
-+        // Filename precedence, as browsers implement it: a server-supplied
-+        // Content-Disposition name wins, then the name the page suggested via
-+        // `<a download="...">`, then the last path segment of the URL.
-+        let default_filename = extract_filename_from_content_disposition(&response.headers)
-+            .or_else(|| {
-+                request
-+                    .download_filename
-+                    .clone()
-+                    .filter(|filename| !filename.is_empty())
-+            })
-+            .unwrap_or(fallback_filename);
 +        let (sender, receiver) = tokio::sync::oneshot::channel();
-+        let offer = NetToEmbedderMsg::OfferUnsupportedResponse {
-+            webview_id,
-+            request_id: request.id,
-+            url: response.url()?.clone(),
-+            content_type: response
-+                .metadata()
-+                .ok()?
-+                .metadata()
-+                .content_type
-+                .as_ref()
-+                .map(|mime| mime::Mime::from(mime.0.clone())),
-+            default_filename,
-+            responder: sender,
-+        };
-+        self.embedder_proxy.send(offer);
-+        match receiver.await.ok()? {
-+            true => Some(Box::new(EmbedderFetchTarget {
-+                embedder_proxy: self.embedder_proxy.clone(),
-+            })),
-+            false => {
-+                cancellation.cancel();
-+                Some(Box::new(DiscardFetch))
-+            },
++        self.embedder_proxy
++            .send(NetToEmbedderMsg::OfferUnsupportedResponse {
++                webview_id: request.target_webview_id?,
++                request_id: request.id,
++                url: url.clone(),
++                content_type: response
++                    .metadata()
++                    .ok()?
++                    .metadata()
++                    .content_type
++                    .as_ref()
++                    .map(|mime| mime::Mime::from(mime.0.clone())),
++                default_filename,
++                content_length,
++                can_retry: request.method == Method::GET &&
++                    request.body.is_none() &&
++                    matches!(url.scheme(), "http" | "https"),
++                cancellation: DownloadCancellation(cancellation.clone()),
++                responder: sender,
++            });
++        tokio::select! {
++            biased;
++            decision = receiver => decision.ok(),
++            () = cancellation.wait_cancelled() => Some(DownloadDecision::Decline),
 +        }
 +    }
-+}
-+
-+struct EmbedderFetchTarget {
-+    embedder_proxy: GenericEmbedderProxy<NetToEmbedderMsg>,
-+}
-+
-+impl net_traits::FetchTaskTarget for EmbedderFetchTarget {
-+    fn process_request_body(&mut self, _request: &Request) {}
-+    fn process_response(&mut self, _request: &Request, _response: &Response) {}
-+    fn process_response_chunk(&mut self, request: &Request, chunk: Bytes) {
-+        let Some(webview_id) = request.target_webview_id else {
-+            return;
-+        };
-+        self.embedder_proxy
-+            .send(NetToEmbedderMsg::FetchResponseChunk(
-+                webview_id,
-+                request.id,
-+                chunk.to_vec(),
-+            ));
-+    }
-+    fn process_response_eof(&mut self, request: &Request, response: &Response) {
-+        let Some(webview_id) = request.target_webview_id else {
-+            return;
-+        };
-+        let result = if response.aborted.load(Ordering::Acquire) {
-+            Err(NetworkError::LoadCancelled)
-+        } else {
-+            response.get_network_error().cloned().map_or(Ok(()), Err)
-+        };
-+        self.embedder_proxy.send(NetToEmbedderMsg::FetchResponseEof(
-+            webview_id, request.id, result,
-+        ));
-+    }
-+    fn process_csp_violations(
-+        &mut self,
-+        _request: &Request,
-+        _: Vec<content_security_policy::Violation>,
-+    ) {
-+    }
-+    fn process_response_length_hint(&mut self, _request: &Request, _length: usize) {}
  }
 
  /// Step 11 of <https://fetch.spec.whatwg.org/#concept-fetch>.
+@@ -1692,7 +1752,9 @@ async fn http_network_or_cache_fetch(
+
+                 // Per https://httpwg.org/specs/rfc9111.html#response.cacheability we must not cache responses
+                 // if the No-Store directive is present
+-                if http_request.cache_mode != CacheMode::NoStore {
++                if http_request.cache_mode != CacheMode::NoStore
++                    && !should_offer_download(http_request, forward_response)
++                {
+                     // Step 10.5.2 Store httpRequest and forwardResponse in httpCache, as per the
+                     //             "Storing Responses in Caches" chapter of HTTP Caching.
+                     cache_guard.insert(http_request, forward_response);
+@@ -2014,7 +2076,7 @@ async fn wait_for_inflight_requests(done_chan: &mut DoneChannel, response: &mut
+         assert!(response.is_some());
+
+         loop {
+-            match ch.1.recv().await {
++            match ch.recv().await {
+                 Some(Data::ContentLength(_)) | Some(Data::Payload(_)) | Some(Data::Error(_)) => {},
+                 Some(Data::Done) => break, // Return the full response as if it was initially cached as such.
+                 Some(Data::Cancelled) => {
+@@ -2359,10 +2421,12 @@ async fn http_network_fetch(
+     response.referrer_policy = request.referrer_policy;
+
+     let response_body = response.body.clone();
++    let response_aborted = response.aborted.clone();
+
+     // We're about to spawn a future to be waited on here
+-    let (done_sender, done_receiver) = unbounded_channel();
+-    *done_chan = Some((done_sender.clone(), done_receiver));
++    let download_candidate = should_offer_download(request, &response);
++    let (done_sender, done_receiver) = channel(8);
++    *done_chan = Some(DataReceiver::Bounded(done_receiver));
+
+     let cancellation_listener = context.cancellation_listener.clone();
+     if cancellation_listener.cancelled() {
+@@ -2384,12 +2448,7 @@ async fn http_network_fetch(
+         )
+     };
+
+-    let done_sender2 = done_sender.clone();
+-    let done_sender3 = done_sender.clone();
+-    let timing_ptr2 = fetch_params.timing_info.clone();
+-    let timing_ptr3 = fetch_params.timing_info.clone();
+-    let url1 = request.url();
+-    let url2 = url1.clone();
++    let timing = fetch_params.timing_info.clone();
+
+     let prealloc_size: usize = if let Some(possible_length) = response_stream
+         .headers()
+@@ -2411,83 +2470,93 @@ async fn http_network_fetch(
+         4096
+     }
+     .min(pref!(network_max_content_length) as usize);
+-    let _ = done_sender.send(Data::ContentLength(prealloc_size));
++    let prealloc_size = if download_candidate {
++        prealloc_size.min(4096)
++    } else {
++        prealloc_size
++    };
++    let _ = done_sender.try_send(Data::ContentLength(prealloc_size));
+     *response_body.lock() = ResponseBody::Receiving(Vec::with_capacity(prealloc_size));
+-    let response_body2 = response_body.clone();
+-
+-    spawn_task(
+-        response_stream
+-            .into_body()
+-            .try_fold(response_body, move |response_body_accumulator, chunk| {
+-                if cancellation_listener.cancelled() {
+-                    *response_body_accumulator.lock() = ResponseBody::Done(vec![]);
+-                    let _ = done_sender.send(Data::Cancelled);
+-                    return future::ready(Err(std::io::Error::new(
+-                        std::io::ErrorKind::Interrupted,
+-                        "Fetch aborted",
+-                    )));
+-                }
+-                if let ResponseBody::Receiving(ref mut body) = *response_body_accumulator.lock() {
++    spawn_task(async move {
++        let mut body_stream = std::pin::pin!(response_stream.into_body());
++        let terminal = loop {
++            let item = tokio::select! {
++                biased;
++                () = cancellation_listener.wait_cancelled() => break Data::Cancelled,
++                () = done_sender.closed(), if download_candidate => break Data::Cancelled,
++                item = body_stream.next() => item,
++            };
++            let chunk = match item {
++                Some(Ok(chunk)) => chunk,
++                Some(Err(error)) if error.kind() == std::io::ErrorKind::InvalidData => {
++                    break Data::Error(NetworkError::DecompressionError);
++                },
++                Some(Err(error)) => break Data::Error(NetworkError::HttpError(error.to_string())),
++                None => break Data::Done,
++            };
++            let send_chunk = match *response_body.lock() {
++                ResponseBody::Receiving(ref mut body) => {
+                     body.extend_from_slice(&chunk);
+-                    let _ = done_sender.send(Data::Payload(chunk));
++                    true
++                },
++                ResponseBody::Empty => download_candidate,
++                ResponseBody::Done(_) => false,
++            };
++            if send_chunk {
++                tokio::select! {
++                    biased;
++                    () = cancellation_listener.wait_cancelled() => break Data::Cancelled,
++                    result = done_sender.send(Data::Payload(chunk)) => {
++                        if result.is_err() && download_candidate {
++                            break Data::Cancelled;
++                        }
++                    },
+                 }
+-                future::ready(Ok(response_body_accumulator))
+-            })
+-            .and_then(move |complete_response_body| {
+-                debug!("successfully finished response for {:?}", url1);
+-                let mut body = complete_response_body.lock();
+-                let mut completed_body = match *body {
+-                    ResponseBody::Receiving(ref mut body) => std::mem::take(body),
+-                    _ => vec![],
+-                };
+-                // This allocation may be retained by the http-cache.
+-                completed_body.shrink_to_fit();
+-                // If devtools is disabled avoid cloning, since the result would
+-                // be unused anyway.
+-                #[cfg(feature = "devtools")]
+-                let devtools_response_body = if devtools_chan.is_some() {
+-                    let (data, truncated, content_size) = body_for_devtools(&completed_body);
++            }
++        };
++
++        let succeeded = matches!(terminal, Data::Done);
++        if !succeeded {
++            response_aborted.store(true, Ordering::Release);
++        }
++        #[cfg(feature = "devtools")]
++        let devtools_response_body = {
++            let body = response_body.lock();
++            match &*body {
++                ResponseBody::Receiving(bytes) if succeeded && devtools_chan.is_some() => {
++                    let (data, truncated, content_size) = body_for_devtools(bytes);
+                     Some(DevtoolsHttpResponseBody {
+                         data: data.into(),
+                         truncated,
+                         content_size,
+                     })
+-                } else {
+-                    None
+-                };
+-                *body = ResponseBody::Done(completed_body);
+-                #[cfg(feature = "devtools")]
+-                send_response_values_to_devtools(
+-                    Some(headers),
+-                    status,
+-                    devtools_response_body,
+-                    CacheState::None,
+-                    &devtools_request,
+-                    devtools_chan,
+-                );
+-                timing_ptr2.set_attribute(ResourceAttribute::ResponseEnd);
+-                let _ = done_sender2.send(Data::Done);
+-                future::ready(Ok(()))
+-            })
+-            .map_err(move |error| {
+-                if let std::io::ErrorKind::InvalidData = error.kind() {
+-                    debug!("Content decompression error for {:?}", url2);
+-                    let _ = done_sender3.send(Data::Error(NetworkError::DecompressionError));
+-                    let mut body = response_body2.lock();
+-
+-                    *body = ResponseBody::Done(vec![]);
+-                }
+-                debug!("finished response for {:?}", url2);
+-                let mut body = response_body2.lock();
+-                let completed_body = match *body {
+-                    ResponseBody::Receiving(ref mut body) => std::mem::take(body),
+-                    _ => vec![],
+-                };
+-                *body = ResponseBody::Done(completed_body);
+-                timing_ptr3.set_attribute(ResourceAttribute::ResponseEnd);
+-                let _ = done_sender3.send(Data::Done);
+-            }),
+-    );
++                },
++                _ => None,
++            }
++        };
++        {
++            let mut body = response_body.lock();
++            let mut bytes = match *body {
++                ResponseBody::Receiving(ref mut bytes) if succeeded => std::mem::take(bytes),
++                _ => Vec::new(),
++            };
++            bytes.shrink_to_fit();
++            *body = ResponseBody::Done(bytes);
++        }
++        #[cfg(feature = "devtools")]
++        if succeeded {
++            send_response_values_to_devtools(
++                Some(headers),
++                status,
++                devtools_response_body,
++                CacheState::None,
++                &devtools_request,
++                devtools_chan,
++            );
++        }
++        timing.set_attribute(ResourceAttribute::ResponseEnd);
++        let _ = done_sender.send(terminal).await;
++    });
+
+     // TODO these substeps aren't possible yet
+     // Substep 1
+diff --git a/components/net/protocols/blob.rs b/components/net/protocols/blob.rs
+index e572df33614..ccdc72eff7f 100644
+--- a/components/net/protocols/blob.rs
++++ b/components/net/protocols/blob.rs
+@@ -15,7 +15,7 @@ use net_traits::response::{Response, ResponseBody};
+ use net_traits::{NetworkError, ResourceFetchTiming};
+ use tokio::sync::mpsc::unbounded_channel;
+
+-use crate::fetch::methods::{Data, DoneChannel, FetchContext};
++use crate::fetch::methods::{Data, DataReceiver, DoneChannel, FetchContext};
+ use crate::protocols::{ProtocolHandler, partial_content, range_not_satisfiable_error};
+
+ #[derive(Default)]
+@@ -63,7 +63,7 @@ impl ProtocolHandler for BlobProtocolHander {
+         }
+
+         let (mut done_sender, done_receiver) = unbounded_channel();
+-        *done_chan = Some((done_sender.clone(), done_receiver));
++        *done_chan = Some(DataReceiver::Unbounded(done_receiver));
+         *response.body.lock() = ResponseBody::Receiving(vec![]);
+
+         if let Err(err) = context.filemanager.fetch_file(
+diff --git a/components/net/protocols/file.rs b/components/net/protocols/file.rs
+index e6f3fccaeb7..dfd8fed0e2d 100644
+--- a/components/net/protocols/file.rs
++++ b/components/net/protocols/file.rs
+@@ -14,7 +14,7 @@ use net_traits::response::{Response, ResponseBody};
+ use net_traits::{NetworkError, ResourceFetchTiming};
+ use tokio::sync::mpsc::unbounded_channel;
+
+-use crate::fetch::methods::{DoneChannel, FetchContext};
++use crate::fetch::methods::{DataReceiver, DoneChannel, FetchContext};
+ use crate::filemanager_thread::FILE_CHUNK_SIZE;
+ use crate::local_directory_listing;
+ use crate::protocols::{
+@@ -96,7 +96,7 @@ impl ProtocolHandler for FileProtocolHander {
+                 // Setup channel to receive cross-thread messages about the file fetch
+                 // operation.
+                 let (mut done_sender, done_receiver) = unbounded_channel();
+-                *done_chan = Some((done_sender.clone(), done_receiver));
++                *done_chan = Some(DataReceiver::Unbounded(done_receiver));
+
+                 *response.body.lock() = ResponseBody::Receiving(vec![]);
+
+diff --git a/components/net/tests/fetch.rs b/components/net/tests/fetch.rs
+index af31dd2b10c..636fcc12635 100644
+--- a/components/net/tests/fetch.rs
++++ b/components/net/tests/fetch.rs
+@@ -1617,3 +1617,209 @@ fn test_fetch_request_intercepted() {
+         "The status_message was not set correctly!"
+     );
+ }
++
++#[test]
++fn download_uses_the_redirected_response_and_its_filename() {
++    use net::embedder::{DownloadStream, NetToEmbedderMsg};
++    use net_traits::request::DownloadHandling;
++
++    let (server, url) = make_server(
++        |request: HyperRequest<Incoming>,
++         response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
++            if request.uri().path() == "/" {
++                *response.status_mut() = StatusCode::FOUND;
++                response
++                    .headers_mut()
++                    .insert(header::LOCATION, HeaderValue::from_static("/file"));
++            } else {
++                *response.body_mut() = make_body(b"download body".to_vec());
++                response.headers_mut().insert(header::CONTENT_DISPOSITION, HeaderValue::from_static(
++                    "attachment; FILENAME=\"fallback; name.txt\"; filename*=UTF-8''caf%C3%A9.txt",
++                ));
++                response.headers_mut().insert(
++                    header::CONTENT_TYPE,
++                    HeaderValue::from_static("text/plain; charset=utf-8"),
++                );
++            }
++        },
++    );
++    let (proxy, messages) = create_generic_embedder_proxy_and_receiver();
++    let mut context = new_fetch_context(None, Some(proxy));
++    let download = std::thread::spawn(move || {
++        loop {
++            if let NetToEmbedderMsg::OfferUnsupportedResponse {
++                url,
++                default_filename,
++                content_length,
++                cancellation,
++                responder,
++                ..
++            } = messages.recv_timeout(Duration::from_secs(10)).unwrap()
++            {
++                assert_eq!(url.path(), "/file");
++                assert_eq!(default_filename, "café.txt");
++                assert_eq!(content_length, Some(13));
++                let mut download = DownloadStream::accept(responder, cancellation).unwrap();
++                let mut bytes = Vec::new();
++                while let Some(chunk) = download.read_chunk().unwrap() {
++                    bytes.extend_from_slice(&chunk);
++                }
++                return bytes;
++            }
++        }
++    });
++    let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)
++        .origin(url.origin())
++        .mode(RequestMode::Navigate)
++        .policy_container(Default::default())
++        .download_handling(Some(DownloadHandling::WhenUnrenderable))
++        .build();
++    let response = fetch_with_context(request, &mut context);
++    assert_eq!(response.status, StatusCode::NO_CONTENT);
++    assert!(response.is_download);
++    assert_eq!(download.join().unwrap(), b"download body");
++    server.close();
++}
++
++#[test]
++fn download_reports_truncation_and_can_cancel_a_stalled_server() {
++    use std::io::{Read as _, Write as _};
++    use std::net::TcpListener;
++
++    use net::embedder::{DownloadStream, NetToEmbedderMsg};
++    use net_traits::request::DownloadHandling;
++
++    for cancel in [false, true] {
++        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++        let url = ServoUrl::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
++        let (release, finish) = std::sync::mpsc::channel();
++        let server = std::thread::spawn(move || {
++            let (mut stream, _) = listener.accept().unwrap();
++            stream
++                .set_read_timeout(Some(Duration::from_secs(15)))
++                .unwrap();
++            let mut request = Vec::new();
++            while !request.ends_with(b"\r\n\r\n") {
++                let mut byte = [0];
++                stream.read_exact(&mut byte).unwrap();
++                request.push(byte[0]);
++            }
++            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 999\r\nConnection: close\r\n\r\nshort").unwrap();
++            finish.recv_timeout(Duration::from_secs(15)).unwrap();
++        });
++
++        let (proxy, messages) = create_generic_embedder_proxy_and_receiver();
++        let mut context = new_fetch_context(None, Some(proxy));
++        let download = std::thread::spawn(move || {
++            loop {
++                if let NetToEmbedderMsg::OfferUnsupportedResponse {
++                    cancellation,
++                    responder,
++                    ..
++                } = messages.recv_timeout(Duration::from_secs(10)).unwrap()
++                {
++                    let mut download =
++                        DownloadStream::accept(responder, cancellation.clone()).unwrap();
++                    if cancel {
++                        cancellation.cancel();
++                    } else {
++                        release.send(()).unwrap();
++                    }
++                    let error = loop {
++                        match download.read_chunk() {
++                            Ok(Some(_)) => {},
++                            Ok(None) => panic!("an incomplete download reported success"),
++                            Err(error) => break error,
++                        }
++                    };
++                    if cancel {
++                        assert_eq!(error, NetworkError::LoadCancelled);
++                        release.send(()).unwrap();
++                    } else {
++                        assert_ne!(error, NetworkError::LoadCancelled);
++                    }
++                    return;
++                }
++            }
++        });
++
++        let request = RequestBuilder::new(
++            Some(TEST_WEBVIEW_ID),
++            UrlWithBlobClaim::new(url.clone(), None),
++            Referrer::NoReferrer,
++        )
++        .origin(url.origin())
++        .mode(RequestMode::Navigate)
++        .policy_container(Default::default())
++        .download_handling(Some(DownloadHandling::WhenUnrenderable))
++        .build();
++        let response = fetch_with_context(request, &mut context);
++        assert!(response.is_download);
++        download.join().unwrap();
++        server.join().unwrap();
++    }
++}
++
++#[test]
++fn download_filename_handles_quoted_parameters_and_bad_encoding() {
++    let mut headers = HeaderMap::new();
++    headers.insert(
++        header::CONTENT_DISPOSITION,
++        HeaderValue::from_static(
++            r#"attachment; filename="a;b.txt"; filename*=UTF-8''wrong%ZZ; unrelated=value"#,
++        ),
++    );
++    assert_eq!(
++        net_traits::extract_filename_from_content_disposition(&headers).as_deref(),
++        Some("a;b.txt"),
++    );
++}
++
++#[test]
++fn download_requested_by_embedder_saves_an_inline_response() {
++    use net::embedder::{DownloadStream, NetToEmbedderMsg};
++    use net_traits::request::DownloadHandling;
++
++    let (server, url) = make_server(
++        |_: HyperRequest<Incoming>, response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
++            *response.body_mut() = make_body(b"normally rendered as text".to_vec());
++            response
++                .headers_mut()
++                .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
++        },
++    );
++    let (proxy, messages) = create_generic_embedder_proxy_and_receiver();
++    let mut context = new_fetch_context(None, Some(proxy));
++    let download = std::thread::spawn(move || {
++        loop {
++            if let NetToEmbedderMsg::OfferUnsupportedResponse {
++                default_filename,
++                can_retry,
++                cancellation,
++                responder,
++                ..
++            } = messages.recv_timeout(Duration::from_secs(10)).unwrap()
++            {
++                assert_eq!(default_filename, "saved.txt");
++                assert!(can_retry);
++                let mut stream = DownloadStream::accept(responder, cancellation).unwrap();
++                let mut file = Vec::new();
++                while let Some(chunk) = stream.read_chunk().unwrap() {
++                    file.extend_from_slice(&chunk);
++                }
++                return file;
++            }
++        }
++    });
++    let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)
++        .origin(url.origin())
++        .mode(RequestMode::Navigate)
++        .policy_container(Default::default())
++        .download_handling(Some(DownloadHandling::FromEmbedder))
++        .download_filename(Some("saved.txt".into()))
++        .build();
++    let response = fetch_with_context(request, &mut context);
++    assert!(response.is_download);
++    assert_eq!(download.join().unwrap(), b"normally rendered as text");
++    server.close();
++}
+diff --git a/components/net/tests/http_cache.rs b/components/net/tests/http_cache.rs
+index 4147348e72c..85456dcee6e 100644
+--- a/components/net/tests/http_cache.rs
++++ b/components/net/tests/http_cache.rs
+@@ -4,6 +4,7 @@
+
+ use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, EXPIRES, HeaderValue, RANGE};
+ use http::{HeaderMap, StatusCode};
++use net::fetch::methods::DataReceiver;
+ use net::http_cache::{CacheKey, HttpCache, HttpCacheAssignment, ValidationStatus, refresh};
+ use net_traits::blob_url_store::UrlWithBlobClaim;
+ use net_traits::request::{Referrer, RequestBuilder};
+@@ -47,8 +48,8 @@ async fn test_refreshing_resource_sets_done_chan_the_appropriate_value() {
+         };
+         // Second, mutate the response into a 304 response, and refresh the stored one.
+         response.status = StatusCode::NOT_MODIFIED.into();
+-        let (send, recv) = unbounded();
+-        let mut done_chan = Some((send, recv));
++        let (_send, recv) = unbounded();
++        let mut done_chan = Some(DataReceiver::Unbounded(recv));
+         let refreshed_response = refresh(
+             &request,
+             response.clone(),
 diff --git a/components/script/dom/html/embedded_content/htmlareaelement.rs b/components/script/dom/html/embedded_content/htmlareaelement.rs
-index 51620c9b368..a70dd6692f7 100644
+index 546dfef275f..04b6b3bbb4a 100644
 --- a/components/script/dom/html/embedded_content/htmlareaelement.rs
 +++ b/components/script/dom/html/embedded_content/htmlareaelement.rs
-@@ -378,6 +378,12 @@ impl VirtualMethods for HTMLAreaElement {
+@@ -379,6 +379,12 @@ impl VirtualMethods for HTMLAreaElement {
  }
 
  impl HTMLAreaElementMethods<crate::DomTypeHolder> for HTMLAreaElement {
@@ -234,38 +1102,51 @@ index 51620c9b368..a70dd6692f7 100644
      make_getter!(Target, "target");
 
 diff --git a/components/script/dom/html/links/relations.rs b/components/script/dom/html/links/relations.rs
-index 1196cbe0e6e..f8fdca29ae5 100644
+index 1196cbe0e6e..607a39079c8 100644
 --- a/components/script/dom/html/links/relations.rs
 +++ b/components/script/dom/html/links/relations.rs
-@@ -392,6 +392,13 @@ pub(crate) fn follow_hyperlink(
+@@ -4,6 +4,7 @@
+
+ //! Defines shared hyperlink behaviour for `<link>`, `<a>`, `<area>` and `<form>` elements.
+
++use content_security_policy::sandboxing_directive::SandboxingFlagSet;
+ use html5ever::local_name;
+ use js::context::JSContext;
+ use malloc_size_of::malloc_size_of_is_0;
+@@ -392,6 +393,12 @@ pub(crate) fn follow_hyperlink(
      relations: LinkRelations,
      hyperlink_suffix: Option<String>,
  ) {
 +    // Step 2 of <https://html.spec.whatwg.org/multipage/#following-hyperlinks-2>:
 +    // an `a`/`area` with a `download` attribute downloads the resource
 +    // instead of navigating to it.
-+    let download_attribute = (subject.is::<HTMLAnchorElement>() ||
-+        subject.is::<HTMLAreaElement>())
-+    .then(|| subject.get_attribute_string_value(&local_name!("download")))
-+    .flatten();
++    let download_attribute = (subject.is::<HTMLAnchorElement>() || subject.is::<HTMLAreaElement>())
++        .then(|| subject.get_attribute_string_value(&local_name!("download")))
++        .flatten();
      // Step 1: If subject cannot navigate, then return.
      if subject.cannot_navigate() {
          return;
-@@ -487,12 +494,24 @@ pub(crate) fn follow_hyperlink(
+@@ -406,6 +413,13 @@ pub(crate) fn follow_hyperlink(
+     // Also allow the user to open links in a new WebView by pressing either the meta or
+     // control key (depending on the platform).
+     let document = subject.owner_document();
++    if download_attribute.is_some()
++        && document.has_active_sandboxing_flag(
++            SandboxingFlagSet::SANDBOXED_DOWNLOADS_BROWSING_CONTEXT_FLAG,
++        )
++    {
++        return;
++    }
+     let target_attribute_value =
+         if subject.is::<HTMLAreaElement>() || subject.is::<HTMLAnchorElement>() {
+             if document
+@@ -487,12 +501,16 @@ pub(crate) fn follow_hyperlink(
          // Step 13: Navigate targetNavigable to urlString using subject's node document,
          //          with referrerPolicy set to referrerPolicy, userInvolvement set to
          //          userInvolvement, and sourceElement set to subject.
-+        // <https://html.spec.whatwg.org/multipage/#downloading-hyperlinks>: the
-+        // page may only suggest a filename for same-origin resources. For a
-+        // cross-origin URL the download still happens, but the name comes from
-+        // the response (Content-Disposition) or the URL instead.
-+        let download = download_attribute.map(|filename| {
-+            if document.origin().immutable().clone() == url.origin() {
-+                filename
-+            } else {
-+                String::new()
-+            }
-+        });
++        // Only trust the suggested filename when the final response is same-origin
++        // or uses a local data/blob URL. Fetch checks after redirects as well.
++        let download = download_attribute;
 +
          let secure = target_window.as_global_scope().is_secure_context();
          let upgrade_insecure_navigations_set = window
@@ -277,7 +1158,7 @@ index 1196cbe0e6e..f8fdca29ae5 100644
              LoadOrigin::Script(document.origin().snapshot()),
              url,
              document.about_base_url(),
-@@ -505,6 +524,7 @@ pub(crate) fn follow_hyperlink(
+@@ -505,6 +523,7 @@ pub(crate) fn follow_hyperlink(
              document.has_trustworthy_ancestor_origin(),
              document.creation_sandboxing_flag_set_considering_parent_iframe(),
          );
@@ -286,10 +1167,10 @@ index 1196cbe0e6e..f8fdca29ae5 100644
          navigate(cx, target_window, history_handling, false, load_data);
      };
 diff --git a/components/script/dom/html/textual/htmlanchorelement.rs b/components/script/dom/html/textual/htmlanchorelement.rs
-index 4f4211bacbc..7142500ef14 100644
+index 70f5681c826..efcbb97003a 100644
 --- a/components/script/dom/html/textual/htmlanchorelement.rs
 +++ b/components/script/dom/html/textual/htmlanchorelement.rs
-@@ -174,6 +174,12 @@ impl HTMLAnchorElementMethods<crate::DomTypeHolder> for HTMLAnchorElement {
+@@ -175,6 +175,12 @@ impl HTMLAnchorElementMethods<crate::DomTypeHolder> for HTMLAnchorElement {
      make_setter!(SetHreflang, "hreflang");
 
      // https://html.spec.whatwg.org/multipage/#dom-a-type
@@ -303,45 +1184,64 @@ index 4f4211bacbc..7142500ef14 100644
 
      // https://html.spec.whatwg.org/multipage/#dom-a-type
 diff --git a/components/script/event_loop/script_thread.rs b/components/script/event_loop/script_thread.rs
-index cac0ee50072..ae904ac62f4 100644
+index eb100ac20c5..116141fc15c 100644
 --- a/components/script/event_loop/script_thread.rs
 +++ b/components/script/event_loop/script_thread.rs
-@@ -3216,6 +3216,9 @@ impl ScriptThread {
+@@ -3218,6 +3218,11 @@ impl ScriptThread {
          };
 
          if is_204_205 {
 +            // A download can still be reading the response after the
 +            // navigation pipeline is closed.
-+            self.incomplete_loads.borrow_mut()[idx].controller.ignore();
++            if metadata.is_some_and(|metadata| metadata.is_download) {
++                self.incomplete_loads.borrow_mut()[idx].controller.ignore();
++            }
              // If we have an existing window that is being navigated:
              if let Some(window) = self.documents.borrow().find_window(pipeline_id) {
                  let window_proxy = window.window_proxy();
 diff --git a/components/script/navigation.rs b/components/script/navigation.rs
-index 657569cbab1..b090dd7ac8d 100644
+index 657569cbab1..516311f0b8d 100644
 --- a/components/script/navigation.rs
 +++ b/components/script/navigation.rs
-@@ -18,6 +18,7 @@ use js::context::JSContext;
+@@ -18,8 +18,8 @@ use js::context::JSContext;
  use net_traits::blob_url_store::UrlWithBlobClaim;
  use net_traits::fetch::fetch_controller::FetchController;
  use net_traits::request::{
-+    DownloadHandling,
-     CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
-     RequestBuilder, RequestClient, RequestMode,
+-    CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
+-    RequestBuilder, RequestClient, RequestMode,
++    CredentialsMode, DownloadHandling, InsecureRequestsPolicy, Origin, PreloadedResources,
++    RedirectMode, RequestBuilder, RequestClient, RequestMode,
  };
-@@ -266,7 +267,21 @@ impl InProgressLoad {
+ use net_traits::response::ResponseInit;
+ use net_traits::{
+@@ -247,6 +247,20 @@ impl InProgressLoad {
+             network_partition_key: None,
+         };
+
++        let download_handling = if self
++            .load_data
++            .creation_sandboxing_flag_set
++            .contains(SandboxingFlagSet::SANDBOXED_DOWNLOADS_BROWSING_CONTEXT_FLAG)
++        {
++            None
++        } else {
++            Some(match (&self.load_data.download, &self.load_data.load_origin) {
++                (None, _) => DownloadHandling::WhenUnrenderable,
++                (Some(_), LoadOrigin::Constellation) => DownloadHandling::FromEmbedder,
++                (Some(_), _) => DownloadHandling::FromLink,
++            })
++        };
++
+         let mut request_builder = RequestBuilder::new(
+             Some(webview_id),
+             UrlWithBlobClaim::from_url_without_having_claimed_blob(self.load_data.url.clone()),
+@@ -266,7 +280,14 @@ impl InProgressLoad {
          .crash(self.load_data.crash.clone())
          .client(request_client)
          .user_activation(self.load_data.has_transient_activation)
 -        .url_list(self.url_list.clone());
 +        .url_list(self.url_list.clone())
-+        // A navigation renders what it can and hands anything else — an
-+        // attachment, or a type the parser has no support for — to the
-+        // embedder, rather than showing an "Unknown content type" page.
-+        // A hyperlink with `download` skips rendering entirely.
-+        .download_handling(match self.load_data.download {
-+            Some(_) => DownloadHandling::Always,
-+            None => DownloadHandling::WhenUnrenderable,
-+        })
++        .download_handling(download_handling)
 +        .download_filename(
 +            self.load_data
 +                .download
@@ -382,7 +1282,7 @@ index 5e322024382..4e857328dff 100644
    //         attribute USVString ping;
    [CEReactions]
 diff --git a/components/servo/Cargo.toml b/components/servo/Cargo.toml
-index fcf5b7c2ea3..d2a83607a73 100644
+index 0c182853213..05c08234663 100644
 --- a/components/servo/Cargo.toml
 +++ b/components/servo/Cargo.toml
 @@ -161,6 +161,7 @@ layout = { workspace = true }
@@ -394,18 +1294,21 @@ index fcf5b7c2ea3..d2a83607a73 100644
  net = { workspace = true }
  net_traits = { workspace = true }
 diff --git a/components/servo/lib.rs b/components/servo/lib.rs
-index 02a9d4cc5e7..0d736f024b5 100644
+index 02a9d4cc5e7..77567cc9701 100644
 --- a/components/servo/lib.rs
 +++ b/components/servo/lib.rs
-@@ -75,6 +75,7 @@ pub use media::{
+@@ -73,8 +73,10 @@ pub use keyboard_types::{
+ pub use media::{
+     GlApi as MediaGlApi, GlContext as MediaGlContext, NativeDisplay as MediaNativeDisplay,
  };
++pub use net::embedder::{DownloadCancellation, DownloadStream};
  pub use net::image_cache::should_panic_hook_suppress_termination;
  pub use net_traits::CookieSource;
 +pub use net_traits::request::{DownloadHandling, RequestId};
  // This API should probably not be exposed in this way. Instead there should be a fully
  // fleshed out public domains API if we want to expose it.
  pub use net_traits::pub_domains::is_reg_domain;
-@@ -124,7 +125,7 @@ pub use crate::webview_delegate::{
+@@ -124,7 +126,7 @@ pub use crate::webview_delegate::{
      AlertDialog, AllowOrDenyRequest, AuthenticationRequest, BluetoothDeviceSelectionRequest,
      ColorPicker, ConfirmDialog, ContextMenu, CreateNewWebViewRequest, EmbedderControl, FilePicker,
      InputMethodControl, NavigationRequest, PermissionRequest, PromptDialog, SelectElement,
@@ -414,11 +1317,20 @@ index 02a9d4cc5e7..0d736f024b5 100644
  };
 
  #[cfg(feature = "webxr")]
+@@ -140,7 +142,7 @@ pub mod webxr {
+
+ // TODO: The protocol handler interface needs to be cleaned and simplified.
+ pub mod protocol_handler {
+-    pub use net::fetch::methods::{DoneChannel, FetchContext};
++    pub use net::fetch::methods::{DataReceiver, DoneChannel, FetchContext};
+     pub use net::filemanager_thread::FILE_CHUNK_SIZE;
+     pub use net::protocols::{ProtocolHandler, ProtocolRegistry};
+     pub use net_traits::filemanager_thread::RelativePos;
 diff --git a/components/servo/servo.rs b/components/servo/servo.rs
-index 76229ea376e..a244144b3e7 100644
+index 6b20a80678d..04debe8d765 100644
 --- a/components/servo/servo.rs
 +++ b/components/servo/servo.rs
-@@ -527,6 +527,44 @@ impl ServoInner {
+@@ -527,6 +527,34 @@ impl ServoInner {
                  self.site_data_manager
                      .handle_cookie_response(operation_id, CookieOperationResponse::Done);
              },
@@ -429,6 +1341,9 @@ index 76229ea376e..a244144b3e7 100644
 +                content_type,
 +                responder,
 +                default_filename,
++                content_length,
++                can_retry,
++                cancellation,
 +            } => {
 +                if let Some(webview) = self.get_webview_handle(webview_id) {
 +                    let response = crate::webview_delegate::UnsupportedResponse {
@@ -437,6 +1352,9 @@ index 76229ea376e..a244144b3e7 100644
 +                        url,
 +                        content_type,
 +                        default_filename,
++                        content_length,
++                        can_retry,
++                        cancellation,
 +                        responder: Some(responder),
 +                    };
 +                    webview
@@ -444,52 +1362,81 @@ index 76229ea376e..a244144b3e7 100644
 +                        .notify_unsupported_response(webview, response);
 +                }
 +            },
-+            NetToEmbedderMsg::FetchResponseChunk(webview_id, request_id, chunk) => {
-+                if let Some(webview) = self.get_webview_handle(webview_id) {
-+                    webview
-+                        .delegate()
-+                        .notify_response_chunk(webview, request_id, chunk);
-+                }
-+            },
-+            NetToEmbedderMsg::FetchResponseEof(webview_id, request_id, result) => {
-+                if let Some(webview) = self.get_webview_handle(webview_id) {
-+                    webview.delegate().notify_response_eof(
-+                        webview,
-+                        request_id,
-+                        result.map_err(|_| ()),
-+                    );
-+                }
-+            },
          }
      }
 
+diff --git a/components/servo/webview.rs b/components/servo/webview.rs
+index 07389c5191d..6c179f3da63 100644
+--- a/components/servo/webview.rs
++++ b/components/servo/webview.rs
+@@ -230,15 +230,17 @@ impl WebView {
+                 let _ = responder.send(Some(new_webview_details));
+             },
+             None => {
+-                let url = builder.url.unwrap_or(
+-                    Url::parse("about:blank")
+-                        .expect("Should always be able to parse 'about:blank'."),
+-                );
++                let request = builder.initial_request.unwrap_or_else(|| {
++                    UrlRequest::new(
++                        Url::parse("about:blank")
++                            .expect("Should always be able to parse 'about:blank'."),
++                    )
++                });
+
+                 servo
+                     .constellation_proxy()
+                     .send(EmbedderToConstellationMessage::NewWebView(
+-                        url.into(),
++                        request,
+                         new_webview_details,
+                     ));
+             },
+@@ -1125,7 +1127,7 @@ pub struct WebViewBuilder {
+     servo: Servo,
+     rendering_context: Rc<dyn RenderingContext>,
+     delegate: Rc<dyn WebViewDelegate>,
+-    url: Option<Url>,
++    initial_request: Option<UrlRequest>,
+     hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
+     create_new_webview_responder: Option<AutomaticResponder<Option<NewWebViewDetails>>>,
+     user_content_manager: Option<Rc<UserContentManager>>,
+@@ -1144,7 +1146,7 @@ impl WebViewBuilder {
+         Self {
+             servo: servo.clone(),
+             rendering_context,
+-            url: None,
++            initial_request: None,
+             hidpi_scale_factor: Scale::new(1.0),
+             delegate: Rc::new(DefaultWebViewDelegate),
+             create_new_webview_responder: None,
+@@ -1174,8 +1176,13 @@ impl WebViewBuilder {
+     }
+
+     /// Set the initial URL to load in the [`WebView`] being created.
+-    pub fn url(mut self, url: Url) -> Self {
+-        self.url = Some(url);
++    pub fn url(self, url: Url) -> Self {
++        self.url_request(UrlRequest::new(url))
++    }
++
++    /// Set the initial request to load in the new webview.
++    pub fn url_request(mut self, request: UrlRequest) -> Self {
++        self.initial_request = Some(request);
+         self
+     }
+
 diff --git a/components/servo/webview_delegate.rs b/components/servo/webview_delegate.rs
-index a97d36a74fe..107b63fa52a 100644
+index a97d36a74fe..0f8d100a605 100644
 --- a/components/servo/webview_delegate.rs
 +++ b/components/servo/webview_delegate.rs
-@@ -1090,6 +1090,54 @@ pub trait WebViewDelegate {
+@@ -1090,6 +1090,45 @@ pub trait WebViewDelegate {
          _tree_update: accesskit::TreeUpdate,
      ) {
      }
 +
 +    /// Offer a file download to the embedder. Dropping the offer resumes normal navigation.
 +    fn notify_unsupported_response(&self, _webview: WebView, _response: UnsupportedResponse) {}
-+    /// Receive a body chunk for an accepted download.
-+    fn notify_response_chunk(
-+        &self,
-+        _webview: WebView,
-+        _request_id: net_traits::request::RequestId,
-+        _chunk: Vec<u8>,
-+    ) {
-+    }
-+    /// Receive the result of an accepted download after its last chunk.
-+    fn notify_response_eof(
-+        &self,
-+        _webview: WebView,
-+        _request_id: net_traits::request::RequestId,
-+        _result: Result<(), ()>,
-+    ) {
-+    }
 +}
 +
 +pub struct UnsupportedResponse {
@@ -498,7 +1445,11 @@ index a97d36a74fe..107b63fa52a 100644
 +    pub url: servo_url::ServoUrl,
 +    pub content_type: Option<mime::Mime>,
 +    pub default_filename: String,
-+    pub(crate) responder: Option<Sender<bool>>,
++    pub content_length: Option<u64>,
++    /// The final URL can be requested again without resubmitting a request body.
++    pub can_retry: bool,
++    pub(crate) cancellation: crate::DownloadCancellation,
++    pub(crate) responder: Option<Sender<net::embedder::DownloadDecision>>,
 +}
 +
 +impl std::fmt::Debug for UnsupportedResponse {
@@ -508,15 +1459,18 @@ index a97d36a74fe..107b63fa52a 100644
 +}
 +
 +impl UnsupportedResponse {
-+    pub fn accept(&mut self) {
-+        if let Some(responder) = self.responder.take() {
-+            let _ = responder.send(true);
-+        }
++    pub fn is_pending(&self) -> bool {
++        self.responder.as_ref().is_some_and(|responder| !responder.is_closed())
++    }
++
++    pub fn accept(&mut self) -> Option<crate::DownloadStream> {
++        let responder = self.responder.take()?;
++        crate::DownloadStream::accept(responder, self.cancellation.clone())
 +    }
 +
 +    pub fn decline(&mut self) {
 +        if let Some(responder) = self.responder.take() {
-+            let _ = responder.send(false);
++            let _ = responder.send(net::embedder::DownloadDecision::Decline);
 +        }
 +    }
  }
@@ -548,19 +1502,89 @@ index 174d8dd476b..0eb70a79f9e 100644
          }
      }
 
+diff --git a/components/shared/constellation/lib.rs b/components/shared/constellation/lib.rs
+index ca8ca343ec0..8d1ccfb6da3 100644
+--- a/components/shared/constellation/lib.rs
++++ b/components/shared/constellation/lib.rs
+@@ -37,7 +37,7 @@ use servo_base::id::{
+ };
+ use servo_canvas_traits::webgl::GenericSender;
+ use servo_config::prefs::PrefValue;
+-use servo_url::{ImmutableOrigin, ServoUrl};
++use servo_url::ImmutableOrigin;
+ pub use structured_data::*;
+ use strum::IntoStaticStr;
+ use webrender_api::units::LayoutVector2D;
+@@ -73,7 +73,7 @@ pub enum EmbedderToConstellationMessage {
+     /// A log entry, with the top-level browsing context id and thread name
+     LogEntry(Option<ScriptEventLoopId>, Option<String>, LogEntry),
+     /// Create a new top level browsing context.
+-    NewWebView(ServoUrl, NewWebViewDetails),
++    NewWebView(UrlRequest, NewWebViewDetails),
+     /// Close a top level browsing context.
+     CloseWebView(WebViewId),
+     /// Set whether a WebView has system focus. This corresponds to the [HTML
+diff --git a/components/shared/embedder/lib.rs b/components/shared/embedder/lib.rs
+index a1d7e8c4166..d9dd19d30c8 100644
+--- a/components/shared/embedder/lib.rs
++++ b/components/shared/embedder/lib.rs
+@@ -1198,6 +1198,8 @@ pub struct UrlRequest {
+         serialize_with = "hyper_serde::serialize"
+     )]
+     pub headers: HeaderMap,
++    /// An embedder-initiated download with an optional suggested filename.
++    pub download: Option<String>,
+ }
+
+ impl UrlRequest {
+@@ -1205,9 +1207,16 @@ impl UrlRequest {
+         UrlRequest {
+             url: url.into(),
+             headers: HeaderMap::new(),
++            download: None,
+         }
+     }
+
++    /// Request a download. Pass an empty string to use the response's filename.
++    pub fn download(mut self, suggested_filename: String) -> Self {
++        self.download = Some(suggested_filename);
++        self
++    }
++
+     /// Set headers that will be added to the Headers
+     pub fn headers(mut self, headers: HeaderMap) -> Self {
+         self.headers = headers;
 diff --git a/components/shared/net/lib.rs b/components/shared/net/lib.rs
-index 237ad4eb766..eaea3bdff81 100644
+index 237ad4eb766..25ec9789931 100644
 --- a/components/shared/net/lib.rs
 +++ b/components/shared/net/lib.rs
-@@ -15,6 +15,7 @@ use cookie::Cookie;
+@@ -14,6 +14,7 @@ use content_security_policy::{self as csp};
+ use cookie::Cookie;
  use crossbeam_channel::{Receiver, Sender, unbounded};
  use headers::{ContentType, HeaderMapExt, ReferrerPolicy as ReferrerPolicyHeader};
- use http::{HeaderMap, HeaderValue, StatusCode, header};
 +use http::header::CONTENT_DISPOSITION;
+ use http::{HeaderMap, HeaderValue, StatusCode, header};
  use hyper_serde::Serde;
  use hyper_util::client::legacy::Error as HyperError;
- use malloc_size_of::malloc_size_of_is_0;
-@@ -1463,3 +1464,42 @@ pub fn set_default_accept_language(headers: &mut HeaderMap) {
+@@ -1144,6 +1145,9 @@ pub struct Metadata {
+     /// Final URL after redirects.
+     pub final_url: ServoUrl,
+
++    /// The response continues as a download owned by the embedder.
++    pub is_download: bool,
++
+     /// Location URL from the response headers.
+     pub location_url: Option<Result<ServoUrl, String>>,
+
+@@ -1179,6 +1183,7 @@ impl Metadata {
+     pub fn default(url: ServoUrl) -> Self {
+         Metadata {
+             final_url: url,
++            is_download: false,
+             location_url: None,
+             content_type: None,
+             charset: None,
+@@ -1463,3 +1468,92 @@ pub fn set_default_accept_language(headers: &mut HeaderMap) {
  }
 
  pub static PRIVILEGED_SECRET: LazyLock<u32> = LazyLock::new(|| rng().next_u32());
@@ -581,33 +1605,83 @@ index 237ad4eb766..eaea3bdff81 100644
 +        })
 +}
 +
++/// Use the RFC 6266 extended filename when it is valid, falling back to
++/// the ordinary quoted or token filename.
 +pub fn extract_filename_from_content_disposition(headers: &HeaderMap) -> Option<String> {
-+    let cd = headers.get(CONTENT_DISPOSITION)?.to_str().ok()?;
-+    if let Some(index) = cd.find("filename=") {
-+        let start = index + "filename=".len();
-+        return Some(
-+            cd.get(start..)
-+                .unwrap_or_default()
-+                .trim_matches('"')
-+                .to_owned(),
-+        );
++    let value = headers.get(CONTENT_DISPOSITION)?.to_str().ok()?;
++    let (_, mut params) = value.split_once(';')?;
++    let mut filename = None;
++    let mut extended = None;
++
++    while let Some((name, value)) = params.trim_start().split_once('=') {
++        let name = name.trim_end();
++        let value = value.trim_start();
++        if name.is_empty() || name.contains(';') {
++            break;
++        }
++        let (value, rest) = disposition_parameter(value)?;
++        params = rest;
++
++        if name.eq_ignore_ascii_case("filename*") && extended.is_none() {
++            extended = decode_extended_filename(&value);
++        } else if name.eq_ignore_ascii_case("filename") && filename.is_none() && !value.is_empty() {
++            filename = Some(value);
++        }
 +    }
-+    if let Some(index) = cd.find("filename*=UTF-8''") {
-+        let start = index + "filename*=UTF-8''".len();
-+        return Some(
-+            cd.get(start..)
-+                .unwrap_or_default()
-+                .trim_matches('"')
-+                .to_owned(),
-+        );
++
++    extended.or(filename)
++}
++
++fn disposition_parameter(input: &str) -> Option<(String, &str)> {
++    let Some(input) = input.strip_prefix('"') else {
++        let (value, rest) = input.split_once(';').unwrap_or((input, ""));
++        return Some((value.trim_end().to_owned(), rest));
++    };
++    let mut value = String::new();
++    let mut chars = input.char_indices();
++    while let Some((offset, character)) = chars.next() {
++        match character {
++            '\\' => value.push(chars.next()?.1),
++            '"' => {
++                let rest = input[offset + 1..].trim_start();
++                return Some((value, rest.strip_prefix(';').unwrap_or_default()));
++            },
++            _ => value.push(character),
++        }
 +    }
 +    None
 +}
++
++fn decode_extended_filename(value: &str) -> Option<String> {
++    let mut parts = value.splitn(3, '\'');
++    let charset = parts.next()?;
++    let _language = parts.next()?;
++    let encoded = parts.next()?;
++    for (index, byte) in encoded.bytes().enumerate() {
++        if byte == b'%'
++            && !encoded
++                .as_bytes()
++                .get(index + 1..index + 3)
++                .is_some_and(|digits| digits.iter().all(u8::is_ascii_hexdigit))
++        {
++            return None;
++        }
++    }
++    let decoded = percent_encoding::percent_decode_str(encoded);
++    let filename = if charset.eq_ignore_ascii_case("utf-8") {
++        decoded.decode_utf8().ok()?.into_owned()
++    } else if charset.eq_ignore_ascii_case("iso-8859-1") {
++        decoded.map(char::from).collect()
++    } else {
++        return None;
++    };
++    (!filename.is_empty()).then_some(filename)
++}
 diff --git a/components/shared/net/request.rs b/components/shared/net/request.rs
-index 904273c07f3..dbd4f35a485 100644
+index 904273c07f3..684663b36a8 100644
 --- a/components/shared/net/request.rs
 +++ b/components/shared/net/request.rs
-@@ -439,6 +439,18 @@ impl RequestHeadersSize for HeaderMap {
+@@ -439,6 +439,19 @@ impl RequestHeadersSize for HeaderMap {
      }
  }
 
@@ -618,15 +1692,16 @@ index 904273c07f3..dbd4f35a485 100644
 +    /// or is of a type the parser cannot render — the behaviour of an
 +    /// ordinary navigation.
 +    WhenUnrenderable,
-+    /// Always offer the response to the embedder, whatever its type. Used by
-+    /// `<a download>` and "Save Link As".
-+    Always,
++    /// Apply the download attribute of an HTML hyperlink.
++    FromLink,
++    /// The embedder explicitly requested a download of the final response.
++    FromEmbedder,
 +}
 +
  #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
  pub struct RequestBuilder {
      pub id: RequestId,
-@@ -534,6 +546,13 @@ pub struct RequestBuilder {
+@@ -534,6 +547,13 @@ pub struct RequestBuilder {
      pub crash: Option<String>,
      /// Servo internal: whether this request originates from Servo internal implementation
      pub is_internal_request: InternalRequest,
@@ -640,7 +1715,7 @@ index 904273c07f3..dbd4f35a485 100644
  }
 
  impl RequestBuilder {
-@@ -578,9 +597,21 @@ impl RequestBuilder {
+@@ -578,9 +598,21 @@ impl RequestBuilder {
              response_tainting: ResponseTainting::Basic,
              is_internal_request: Default::default(),
              crash: None,
@@ -649,8 +1724,8 @@ index 904273c07f3..dbd4f35a485 100644
          }
      }
 
-+    pub fn download_handling(mut self, handling: DownloadHandling) -> RequestBuilder {
-+        self.download_handling = Some(handling);
++    pub fn download_handling(mut self, handling: Option<DownloadHandling>) -> RequestBuilder {
++        self.download_handling = handling;
 +        self
 +    }
 +
@@ -662,7 +1737,7 @@ index 904273c07f3..dbd4f35a485 100644
      pub fn preload_id(mut self, preload_id: PreloadId) -> RequestBuilder {
          self.preload_id = Some(preload_id);
          self
-@@ -793,6 +824,8 @@ impl RequestBuilder {
+@@ -793,6 +825,8 @@ impl RequestBuilder {
          request.user_activation = self.user_activation;
          request.policy_container = self.policy_container;
          request.is_internal_request = self.is_internal_request;
@@ -671,7 +1746,7 @@ index 904273c07f3..dbd4f35a485 100644
          request
      }
 
-@@ -883,6 +916,13 @@ pub struct Request {
+@@ -883,6 +917,13 @@ pub struct Request {
      pub crash: Option<String>,
      /// Servo internal: whether this request originates from Servo internal implementation
      pub is_internal_request: InternalRequest,
@@ -685,7 +1760,7 @@ index 904273c07f3..dbd4f35a485 100644
  }
 
  impl Request {
-@@ -932,6 +972,8 @@ impl Request {
+@@ -932,6 +973,8 @@ impl Request {
              policy_container: RequestPolicyContainer::Client,
              is_internal_request: Default::default(),
              crash: None,
@@ -694,3 +1769,594 @@ index 904273c07f3..dbd4f35a485 100644
          }
      }
 
+diff --git a/components/shared/net/response.rs b/components/shared/net/response.rs
+index 9c9031c70c6..8a076de73ff 100644
+--- a/components/shared/net/response.rs
++++ b/components/shared/net/response.rs
+@@ -112,6 +112,8 @@ pub struct Response {
+     pub referrer: Option<ServoUrl>,
+     /// <https://fetch.spec.whatwg.org/#response-redirect-taint>
+     pub redirect_taint: RedirectTaint,
++    /// The navigation handed its response body over to the embedder.
++    pub is_download: bool,
+     pub referrer_policy: ReferrerPolicy,
+     /// [CORS-exposed header-name list](https://fetch.spec.whatwg.org/#concept-response-cors-exposed-header-name-list)
+     pub cors_exposed_header_name_list: Vec<String>,
+@@ -159,6 +161,7 @@ impl Response {
+             range_requested: false,
+             request_includes_credentials: true,
+             redirect_taint: Default::default(),
++            is_download: false,
+         }
+     }
+
+@@ -193,6 +196,7 @@ impl Response {
+             range_requested: false,
+             request_includes_credentials: true,
+             redirect_taint: Default::default(),
++            is_download: false,
+         }
+     }
+
+@@ -339,6 +343,7 @@ impl Response {
+             let mut metadata = Metadata::default(url.clone());
+             metadata.set_content_type(extract_mime_type_as_mime(&response.headers).as_ref());
+             metadata.location_url.clone_from(&response.location_url);
++            metadata.is_download = response.is_download;
+             metadata.headers = Some(Serde(response.headers.clone()));
+             metadata.status.clone_from(&response.status);
+             metadata.referrer.clone_from(&response.referrer);
+diff --git a/ports/servoshell/Cargo.toml b/ports/servoshell/Cargo.toml
+index 59d2f506bfd..90075218b86 100644
+--- a/ports/servoshell/Cargo.toml
++++ b/ports/servoshell/Cargo.toml
+@@ -152,7 +152,9 @@ gilrs = { workspace = true }
+ glow = { workspace = true }
+ headers = { workspace = true }
+ itertools = { workspace = true }
++percent-encoding = { workspace = true }
+ rfd = { workspace = true }
++tempfile = { workspace = true }
+ serde_json = { workspace = true }
+ # For optional feature servo-allocator/use-jemalloc and servo-allocator/allocation-tracking
+ servo-allocator = { workspace = true }
+@@ -167,6 +169,7 @@ servo = { workspace = true, features = ["no-wgl"] }
+ windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi", "Win32_System_Console"] }
+
+ [target.'cfg(target_os = "macos")'.dependencies]
++xattr = "1.7"
+ mach2 = { workspace = true }
+ objc2-app-kit = { workspace = true, features = [
+     "std",
+diff --git a/ports/servoshell/desktop/download.rs b/ports/servoshell/desktop/download.rs
+new file mode 100644
+index 00000000000..034b1b8902e
+--- /dev/null
++++ b/ports/servoshell/desktop/download.rs
+@@ -0,0 +1,373 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++use std::io::{self, Write};
++use std::path::{Path, PathBuf};
++use std::pin::Pin;
++use std::sync::Arc;
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::sync::mpsc::{self, Receiver, TryRecvError};
++use std::task::{Context, Poll, Waker};
++use std::time::{Duration, Instant};
++
++use egui::{Id, Modal, ProgressBar};
++use rfd::AsyncFileDialog;
++use servo::{DownloadCancellation, UnsupportedResponse};
++use tempfile::NamedTempFile;
++use winit::window::Window;
++
++type SavePicker = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;
++
++pub(crate) enum DownloadDialog {
++    Choose(PendingDownload),
++    Save(SavingDownload),
++    Finished(io::Result<PathBuf>),
++}
++
++pub(crate) struct PendingDownload {
++    response: UnsupportedResponse,
++    picker: Option<SavePicker>,
++}
++
++impl Drop for PendingDownload {
++    fn drop(&mut self) {
++        self.response.decline();
++    }
++}
++
++pub(crate) struct SavingDownload {
++    path: PathBuf,
++    length: Option<u64>,
++    received: Arc<AtomicU64>,
++    cancellation: DownloadCancellation,
++    result: Receiver<io::Result<()>>,
++}
++
++impl Drop for SavingDownload {
++    fn drop(&mut self) {
++        self.cancellation.cancel();
++    }
++}
++
++impl DownloadDialog {
++    pub(crate) fn new(response: UnsupportedResponse) -> Self {
++        Self::Choose(PendingDownload {
++            response,
++            picker: None,
++        })
++    }
++
++    pub(crate) fn update(&mut self, ctx: &egui::Context, window: &Window, waker: Waker) -> bool {
++        match self {
++            Self::Choose(pending) => {
++                if pending.picker.is_none() && !pending.response.is_pending() {
++                    return false;
++                }
++                let picker = pending.picker.get_or_insert_with(|| {
++                    let mut dialog = AsyncFileDialog::new()
++                        .set_parent(window)
++                        .set_file_name(suggested_filename(&pending.response));
++                    if let Some(downloads) = dirs::download_dir() {
++                        dialog = dialog.set_directory(downloads);
++                    }
++                    let future = dialog.save_file();
++                    Box::pin(async move { future.await.map(|handle| handle.path().to_owned()) })
++                });
++                match picker.as_mut().poll(&mut Context::from_waker(&waker)) {
++                    Poll::Pending => return true,
++                    Poll::Ready(None) => return false,
++                    Poll::Ready(Some(path)) => {
++                        *self = match SavingDownload::start(&mut pending.response, path, waker) {
++                            Ok(transfer) => Self::Save(transfer),
++                            Err(error) => Self::Finished(Err(error)),
++                        };
++                        ctx.request_repaint();
++                    },
++                }
++            },
++            Self::Save(transfer) => {
++                match transfer.result.try_recv() {
++                    Ok(Err(error)) if error.kind() == io::ErrorKind::Interrupted => return false,
++                    Ok(result) => {
++                        *self = Self::Finished(result.map(|()| transfer.path.clone()));
++                        ctx.request_repaint();
++                        return true;
++                    },
++                    Err(TryRecvError::Disconnected) => {
++                        *self = Self::Finished(Err(io::Error::other("Download worker stopped")));
++                        ctx.request_repaint();
++                        return true;
++                    },
++                    Err(TryRecvError::Empty) => {},
++                }
++                let modal = Modal::new(Id::new("download-in-progress")).show(ctx, |ui| {
++                    ui.heading("Downloading");
++                    ui.label(
++                        transfer
++                            .path
++                            .file_name()
++                            .unwrap_or_default()
++                            .to_string_lossy(),
++                    );
++                    let received = transfer.received.load(Ordering::Relaxed);
++                    if let Some(total) = transfer.length.filter(|total| *total > 0) {
++                        ui.add(ProgressBar::new(received as f32 / total as f32).show_percentage());
++                    } else {
++                        ui.label(format!("{received} bytes received"));
++                    }
++                    ui.add_enabled(
++                        !transfer.cancellation.is_cancelled(),
++                        egui::Button::new("Cancel"),
++                    )
++                    .clicked()
++                });
++                if modal.inner {
++                    transfer.cancellation.cancel();
++                }
++            },
++            Self::Finished(result) => {
++                let modal = Modal::new(Id::new("download-result")).show(ctx, |ui| {
++                    match result {
++                        Ok(path) => {
++                            ui.heading("Download complete");
++                            ui.label(path.display().to_string());
++                        },
++                        Err(error) => {
++                            ui.heading("Download failed");
++                            ui.label(error.to_string());
++                        },
++                    }
++                    ui.button("Close").clicked()
++                });
++                return !(modal.inner || modal.should_close());
++            },
++        }
++        true
++    }
++}
++
++impl SavingDownload {
++    fn start(response: &mut UnsupportedResponse, path: PathBuf, waker: Waker) -> io::Result<Self> {
++        let directory = path.parent().ok_or_else(|| {
++            io::Error::new(io::ErrorKind::InvalidInput, "Choose a destination file")
++        })?;
++        let file = tempfile::Builder::new()
++            .prefix(".servo-download-")
++            .suffix(".part")
++            .tempfile_in(directory)?;
++        let mut stream = response.accept().ok_or_else(|| {
++            io::Error::new(io::ErrorKind::Interrupted, "The download request ended")
++        })?;
++        let cancellation = stream.cancellation();
++        let download_cancellation = cancellation.clone();
++        let length = response.content_length;
++        let received = Arc::new(AtomicU64::new(0));
++        let progress = received.clone();
++        let destination = path.clone();
++        let (sender, result) = mpsc::channel();
++        std::thread::Builder::new()
++            .name("servo-download".into())
++            .spawn(move || {
++                let mut last_repaint = Instant::now();
++                let result = save_download(
++                    file,
++                    &destination,
++                    length,
++                    || {
++                        stream
++                            .read_chunk()
++                            .map_err(|error| io::Error::other(format!("{error:?}")))
++                    },
++                    || download_cancellation.is_cancelled(),
++                    |bytes| {
++                        progress.store(bytes, Ordering::Relaxed);
++                        if last_repaint.elapsed() >= Duration::from_millis(100) {
++                            waker.wake_by_ref();
++                            last_repaint = Instant::now();
++                        }
++                    },
++                );
++                let _ = sender.send(result);
++                waker.wake();
++            })?;
++        Ok(Self {
++            path,
++            length,
++            received,
++            cancellation,
++            result,
++        })
++    }
++}
++
++fn save_download<Chunk: AsRef<[u8]>>(
++    mut file: NamedTempFile,
++    path: &Path,
++    expected: Option<u64>,
++    mut read_chunk: impl FnMut() -> io::Result<Option<Chunk>>,
++    cancelled: impl Fn() -> bool,
++    mut progress: impl FnMut(u64),
++) -> io::Result<()> {
++    let mut received = 0;
++    loop {
++        let chunk = read_chunk();
++        if cancelled() {
++            return Err(io::ErrorKind::Interrupted.into());
++        }
++        let Some(chunk) = chunk? else {
++            break;
++        };
++        file.write_all(chunk.as_ref())?;
++        received += chunk.as_ref().len() as u64;
++        progress(received);
++    }
++    if expected.is_some_and(|expected| expected != received) {
++        return Err(io::Error::new(
++            io::ErrorKind::UnexpectedEof,
++            "Incomplete download",
++        ));
++    }
++    file.as_file().sync_all()?;
++    mark_quarantine(file.as_file())?;
++    if cancelled() {
++        return Err(io::ErrorKind::Interrupted.into());
++    }
++    file.persist_noclobber(path)?;
++    Ok(())
++}
++
++fn suggested_filename(response: &UnsupportedResponse) -> String {
++    let from_url = || {
++        let name = response.url.path().rsplit('/').next().unwrap_or_default();
++        percent_encoding::percent_decode_str(name)
++            .decode_utf8_lossy()
++            .into_owned()
++    };
++    let name = if response.default_filename.trim().is_empty() {
++        from_url()
++    } else {
++        response.default_filename.clone()
++    };
++    sanitize_filename(&name)
++}
++
++fn sanitize_filename(name: &str) -> String {
++    let name: String = name
++        .chars()
++        .filter(|character| {
++            !character.is_control()
++                && !matches!(*character,
++            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
++        })
++        .map(|character| match character {
++            '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*' => '_',
++            _ => character,
++        })
++        .collect();
++    let name = name
++        .trim()
++        .trim_start_matches('.')
++        .trim_end_matches(['.', ' ']);
++    if name.is_empty() {
++        return "download".to_owned();
++    }
++    name.to_owned()
++}
++
++#[cfg(target_os = "macos")]
++fn mark_quarantine(file: &std::fs::File) -> io::Result<()> {
++    use std::time::{SystemTime, UNIX_EPOCH};
++
++    use xattr::FileExt;
++
++    let time = SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .unwrap_or_default();
++    let value = format!("0001;{:x};Servo;", time.as_secs());
++    file.set_xattr("com.apple.quarantine", value.as_bytes())
++}
++
++#[cfg(not(target_os = "macos"))]
++fn mark_quarantine(_: &std::fs::File) -> io::Result<()> {
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn download_suggestions_are_single_visible_filenames() {
++        assert_eq!(sanitize_filename(".."), "download");
++        assert_eq!(sanitize_filename("folder/a:b\\file"), "folder_a_b_file");
++        assert_eq!(sanitize_filename(".photo\u{202e}.zip"), "photo.zip");
++    }
++
++    #[test]
++    fn successful_download_is_published_with_the_exact_bytes() {
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("hello.txt");
++        let file = NamedTempFile::new_in(directory.path()).unwrap();
++        let mut chunks = [b"hel".as_slice(), b"lo".as_slice()].into_iter();
++        let mut counts = Vec::new();
++        save_download(
++            file,
++            &path,
++            Some(5),
++            || Ok(chunks.next()),
++            || false,
++            |count| {
++                counts.push(count);
++            },
++        )
++        .unwrap();
++
++        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
++        assert_eq!(counts, [3, 5]);
++        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
++        #[cfg(target_os = "macos")]
++        assert!(xattr::get(&path, "com.apple.quarantine").unwrap().is_some());
++    }
++
++    #[test]
++    fn cancellation_or_truncation_leaves_no_partial_file() {
++        use std::cell::Cell;
++
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("hello.txt");
++        for cancel in [false, true] {
++            let file = NamedTempFile::new_in(directory.path()).unwrap();
++            let mut chunks = [b"short".as_slice()].into_iter();
++            let cancelled = Cell::new(false);
++            let result = save_download(
++                file,
++                &path,
++                Some(10),
++                || Ok(chunks.next()),
++                || cancelled.get(),
++                |_| cancelled.set(cancel),
++            );
++            let expected = if cancel {
++                io::ErrorKind::Interrupted
++            } else {
++                io::ErrorKind::UnexpectedEof
++            };
++            assert_eq!(result.unwrap_err().kind(), expected);
++            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
++        }
++    }
++
++    #[test]
++    fn existing_destination_survives_a_save_failure() {
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("hello.txt");
++        std::fs::write(&path, b"existing file").unwrap();
++        let file = NamedTempFile::new_in(directory.path()).unwrap();
++        let mut chunk = Some(b"new file".as_slice());
++        let result = save_download(file, &path, None, || Ok(chunk.take()), || false, |_| {});
++        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
++        assert_eq!(std::fs::read(&path).unwrap(), b"existing file");
++        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
++    }
++}
+diff --git a/ports/servoshell/desktop/gui.rs b/ports/servoshell/desktop/gui.rs
+index 5ede9d35126..fe60aeb4780 100644
+--- a/ports/servoshell/desktop/gui.rs
++++ b/ports/servoshell/desktop/gui.rs
+@@ -628,6 +628,7 @@ impl Gui {
+             // the size of its RenderingContext.
+             let webview_rect = ctx.available_rect_before_wrap();
+             headed_window.for_each_active_dialog(window, |dialog| dialog.update(ctx, webview_rect));
++            headed_window.update_download_dialog(ctx);
+
+             // Some other widget may have claimed focus on this tick, so detect if the currently
+             // focused egui widget is still a WebView.
+diff --git a/ports/servoshell/desktop/headed_window.rs b/ports/servoshell/desktop/headed_window.rs
+index 6ae05f16ca9..05a3df2595c 100644
+--- a/ports/servoshell/desktop/headed_window.rs
++++ b/ports/servoshell/desktop/headed_window.rs
+@@ -8,7 +8,9 @@
+ #![deny(clippy::unwrap_used)]
+
+ use std::cell::{Cell, RefCell};
+-use std::collections::HashMap;
++use std::collections::{HashMap, VecDeque};
++use std::sync::Arc;
++use std::task::Waker;
+ use std::rc::Rc;
+
+ use euclid::{Angle, Length, Point2D, Rect, Rotation3D, Scale, Size2D, UnknownUnit, Vector3D};
+@@ -47,6 +49,7 @@ use super::geometry::{winit_position_to_euclid_point, winit_size_to_euclid_size}
+ use super::keyutils::{CMD_OR_ALT, keyboard_event_from_winit};
+ use crate::desktop::accelerated_gl_media::setup_gl_accelerated_media;
+ use crate::desktop::dialog::Dialog;
++use crate::desktop::download::DownloadDialog;
+ use crate::desktop::event_loop::{AppEvent, RepaintEventLoopWaker};
+ use crate::desktop::gui::Gui;
+ use crate::desktop::keyutils::{CMD_OR_CONTROL, keyboard_modifiers_from_winit_modifiers};
+@@ -98,6 +101,7 @@ pub struct HeadedWindow {
+     last_title: RefCell<String>,
+     /// The current set of open dialogs.
+     dialogs: RefCell<HashMap<WebViewId, Vec<Dialog>>>,
++    download_dialogs: RefCell<VecDeque<DownloadDialog>>,
+     /// The [`EmbedderControlId`] of the currently showing [`InputMethod`] interfaces,
+     /// if one is showing.
+     visible_input_method: Cell<Option<EmbedderControlId>>,
+@@ -216,6 +220,7 @@ impl HeadedWindow {
+             rendering_context,
+             last_title: RefCell::new(String::from(INITIAL_WINDOW_TITLE)),
+             dialogs: Default::default(),
++            download_dialogs: Default::default(),
+             visible_input_method: Default::default(),
+             last_mouse_position: Default::default(),
+         })
+@@ -482,6 +487,19 @@ impl HeadedWindow {
+         dialogs.retain_mut(callback);
+     }
+
++    pub(crate) fn update_download_dialog(&self, ctx: &egui::Context) {
++        let mut dialogs = self.download_dialogs.borrow_mut();
++        if let Some(dialog) = dialogs.front_mut() {
++            let waker = RepaintEventLoopWaker::new(self.event_loop_proxy.clone(), self.id());
++            if !dialog.update(ctx, &self.winit_window, Waker::from(Arc::new(waker))) {
++                dialogs.pop_front();
++                if !dialogs.is_empty() {
++                    ctx.request_repaint();
++                }
++            }
++        }
++    }
++
+     fn add_dialog(&self, webview_id: WebViewId, dialog: Dialog) {
+         self.dialogs
+             .borrow_mut()
+@@ -502,7 +520,7 @@ impl HeadedWindow {
+         // First lazily clean up any empty dialog vectors.
+         let mut dialogs = self.dialogs.borrow_mut();
+         dialogs.retain(|_, dialogs| !dialogs.is_empty());
+-        dialogs.contains_key(&webview_id)
++        dialogs.contains_key(&webview_id) || !self.download_dialogs.borrow().is_empty()
+     }
+
+     fn toolbar_height(&self) -> Length<f32, DeviceIndependentPixel> {
+@@ -1138,6 +1156,11 @@ impl PlatformWindow for HeadedWindow {
+         );
+     }
+
++    fn show_download_dialog(&self, response: servo::UnsupportedResponse) {
++        self.download_dialogs.borrow_mut().push_back(DownloadDialog::new(response));
++        self.winit_window.request_redraw();
++    }
++
+     fn dismiss_embedder_controls_for_webview(&self, webview_id: WebViewId) {
+         self.dialogs.borrow_mut().remove(&webview_id);
+     }
+diff --git a/ports/servoshell/desktop/mod.rs b/ports/servoshell/desktop/mod.rs
+index 703f55f30d4..b2214dc5bca 100644
+--- a/ports/servoshell/desktop/mod.rs
++++ b/ports/servoshell/desktop/mod.rs
+@@ -8,6 +8,7 @@ mod accelerated_gl_media;
+ pub(crate) mod app;
+ pub(crate) mod cli;
+ pub(crate) mod dialog;
++mod download;
+ pub(crate) mod event_loop;
+ #[cfg(feature = "gamepad")]
+ pub(crate) mod gamepad;
+diff --git a/ports/servoshell/desktop/protocols/resource.rs b/ports/servoshell/desktop/protocols/resource.rs
+index 3e1436ae642..6b712dcdc51 100644
+--- a/ports/servoshell/desktop/protocols/resource.rs
++++ b/ports/servoshell/desktop/protocols/resource.rs
+@@ -15,7 +15,7 @@ use std::pin::Pin;
+ use flate2::read::GzDecoder;
+ use headers::{ContentType, HeaderMapExt};
+ use servo::protocol_handler::{
+-    DoneChannel, FILE_CHUNK_SIZE, FetchContext, NetworkError, ProtocolHandler, RelativePos,
++    DataReceiver, DoneChannel, FILE_CHUNK_SIZE, FetchContext, NetworkError, ProtocolHandler, RelativePos,
+     Request, ResourceFetchTiming, Response, ResponseBody,
+ };
+ use tokio::sync::mpsc::unbounded_channel;
+@@ -80,7 +80,7 @@ impl ResourceProtocolHandler {
+             // Setup channel to receive cross-thread messages about the file fetch
+             // operation.
+             let (mut done_sender, done_receiver) = unbounded_channel();
+-            *done_chan = Some((done_sender.clone(), done_receiver));
++            *done_chan = Some(DataReceiver::Unbounded(done_receiver));
+
+             *response.body.lock() = ResponseBody::Receiving(vec![]);
+
+diff --git a/ports/servoshell/running_app_state.rs b/ports/servoshell/running_app_state.rs
+index 10c3c3e10fc..236ba24354b 100644
+--- a/ports/servoshell/running_app_state.rs
++++ b/ports/servoshell/running_app_state.rs
+@@ -810,6 +810,10 @@ impl WebViewDelegate for RunningAppState {
+         }
+     }
+
++    fn notify_unsupported_response(&self, webview: WebView, response: servo::UnsupportedResponse) {
++        self.platform_window_for_webview(&webview).show_download_dialog(response);
++    }
++
+     fn notify_fullscreen_state_changed(&self, webview: WebView, fullscreen_state: bool) {
+         self.platform_window_for_webview(&webview)
+             .set_fullscreen(fullscreen_state);
+diff --git a/ports/servoshell/window.rs b/ports/servoshell/window.rs
+index f6c0785d12e..1cbe11ab582 100644
+--- a/ports/servoshell/window.rs
++++ b/ports/servoshell/window.rs
+@@ -485,6 +485,7 @@ pub(crate) trait PlatformWindow {
+     }
+     fn show_permission_dialog(&self, _: WebViewId, _: PermissionRequest) {}
+     fn show_http_authentication_dialog(&self, _: WebViewId, _: AuthenticationRequest) {}
++    fn show_download_dialog(&self, _: servo::UnsupportedResponse) {}
+
+     fn notify_input_event_handled(
+         &self,

@@ -899,7 +899,7 @@ pub(crate) fn settings_appearance(
             palette,
             &mut chrome.settings.appearance.translucency,
             &theme::Translucency::ALL,
-            zervo_core::theme::Translucency::label,
+            heion_core::theme::Translucency::label,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
@@ -974,7 +974,7 @@ pub(crate) fn settings_appearance(
             palette,
             &mut chrome.settings.appearance.edge,
             &theme::Edge::ALL,
-            zervo_core::theme::Edge::label,
+            heion_core::theme::Edge::label,
         ) {
             actions.push(UiAction::SettingsChanged);
         }
@@ -1793,7 +1793,7 @@ fn settings_about(
                 ui.image((icon.id(), vec2(50.0, 50.0)));
             }
             ui.vertical(|ui| {
-                ui.label(RichText::new(zervo_core::APP_NAME).size(20.0).strong());
+                ui.label(RichText::new(heion_core::APP_NAME).size(20.0).strong());
                 ui.label(
                     RichText::new(crate::l10n::message(
                         "settings-version",

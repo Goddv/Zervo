@@ -11,7 +11,7 @@ use std::rc::Rc;
 use euclid::Scale;
 use servo::{
     InputEventId, InputEventResult, KeyboardEvent, LoadStatus, OffscreenRenderingContext, Servo,
-    WebView, WebViewBuilder, WindowRenderingContext,
+    UrlRequest, WebView, WebViewBuilder, WindowRenderingContext,
 };
 use url::Url;
 use winit::window::Window;
@@ -22,22 +22,6 @@ use crate::keyboard::CMD_OR_CONTROL;
 use crate::library::Library;
 use crate::passwords::Vault;
 use crate::state::{BrowserState, TabId, TabKind};
-
-/// Engine-driven download traffic, queued for the UI thread.
-#[cfg(feature = "engine-downloads")]
-pub enum DownloadEvent {
-    // There was an `Offered` here. An offer is no longer something that has
-    // already happened and needs reporting — it is a question, and it waits in
-    // `Controls` for an answer instead of travelling down this queue.
-    Chunk {
-        request_id: servo::RequestId,
-        chunk: Vec<u8>,
-    },
-    Finished {
-        request_id: servo::RequestId,
-        ok: bool,
-    },
-}
 
 /// Unix seconds, for history timestamps.
 pub fn now() -> i64 {
@@ -92,9 +76,6 @@ pub struct AppState {
     /// Top-left of the content card in window points, so positions the engine
     /// reports relative to the webview can be placed on screen.
     pub content_origin: Cell<(f32, f32)>,
-    /// Download events from the engine, drained by the UI each redraw.
-    #[cfg(feature = "engine-downloads")]
-    pub download_events: RefCell<Vec<DownloadEvent>>,
     /// What the page says the pointer is over — a link's target, mostly.
     /// `None` when it is over nothing in particular.
     pub status_text: RefCell<Option<String>>,
@@ -216,14 +197,18 @@ impl AppState {
     /// Create the engine view for a tab and make it the active one.
     /// Internal Heion tabs never get a webview.
     pub fn open_tab(self: &Rc<Self>, tab_id: TabId, url: Url) {
-        log::debug!("ZERVO open_tab tab={tab_id} url={url}");
         if matches!(url.scheme(), "heion" | "zervo") {
             self.activate_tab(tab_id);
             return;
         }
-        let address = url.to_string();
+        self.open_tab_request(tab_id, UrlRequest::new(url));
+    }
+
+    pub fn open_tab_request(self: &Rc<Self>, tab_id: TabId, request: UrlRequest) {
+        let address = request.url.to_string();
+        log::debug!("ZERVO open_tab tab={tab_id} url={address}");
         let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
-            .url(url)
+            .url_request(request)
             .hidpi_scale_factor(self.hidpi_scale_factor())
             .delegate(self.clone())
             .build();
@@ -433,12 +418,12 @@ impl AppState {
             .active_tab()
             .map(|tab| {
                 if tab.title.is_empty() {
-                    zervo_core::APP_NAME.to_owned()
+                    heion_core::APP_NAME.to_owned()
                 } else {
-                    format!("{} — {}", tab.title, zervo_core::APP_NAME)
+                    format!("{} — {}", tab.title, heion_core::APP_NAME)
                 }
             })
-            .unwrap_or_else(|| zervo_core::APP_NAME.to_owned());
+            .unwrap_or_else(|| heion_core::APP_NAME.to_owned());
         drop(browser);
         if *self.last_window_title.borrow() != title {
             self.window.set_title(&title);
@@ -761,35 +746,6 @@ impl servo::WebViewDelegate for AppState {
             crate::downloads::sanitize_public(&response.default_filename)
         };
         self.controls.borrow_mut().push_offer(response, filename);
-        self.window.request_redraw();
-    }
-
-    #[cfg(feature = "engine-downloads")]
-    fn notify_response_chunk(
-        &self,
-        _webview: WebView,
-        request_id: servo::RequestId,
-        chunk: Vec<u8>,
-    ) {
-        self.download_events
-            .borrow_mut()
-            .push(DownloadEvent::Chunk { request_id, chunk });
-        self.window.request_redraw();
-    }
-
-    #[cfg(feature = "engine-downloads")]
-    fn notify_response_eof(
-        &self,
-        _webview: WebView,
-        request_id: servo::RequestId,
-        result: Result<(), ()>,
-    ) {
-        self.download_events
-            .borrow_mut()
-            .push(DownloadEvent::Finished {
-                request_id,
-                ok: result.is_ok(),
-            });
         self.window.request_redraw();
     }
 

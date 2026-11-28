@@ -668,7 +668,7 @@ fn header(
     let response = button(ui, settings, "newtab_settings", label, palette).on_hover_text(label);
     let name = rect.shrink2(vec2(46.0, 0.0));
     let draw_labels = |offset, ink| {
-        text(ui, name.translate(offset), zervo_core::APP_NAME, 20.0, ink);
+        text(ui, name.translate(offset), heion_core::APP_NAME, 20.0, ink);
         draw_icon(ui, settings.center() + offset, Icon::Sliders, ink);
     };
     let ink = if has_wallpaper {

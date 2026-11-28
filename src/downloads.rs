@@ -1,20 +1,16 @@
 //! File downloads.
 //!
-//! Servo upstream has no download subsystem; this build carries jdm's
-//! prototype (servo/servo#40210) ported forward and completed, which offers
-//! any response the renderer cannot display to the embedder.
-//!
-//! Transport is the engine itself: Servo performs the fetch — so cookies,
-//! auth headers, redirects and cache all apply — and streams the response to
-//! us through `WebViewDelegate::notify_response_chunk`. We only choose where
-//! the bytes land.
+//! The engine keeps the response from the original navigation. Heion asks
+//! the user before accepting it and writes the resulting stream off the UI thread.
 
 // Several helpers here are only reachable with the `engine-downloads`
 // feature; they stay compiled so the module keeps a single shape.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+#[cfg(feature = "engine-downloads")]
 use std::sync::Arc;
+#[cfg(feature = "engine-downloads")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type DownloadId = u64;
@@ -35,7 +31,11 @@ pub struct Download {
     pub received: u64,
     pub total: Option<u64>,
     pub state: DownloadState,
-    cancel: Arc<AtomicBool>,
+    pub can_retry: bool,
+    #[cfg(feature = "engine-downloads")]
+    pub source: servo::WebViewId,
+    #[cfg(feature = "engine-downloads")]
+    transfer: Option<Transfer>,
 }
 
 /// One download as a list row wants it.
@@ -54,6 +54,7 @@ pub struct RowView {
     pub received: u64,
     pub total: Option<u64>,
     pub state: DownloadState,
+    pub can_retry: bool,
 }
 
 impl Download {
@@ -68,6 +69,7 @@ impl Download {
             received: self.received,
             total: self.total,
             state: self.state.clone(),
+            can_retry: self.can_retry && self.state != DownloadState::Running,
         }
     }
 
@@ -82,19 +84,27 @@ impl Download {
 pub struct DownloadManager {
     pub items: Vec<Download>,
     next_id: DownloadId,
-    /// Downloads the engine is streaming to us, keyed by its request id.
-    #[cfg(feature = "engine-downloads")]
-    engine: std::collections::HashMap<servo::RequestId, EngineDownload>,
 }
 
-/// A download whose bytes arrive from Servo itself.
 #[cfg(feature = "engine-downloads")]
-struct EngineDownload {
-    id: DownloadId,
-    file: std::fs::File,
-    part_path: PathBuf,
-    final_path: PathBuf,
-    received: u64,
+struct Transfer {
+    cancelled: Arc<AtomicBool>,
+    cancellation: servo::DownloadCancellation,
+}
+
+#[cfg(feature = "engine-downloads")]
+#[derive(Debug)]
+pub(crate) enum Event {
+    Progress(DownloadId, u64),
+    Finished(DownloadId, u64, TransferResult),
+}
+
+#[cfg(feature = "engine-downloads")]
+#[derive(Debug)]
+pub(crate) enum TransferResult {
+    Complete(PathBuf),
+    Cancelled,
+    Failed,
 }
 
 impl DownloadManager {
@@ -105,103 +115,116 @@ impl DownloadManager {
             .count()
     }
 
-    /// Accept a response Servo could not render, and start writing it to disk.
-    /// Returns false if the destination could not be opened, in which case the
-    /// caller should decline the offer.
+    /// Open a private partial file before taking ownership of the response.
     #[cfg(feature = "engine-downloads")]
     pub fn accept_from_engine(
         &mut self,
-        request_id: servo::RequestId,
-        url: &str,
-        default_filename: &str,
-    ) -> bool {
-        let filename = if default_filename.trim().is_empty() {
-            filename_from_url(url)
-        } else {
-            sanitize(default_filename)
-        };
-        let final_path = unique_path(&downloads_dir(), &filename);
-        let part_path = final_path.with_extension(format!(
-            "{}.part",
-            final_path
-                .extension()
-                .map(|extension| extension.to_string_lossy())
-                .unwrap_or_default()
-        ));
-        let Ok(file) = std::fs::File::create(&part_path) else {
-            return false;
-        };
-
+        response: &mut servo::UnsupportedResponse,
+        filename: &str,
+        proxy: winit::event_loop::EventLoopProxy<crate::WakerEvent>,
+    ) {
         let id = self.next_id;
         self.next_id += 1;
-        self.items.push(Download {
+        let directory = downloads_dir();
+        let mut item = Download {
             id,
-            url: url.to_owned(),
-            filename: final_path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or(filename),
-            path: final_path.clone(),
+            url: response.url.to_string(),
+            filename: filename.to_owned(),
+            path: directory.join(filename),
             received: 0,
-            total: None,
-            state: DownloadState::Running,
-            cancel: Arc::new(AtomicBool::new(false)),
-        });
-        self.engine.insert(
-            request_id,
-            EngineDownload {
-                id,
-                file,
-                part_path,
-                final_path,
-                received: 0,
-            },
-        );
-        true
-    }
-
-    /// A chunk of an engine-driven download.
-    #[cfg(feature = "engine-downloads")]
-    pub fn engine_chunk(&mut self, request_id: servo::RequestId, chunk: &[u8]) {
-        let Some(entry) = self.engine.get_mut(&request_id) else {
-            return;
+            total: response.content_length,
+            state: download_failed(),
+            can_retry: response.can_retry,
+            source: response.webview_id,
+            transfer: None,
         };
-        use std::io::Write as _;
-        if entry.file.write_all(chunk).is_err() {
-            return;
-        }
-        entry.received += chunk.len() as u64;
-        let (id, received) = (entry.id, entry.received);
-        if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
-            item.received = received;
-        }
-    }
 
-    /// The engine finished (or failed) an engine-driven download.
-    #[cfg(feature = "engine-downloads")]
-    pub fn engine_finished(&mut self, request_id: servo::RequestId, ok: bool) {
-        let Some(entry) = self.engine.remove(&request_id) else {
-            return;
-        };
-        drop(entry.file);
-        let state = if ok && std::fs::rename(&entry.part_path, &entry.final_path).is_ok() {
-            quarantine(&entry.final_path);
-            DownloadState::Complete
+        if let Ok(file) = tempfile::Builder::new()
+            .prefix(".heion-")
+            .suffix(".part")
+            .tempfile_in(&directory)
+            && let Some(stream) = response.accept()
+        {
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let transfer = Transfer {
+                cancelled: cancelled.clone(),
+                cancellation: stream.cancellation(),
+            };
+            let filename = filename.to_owned();
+            let length = item.total;
+            let started = std::thread::Builder::new()
+                .name("heion-download".into())
+                .spawn(move || {
+                    let mut received = 0;
+                    let result = write_download(
+                        stream,
+                        file,
+                        &directory,
+                        &filename,
+                        length,
+                        &cancelled,
+                        &mut received,
+                        |received| {
+                            proxy
+                                .send_event(crate::WakerEvent::Download(Event::Progress(
+                                    id, received,
+                                )))
+                                .is_ok()
+                        },
+                    );
+                    let _ = proxy.send_event(crate::WakerEvent::Download(Event::Finished(
+                        id, received, result,
+                    )));
+                });
+            if started.is_ok() {
+                item.state = DownloadState::Running;
+                item.transfer = Some(transfer);
+            }
         } else {
-            let _ = std::fs::remove_file(&entry.part_path);
-            DownloadState::Failed(crate::l10n::text("downloads-transfer-failed").to_owned())
+            response.decline();
+        }
+
+        self.items.push(item);
+    }
+
+    #[cfg(feature = "engine-downloads")]
+    pub(crate) fn apply_event(&mut self, event: Event) {
+        let id = match &event {
+            Event::Progress(id, _) | Event::Finished(id, _, _) => *id,
         };
-        if let Some(item) = self.items.iter_mut().find(|item| item.id == entry.id) {
-            item.state = state;
+        let Some(item) = self.items.iter_mut().find(|item| item.id == id) else {
+            return;
+        };
+        match event {
+            Event::Progress(_, received) => item.received = received,
+            Event::Finished(_, received, result) => {
+                item.received = received;
+                item.transfer = None;
+                item.state = match result {
+                    TransferResult::Complete(path) => {
+                        if let Some(name) = path.file_name() {
+                            item.filename = name.to_string_lossy().into_owned();
+                        }
+                        item.path = path;
+                        DownloadState::Complete
+                    },
+                    TransferResult::Cancelled => DownloadState::Cancelled,
+                    TransferResult::Failed => download_failed(),
+                };
+            },
         }
     }
 
     pub fn cancel(&mut self, id: DownloadId) {
-        if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
-            item.cancel.store(true, Ordering::Relaxed);
-            if item.state == DownloadState::Running {
-                item.state = DownloadState::Cancelled;
+        if let Some(item) = self.items.iter_mut().find(|item| item.id == id)
+            && item.state == DownloadState::Running
+        {
+            #[cfg(feature = "engine-downloads")]
+            if let Some(transfer) = &item.transfer {
+                transfer.cancelled.store(true, Ordering::Relaxed);
+                transfer.cancellation.cancel();
             }
+            item.state = DownloadState::Cancelled;
         }
     }
 
@@ -213,6 +236,86 @@ impl DownloadManager {
     pub fn clear_finished(&mut self) {
         self.items
             .retain(|item| item.state == DownloadState::Running);
+    }
+}
+
+#[cfg(feature = "engine-downloads")]
+fn download_failed() -> DownloadState {
+    DownloadState::Failed(crate::l10n::text("downloads-transfer-failed").to_owned())
+}
+
+#[cfg(feature = "engine-downloads")]
+fn write_download(
+    mut stream: servo::DownloadStream,
+    mut file: tempfile::NamedTempFile,
+    directory: &Path,
+    filename: &str,
+    length: Option<u64>,
+    cancelled: &AtomicBool,
+    received: &mut u64,
+    progress: impl Fn(u64) -> bool,
+) -> TransferResult {
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+
+    let mut last_progress = Instant::now();
+    loop {
+        let chunk = stream.read_chunk();
+        if cancelled.load(Ordering::Relaxed) {
+            return TransferResult::Cancelled;
+        }
+        let chunk = match chunk {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => {
+                log::debug!("Download did not finish: {error:?}");
+                return TransferResult::Failed;
+            },
+        };
+        if let Err(error) = file.write_all(&chunk) {
+            log::warn!("Cannot write download: {error}");
+            return TransferResult::Failed;
+        }
+        *received += chunk.len() as u64;
+        if last_progress.elapsed() >= Duration::from_millis(100) {
+            if !progress(*received) {
+                return TransferResult::Cancelled;
+            }
+            last_progress = Instant::now();
+        }
+    }
+
+    if length.is_some_and(|length| length != *received) || file.as_file().sync_all().is_err() {
+        return TransferResult::Failed;
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return TransferResult::Cancelled;
+    }
+    quarantine(file.path());
+    match persist_download(file, directory, filename) {
+        Ok(path) => TransferResult::Complete(path),
+        Err(error) => {
+            log::warn!("Cannot save download: {error}");
+            TransferResult::Failed
+        },
+    }
+}
+
+#[cfg(feature = "engine-downloads")]
+fn persist_download(
+    mut file: tempfile::NamedTempFile,
+    directory: &Path,
+    filename: &str,
+) -> std::io::Result<PathBuf> {
+    loop {
+        let path = unique_path(directory, filename);
+        match file.persist_noclobber(&path) {
+            Ok(_) => return Ok(path),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                file = error.file
+            },
+            Err(error) => return Err(error.error),
+        }
     }
 }
 
@@ -330,7 +433,8 @@ pub fn downloads_dir() -> PathBuf {
 /// Never overwrite: `file.zip` → `file (1).zip`.
 fn unique_path(dir: &Path, filename: &str) -> PathBuf {
     let candidate = dir.join(filename);
-    if !candidate.exists() {
+    if matches!(candidate.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
         return candidate;
     }
     let path = Path::new(filename);
@@ -344,7 +448,8 @@ fn unique_path(dir: &Path, filename: &str) -> PathBuf {
         .unwrap_or_default();
     for index in 1..1000 {
         let candidate = dir.join(format!("{stem} ({index}){extension}"));
-        if !candidate.exists() {
+        if matches!(candidate.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        {
             return candidate;
         }
     }
@@ -454,6 +559,32 @@ pub fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "engine-downloads")]
+    #[test]
+    fn concurrent_downloads_do_not_overwrite_each_other() {
+        use std::io::Write as _;
+        use std::sync::Barrier;
+
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Barrier::new(2);
+        let download = |contents: &[u8]| {
+            let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+            file.write_all(contents).unwrap();
+            gate.wait();
+            persist_download(file, dir.path(), "same.txt").unwrap()
+        };
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| download(b"first"));
+            let second = scope.spawn(|| download(b"second"));
+            let first = first.join().unwrap();
+            let second = second.join().unwrap();
+            assert_ne!(first, second);
+            assert_eq!(std::fs::read(first).unwrap(), b"first");
+            assert_eq!(std::fs::read(second).unwrap(), b"second");
+        });
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 
     /// The whole point of `sanitize`: nothing a server sends may address a
     /// directory other than the one the download is going into.

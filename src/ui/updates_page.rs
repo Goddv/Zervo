@@ -62,7 +62,7 @@ pub(super) fn draw(
                             ui.label(
                                 RichText::new(format!(
                                     "{} {}",
-                                    zervo_core::APP_NAME,
+                                    heion_core::APP_NAME,
                                     crate::updates::installed_version()
                                 ))
                                 .size(20.0)

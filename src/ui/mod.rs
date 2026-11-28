@@ -1870,6 +1870,7 @@ fn draw_downloads_card(
                         received,
                         total,
                         state,
+                        can_retry,
                     } = entry;
                     let row = Rect::from_min_size(
                         pos2(body.min.x, body.min.y + index as f32 * ROW),
@@ -2007,7 +2008,8 @@ fn draw_downloads_card(
                                 "pause",
                             );
                         } else {
-                            if control(ui, Icon::Reload, tr("chrome-start-again"), true, "restart")
+                            if *can_retry &&
+                                control(ui, Icon::Reload, tr("chrome-start-again"), true, "restart")
                             {
                                 actions.push(UiAction::RestartDownload(*download));
                             }
@@ -2051,7 +2053,7 @@ fn draw_downloads_card(
                 let filename = chosen
                     .map(|entry| entry.filename.clone())
                     .unwrap_or_default();
-                let rows = [
+                let mut rows = vec![
                     (tr("chrome-copy-download-link").to_owned(), 0u8),
                     (tr("chrome-copy-file-name").to_owned(), 1),
                     (tr("chrome-show-in-folder").to_owned(), 2),
@@ -2059,6 +2061,9 @@ fn draw_downloads_card(
                     (tr("chrome-start-again").to_owned(), 4),
                     (tr("chrome-remove-from-list").to_owned(), 5),
                 ];
+                if !chosen.is_some_and(|entry| entry.can_retry) {
+                    rows.retain(|(_, action)| *action != 4);
+                }
                 match popup_menu(&ctx, &palette, menu_id.with("area"), at, &rows) {
                     Some(choice) => {
                         ctx.data_mut(|data| data.remove::<(u64, egui::Pos2)>(menu_id));

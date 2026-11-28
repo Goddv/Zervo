@@ -46,7 +46,7 @@ mod favicons;
 // and the tests can run on a pull request without compiling Servo first.
 // Re-exported at the root rather than referred to by its own name, so every
 // `crate::theme::…` in the tree carries on resolving and nothing had to move.
-pub use zervo_core::{gestures, glass, grid, l10n, net, newtab_widgets, store, theme};
+pub use heion_core::{gestures, glass, grid, l10n, net, newtab_widgets, store, theme};
 // Stays here rather than in the core crate: it reads the window's live GL
 // context, which is the half of the browser the core crate exists to avoid.
 mod gpu;
@@ -293,7 +293,7 @@ struct RunningApp {
     /// people reported. Crossing both over the same interval leaves no single
     /// frame for them to disagree on.
     theme_fade: Option<(Palette, std::time::Instant)>,
-    /// File downloads (Servo has no download subsystem — we do it ourselves).
+    /// File downloads accepted from Servo.
     downloads: downloads::DownloadManager,
     /// A blurred copy of the page, for the chrome to frost itself against.
     /// Shared because the copy is taken inside a paint callback, which runs
@@ -349,7 +349,7 @@ impl ApplicationHandler<WakerEvent> for App {
         };
 
         let attributes = Window::default_attributes()
-            .with_title(zervo_core::APP_NAME)
+            .with_title(heion_core::APP_NAME)
             .with_inner_size(LogicalSize::new(1200.0, 800.0))
             .with_min_inner_size(LogicalSize::new(600.0, 400.0))
             // Shown further down, once the AccessKit adapter exists — it
@@ -608,8 +608,6 @@ impl ApplicationHandler<WakerEvent> for App {
             vault: RefCell::new(passwords::Vault::load()),
             visible_input_method: Cell::new(None),
             content_origin: Cell::new((0.0, 0.0)),
-            #[cfg(feature = "engine-downloads")]
-            download_events: RefCell::new(Vec::new()),
             status_text: RefCell::new(None),
             toasts: RefCell::new(crate::notifications::Toasts::default()),
             last_window_title: RefCell::new(String::new()),
@@ -746,6 +744,11 @@ impl ApplicationHandler<WakerEvent> for App {
         };
         match event {
             WakerEvent::Engine => app.state.servo.spin_event_loop(),
+            #[cfg(feature = "engine-downloads")]
+            WakerEvent::Download(event) => {
+                app.downloads.apply_event(event);
+                app.state.window.request_redraw();
+            },
             WakerEvent::PullRefreshChecked { stroke, at_top } => {
                 app.resolve_pull_refresh(stroke, at_top);
             },
@@ -1480,27 +1483,6 @@ impl RunningApp {
 
         // Adopt popups, drop script-closed tabs, refresh tab titles/urls.
         state.sync();
-        #[cfg(feature = "engine-downloads")]
-        {
-            // Downloads the engine handed us (Servo does the transfer; we store).
-            //
-            // Collected before the loop for the same reason as the queues in
-            // `AppState::sync`: the body activates a tab, which re-enters the
-            // engine, and `notify_response_chunk` pushes onto this very queue.
-            // A `drain` iterator would still be holding the borrow.
-            let events: Vec<app::DownloadEvent> =
-                state.download_events.borrow_mut().drain(..).collect();
-            for event in events {
-                match event {
-                    app::DownloadEvent::Chunk { request_id, chunk } => {
-                        self.downloads.engine_chunk(request_id, &chunk);
-                    },
-                    app::DownloadEvent::Finished { request_id, ok } => {
-                        self.downloads.engine_finished(request_id, ok);
-                    },
-                }
-            }
-        }
 
         let changed_icons = state.favicons_dirty.take();
         if !changed_icons.is_empty() {
@@ -1883,18 +1865,16 @@ impl RunningApp {
         #[cfg(feature = "engine-downloads")]
         {
             let accepted = state.controls.borrow_mut().take_accepted();
-            for mut offer in accepted {
-                if self.downloads.accept_from_engine(
-                    offer.response.request_id,
-                    offer.response.url.as_str(),
-                    &offer.filename,
-                ) {
-                    offer.response.accept();
-                    let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
-                    state.activate_tab(tab_id);
-                } else {
-                    offer.response.decline();
+            if !accepted.is_empty() {
+                for mut offer in accepted {
+                    self.downloads.accept_from_engine(
+                        &mut offer.response,
+                        &offer.filename,
+                        self.animation_waker.0.clone(),
+                    );
                 }
+                let tab_id = state.browser.borrow_mut().find_or_create_downloads_tab();
+                state.activate_tab(tab_id);
             }
         }
 
@@ -2713,20 +2693,32 @@ impl RunningApp {
                 state.window.request_redraw();
             },
             UiAction::RestartDownload(id) => {
-                // Servo has no "fetch this again" call, so the way to start a
-                // download over is to ask for the URL again — which is how it
-                // started in the first place.
-                let url = self
-                    .downloads
-                    .items
-                    .iter()
-                    .find(|item| item.id == id)
-                    .map(|item| item.url.clone());
-                self.downloads.remove(id);
-                if let Some(url) = url {
-                    self.apply_action(UiAction::Navigate(url));
+                #[cfg(not(feature = "engine-downloads"))]
+                let _ = id;
+                #[cfg(feature = "engine-downloads")]
+                if let Some(item) = self.downloads.items.iter().find(|item| item.id == id)
+                    && item.can_retry
+                    && item.state != downloads::DownloadState::Running
+                    && let Ok(url) = Url::parse(&item.url)
+                {
+                    let request = servo::UrlRequest::new(url).download(item.filename.clone());
+                    let source = state.browser.borrow().workspaces.iter()
+                        .flat_map(|workspace| &workspace.tabs)
+                        .filter_map(|tab| tab.webview.as_ref())
+                        .find(|view| view.id() == item.source)
+                        .cloned();
+                    if let Some(view) = source {
+                        view.load_request(request);
+                    } else {
+                        let tab_id = {
+                            let mut browser = state.browser.borrow_mut();
+                            let workspace = browser.active_workspace;
+                            browser.add_tab(workspace, item.url.as_str())
+                        };
+                        state.open_tab_request(tab_id, request);
+                    }
+                    state.window.request_redraw();
                 }
-                state.window.request_redraw();
             },
             UiAction::ClearDownloads => {
                 self.downloads.clear_finished();
@@ -3240,6 +3232,8 @@ struct Waker(winit::event_loop::EventLoopProxy<WakerEvent>);
 enum WakerEvent {
     /// The engine has something to do; spin its event loop.
     Engine,
+    #[cfg(feature = "engine-downloads")]
+    Download(downloads::Event),
     PullRefreshChecked {
         stroke: std::time::Instant,
         at_top: bool,
