@@ -1,4 +1,4 @@
-# Pin Zervo's stable toolchain so local builds and CI use the same compiler.
+# Pin Heion's stable toolchain so local builds and CI use the same compiler.
 [toolchain]
 channel = "1.100.0"
 # Minimal plus exactly what is used. The default profile also pulls rust-docs

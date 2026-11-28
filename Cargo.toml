@@ -1,5 +1,5 @@
 [workspace]
-members = ["zervo-core"]
+members = ["heion-core"]
 
 [package]
 name = "heion"
@@ -16,7 +16,7 @@ publish = false
 default = []
 # File downloads driven by the engine. Requires a Servo build carrying
 # patches/servo/0001-embedder-file-downloads.patch — see docs/SERVO.md.
-# Without it Zervo still runs; unrenderable responses simply are not offered.
+# Without it Heion still runs; unrenderable responses simply are not offered.
 engine-downloads = []
 # Audio and video playback. Needs the official GStreamer distribution installed
 # at /Library/Frameworks/GStreamer.framework; see docs/PACKAGING.md. Off by
@@ -67,7 +67,7 @@ workspace = true
 [dependencies]
 # ── The engine ────────────────────────────────────────────────────────────
 # The version follows Servo's published release. .cargo/config.toml pins the
-# corresponding source with Zervo's patches. See docs/SERVO.md.
+# corresponding source with Heion's patches. See docs/SERVO.md.
 servo = { version = "=0.8.0", default-features = false, features = [
     "background_hang_monitor",
     "baked-in-resources",
@@ -82,7 +82,7 @@ servo = { version = "=0.8.0", default-features = false, features = [
 
 # The version is here as well as the path so this is not a wildcard
 # dependency, which `cargo deny check bans` rejects and rightly so.
-zervo-core = { package = "heion-core", path = "zervo-core", version = "0.1.0" }
+heion-core = { package = "heion-core", path = "heion-core", version = "0.1.0" }
 
 # ── Chrome ────────────────────────────────────────────────────────────────
 egui = "0.37.0"
@@ -115,7 +115,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 url = "2.5"
-# Root certificates for the wallpaper fetcher. Zervo already links rustls (it
+# Root certificates for the wallpaper fetcher. Heion already links rustls (it
 # installs the process crypto provider for the engine); this is the trust
 # anchors it needs to verify a host on its own.
 webpki-roots = "1.0"
