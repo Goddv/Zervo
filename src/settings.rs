@@ -176,6 +176,7 @@ pub struct Settings {
     pub new_tab_show_widgets: bool,
     #[serde(rename = "new_tab_grid_widgets")]
     pub new_tab_widgets: Vec<crate::newtab_widgets::Widget>,
+    pub new_tab_custom_widgets: Vec<crate::newtab_custom::CustomWidget>,
     #[serde(rename = "new_tab_widgets", skip_serializing)]
     legacy_new_tab_widgets: Option<Vec<crate::newtab_widgets::Widget>>,
     /// Show tab close buttons always, instead of only on hover.
@@ -331,6 +332,7 @@ impl Default for Settings {
             new_tab_animate_background: true,
             new_tab_show_widgets: true,
             new_tab_widgets: crate::newtab_widgets::defaults(),
+            new_tab_custom_widgets: Vec::new(),
             legacy_new_tab_widgets: None,
             always_show_tab_close: false,
             show_forward_button: true,
@@ -392,7 +394,12 @@ impl Settings {
 /// Where Zervo keeps its own files. Servo is pointed here too, for its cookie
 /// jar, auth cache and HSTS list.
 pub fn data_dir() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("Zervo"))
+    let profile = if cfg!(feature = "local-widget-test") {
+        "Heion Widget Test"
+    } else {
+        "Zervo"
+    };
+    Some(dirs::config_dir()?.join(profile))
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -413,7 +420,12 @@ pub fn load() -> Settings {
     let mut settings: Settings = if path.as_ref().is_some_and(|file| file.exists()) {
         crate::store::load_or_default(path)
     } else {
-        Settings::new_install()
+        let mut settings = Settings::new_install();
+        if cfg!(feature = "local-widget-test") {
+            settings.seen_setup = true;
+            settings.homepage = "heion://newtab".to_owned();
+        }
+        settings
     };
     migrate(&mut settings);
     #[cfg(target_os = "macos")]
@@ -436,6 +448,7 @@ fn migrate(settings: &mut Settings) {
     if let Some(widgets) = settings.legacy_new_tab_widgets.take() {
         settings.new_tab_widgets = crate::newtab_widgets::migrate_wide_cells(widgets);
     }
+    crate::newtab_custom::normalize(&mut settings.new_tab_custom_widgets);
 
     let Some(translucency) = settings.legacy_translucency.take() else {
         return;

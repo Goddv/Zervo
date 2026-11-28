@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.2.1
+
+- Create New Tab widgets from written or spoken prompts with Apple
+  Intelligence on compatible Apple Silicon Macs running macOS 26 or later.
+  Preview a widget and choose its size before adding it.
+- Photo widgets created from a subject fetch a different Wikimedia Commons
+  photo when New Tab opens or reloads. The last photo stays visible while a
+  replacement loads. World clocks use each city's time zone.
+- Move, resize, and remove widgets from their hover controls. Resize
+  outlines stay visible when shrinking a card, and size menus and tooltips
+  appear above the glass.
+- Updated Servo to upstream main at `f6c9dcd13` with Heion's file download
+  and notification patches.
+
 ## 0.1.2
 
 - Refreshed Servo to upstream main at `9c793b64a` and kept Heion's download

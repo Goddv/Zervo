@@ -3,7 +3,7 @@ members = ["zervo-core"]
 
 [package]
 name = "heion"
-version = "0.1.2"
+version = "0.1.2+1"
 edition = "2024"
 rust-version = "1.100"
 license = "MPL-2.0"
@@ -22,6 +22,7 @@ engine-downloads = []
 # at /Library/Frameworks/GStreamer.framework; see docs/PACKAGING.md. Off by
 # default so a plain build needs nothing but Rust.
 media = ["servo/media-gstreamer"]
+local-widget-test = []
 
 # ── Lints ─────────────────────────────────────────────────────────────────
 # CONTRIBUTING.md has always said "cargo fmt and cargo clippy clean. CI

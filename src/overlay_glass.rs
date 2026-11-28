@@ -21,6 +21,7 @@ pub(crate) enum Role {
     SearchPill,
     DashboardCard,
     DashboardControl,
+    DashboardDragPreview,
 }
 
 impl Role {
@@ -36,6 +37,7 @@ impl Role {
             Self::SearchPill => 27,
             Self::DashboardCard => 23,
             Self::DashboardControl => 64,
+            Self::DashboardDragPreview => 23,
         }
     }
 
@@ -354,13 +356,18 @@ mod macos {
     enum Effect {
         Glass(Retained<NSGlassEffectView>),
         Frost(Retained<NSVisualEffectView>),
+        Plain(Retained<NSView>),
     }
 
     impl Role {
         fn is_content(self) -> bool {
             matches!(
                 self,
-                Self::DashboardCard | Self::DashboardControl | Self::SearchPill | Self::Field
+                Self::DashboardCard
+                    | Self::DashboardControl
+                    | Self::DashboardDragPreview
+                    | Self::SearchPill
+                    | Self::Field
             )
         }
 
@@ -374,6 +381,14 @@ mod macos {
 
     impl Effect {
         fn new(role: Role, mtm: MainThreadMarker) -> Option<Self> {
+            if role == Role::DashboardDragPreview {
+                // The outline is transparent ink positioned above the cards
+                // in the same AppKit plane. It has no glass effect of its own.
+                return Some(Self::Plain(NSView::initWithFrame(
+                    NSView::alloc(mtm),
+                    NSRect::ZERO,
+                )));
+            }
             if let Some(material) = role.frost() {
                 let frost =
                     NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), NSRect::ZERO);
@@ -391,6 +406,7 @@ mod macos {
             match self {
                 Self::Glass(view) => view,
                 Self::Frost(view) => view,
+                Self::Plain(view) => view,
             }
         }
 
@@ -409,6 +425,7 @@ mod macos {
                         layer.setMasksToBounds(true);
                     }
                 },
+                Self::Plain(_) => {},
             }
         }
     }
@@ -634,6 +651,7 @@ mod macos {
                 match &material.effect {
                     Effect::Glass(view) => view.setContentView(Some(&content)),
                     Effect::Frost(view) => view.addSubview(&content),
+                    Effect::Plain(view) => view.addSubview(&content),
                 }
             }
             let ink = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
@@ -789,7 +807,8 @@ mod macos {
                 | Role::Tab
                 | Role::SearchPill
                 | Role::DashboardCard
-                | Role::DashboardControl => painter.clip_rect(),
+                | Role::DashboardControl
+                | Role::DashboardDragPreview => painter.clip_rect(),
                 _ => screen,
             };
             let rect = rect.intersect(screen).intersect(clip);

@@ -12,7 +12,10 @@ use crate::glass::{self, Glass};
 use crate::grid::{Cell, Metrics};
 use crate::icons::{self, Icon};
 use crate::l10n::text as tr;
+use crate::newtab_custom::{self as custom, Block, CustomWidget};
 use crate::newtab_widgets::{self as widgets, Kind, Widget};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use crate::overlay_glass::ComboBoxGlassExt as _;
 use crate::overlay_glass::{self, Role, Surface};
 use crate::settings::{NewTabBackground, SearchEngine};
 use crate::theme::{self, Palette, Tier, Translucency};
@@ -22,6 +25,18 @@ const GAP: f32 = 16.0;
 
 fn editing_id() -> Id {
     Id::unique("new_tab_edit_widgets")
+}
+
+fn reveal_id() -> Id {
+    Id::unique("new_tab_reveal_widget")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub fn reveal_created(ctx: &egui::Context, id: u64) {
+    ctx.data_mut(|data| {
+        data.remove::<bool>(editing_id());
+        data.insert_temp(reveal_id(), id);
+    });
 }
 
 pub fn draw(
@@ -51,9 +66,18 @@ pub fn draw(
         return;
     }
 
-    let inset = (content.width() * 0.045).clamp(18.0, 48.0);
     let viewport = content.shrink2(vec2(0.0, 12.0));
-    let width = (viewport.width() - 2.0 * inset).min(1040.0);
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let can_create = content.height() >= 250.0
+        && content.width() >= 190.0
+        && (chrome.widget_composer.tab.is_some() || crate::macos_sheet::widget_available());
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let viewport = if can_create {
+        viewport.with_max_y(viewport.bottom() - 65.0)
+    } else {
+        viewport
+    };
+    let width = dashboard_width(viewport.width());
     let area = Rect::from_center_size(viewport.center(), vec2(width, viewport.height()));
     let mut dashboard = root.new_child(UiBuilder::new().id_salt("newtab_dashboard").max_rect(area));
     // Keep the gutters available for paint. The column controls layout, while
@@ -80,6 +104,369 @@ pub fn draw(
                 ui.add_space(shadow_reach.ceil().max(10.0));
             }
         });
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if can_create {
+        draw_widget_composer(root, chrome.widget_composer, content, &palette, actions);
+    }
+}
+
+fn dashboard_width(width: f32) -> f32 {
+    (width - 2.0 * (width * 0.045).clamp(18.0, 48.0)).min(1040.0)
+}
+
+fn columns_for_width(width: f32) -> u8 {
+    if width >= 770.0 {
+        widgets::COLUMNS
+    } else if width >= 490.0 {
+        8
+    } else {
+        ((width + GAP) / 76.0).floor().clamp(2.0, 6.0) as u8
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn draw_widget_composer(
+    ui: &mut Ui,
+    composer: &mut crate::widget_composer::Composer,
+    content: Rect,
+    palette: &Palette,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::widget_composer::{Dictation, PROMPT_LIMIT};
+
+    let open = composer.tab.is_some();
+    let progress = ui.ctx().animate_bool_with_time(
+        Id::unique("newtab_widget_composer_morph"),
+        open,
+        0.24 * palette.material.animation,
+    );
+    let max_width = (content.width() - 24.0).min(660.0);
+    let width = egui::lerp(198.0_f32.min(max_width)..=max_width, progress);
+    let height = egui::lerp(44.0..=54.0, progress);
+    let rect = Rect::from_center_size(
+        pos2(content.center().x, content.bottom() - 21.0 - height / 2.0),
+        vec2(width, height),
+    );
+    let surface = glass_surface(ui, rect, palette, Role::SearchPill);
+    if !open && progress < 0.35 {
+        let left = rect.shrink(4.0).with_max_x(rect.center().x - 2.0);
+        let right = rect.shrink(4.0).with_min_x(rect.center().x + 2.0);
+        let speak = tr("newtab-composer-speak");
+        let write = tr("newtab-composer-write");
+        for (bounds, label, icon, speak) in [
+            (left, speak, Icon::Microphone, true),
+            (right, write, Icon::Pencil, false),
+        ] {
+            let target = button(
+                ui,
+                bounds,
+                ("widget_composer_choice", speak),
+                label,
+                palette,
+            )
+            .on_hover_text(tr(if speak {
+                "newtab-composer-speak-help"
+            } else {
+                "newtab-composer-write-help"
+            }));
+            if width > 166.0 {
+                draw_icon(
+                    ui,
+                    bounds.left_center() + vec2(15.0, 0.0),
+                    icon,
+                    palette.accent,
+                );
+                centered_text(
+                    ui,
+                    bounds.with_min_x(bounds.left() + 25.0),
+                    label,
+                    13.0,
+                    palette.text,
+                );
+            } else {
+                draw_icon(ui, bounds.center(), icon, palette.text);
+            }
+            if target.clicked() {
+                actions.push(UiAction::OpenWidgetComposer { speak });
+            }
+        }
+        ui.painter().line_segment(
+            [
+                rect.center() - vec2(0.0, 10.0),
+                rect.center() + vec2(0.0, 10.0),
+            ],
+            Stroke::new(1.0, palette.border),
+        );
+    } else if open && (progress > 0.68 || width == max_width) {
+        let busy = composer.busy();
+        let dismiss =
+            Rect::from_center_size(rect.left_center() + vec2(24.0, 0.0), vec2(34.0, 34.0));
+        let closing = button(
+            ui,
+            dismiss,
+            "close_widget_composer",
+            tr("common-close"),
+            palette,
+        )
+        .on_hover_text(tr("common-close"))
+        .clicked();
+        draw_icon(ui, dismiss.center(), Icon::Close, palette.text_muted);
+        if closing
+            || ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            actions.push(UiAction::CloseWidgetComposer);
+        }
+        let submit_width = if width >= 370.0 { 105.0 } else { 36.0 };
+        let submit = Rect::from_min_size(
+            pos2(rect.right() - submit_width - 8.0, rect.center().y - 18.0),
+            vec2(submit_width, 36.0),
+        );
+        let mic = Rect::from_center_size(submit.left_center() - vec2(20.0, 0.0), vec2(34.0, 34.0));
+        let listening = composer.dictation.is_some();
+        let voice_label = tr(if listening {
+            "newtab-dictation-stop"
+        } else {
+            "newtab-composer-speak"
+        });
+        let voice_icon = if listening {
+            Icon::Square
+        } else {
+            Icon::Microphone
+        };
+        let voice_enabled =
+            !composer.generation && composer.dictation != Some(Dictation::Finishing);
+        if voice_enabled
+            && button(ui, mic, "widget_composer_mic", voice_label, palette)
+                .on_hover_text(voice_label)
+                .clicked()
+        {
+            actions.push(if listening {
+                UiAction::StopWidgetDictation
+            } else {
+                UiAction::StartWidgetDictation
+            });
+        }
+        draw_icon(
+            ui,
+            mic.center(),
+            voice_icon,
+            if listening {
+                palette.accent
+            } else {
+                palette.text_muted
+            },
+        );
+        let field = Rect::from_min_max(
+            pos2(dismiss.right() + 1.0, rect.center().y - 18.0),
+            pos2(
+                (mic.left() - 3.0).max(dismiss.right() + 1.0),
+                rect.center().y + 18.0,
+            ),
+        );
+        if field.width() >= 25.0 {
+            let enter = if listening {
+                let shown = if composer.prompt.is_empty() {
+                    tr("newtab-composer-placeholder")
+                } else {
+                    composer.prompt.as_str()
+                };
+                let font = egui::TextStyle::Body.resolve(ui.style());
+                let galley = ui
+                    .painter()
+                    .layout_no_wrap(shown.to_owned(), font, palette.text);
+                let origin = pos2(
+                    field.left().min(field.right() - galley.size().x),
+                    field.center().y - galley.size().y / 2.0,
+                );
+                ui.painter()
+                    .with_clip_rect(field)
+                    .galley(origin, galley, palette.text);
+                false
+            } else {
+                let response = ui.put(
+                    field,
+                    egui::TextEdit::singleline(&mut composer.prompt)
+                        .id(Id::unique("newtab_widget_prompt"))
+                        .frame(egui::Frame::NONE)
+                        .margin(egui::Margin::ZERO)
+                        .align(egui::Align2::LEFT_CENTER)
+                        .min_size(field.size())
+                        .font(egui::TextStyle::Body)
+                        .text_color(palette.text)
+                        .hint_text(tr("newtab-composer-placeholder"))
+                        .desired_width(field.width())
+                        .char_limit(PROMPT_LIMIT)
+                        .interactive(!busy),
+                );
+                if !busy && std::mem::take(&mut composer.focus_prompt) {
+                    response.request_focus();
+                }
+                if response.changed() {
+                    composer.preview = None;
+                    composer.issue = None;
+                }
+                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
+            };
+            let enabled = !busy && !composer.prompt.trim().is_empty();
+            let label = tr(if composer.preview.is_some() {
+                "newtab-composer-add"
+            } else {
+                "newtab-composer-generate"
+            });
+            let submit_action = if composer.preview.is_some() {
+                UiAction::SaveCustomWidget
+            } else {
+                UiAction::GenerateWidget
+            };
+            let ink = if enabled {
+                palette.text
+            } else {
+                palette.text_muted
+            };
+            if enabled {
+                ui.painter().rect_filled(
+                    submit,
+                    18,
+                    theme::mix(
+                        palette.surface,
+                        palette.accent,
+                        if palette.dark { 0.34 } else { 0.18 },
+                    ),
+                );
+            }
+            if enabled
+                && (button(ui, submit, "widget_composer_submit", label, palette)
+                    .on_hover_text(label)
+                    .clicked()
+                    || enter)
+            {
+                actions.push(submit_action);
+            }
+            if submit_width > 55.0 {
+                centered_text(ui, submit, label, 13.0, ink);
+            } else {
+                draw_icon(ui, submit.center(), Icon::Forward, ink);
+            }
+        }
+    }
+    surface.finish(ui, rect, Role::SearchPill);
+
+    if progress < 0.95 || !open {
+        return;
+    }
+    let status = if let Some(issue) = composer.issue {
+        Some(tr(issue))
+    } else if composer.loading_photo {
+        Some(tr("newtab-widget-fetching-photo"))
+    } else if composer.generation {
+        Some(tr("newtab-composer-creating"))
+    } else {
+        composer.dictation.map(|phase| {
+            tr(match phase {
+                Dictation::Starting => "newtab-dictation-starting",
+                Dictation::Listening => "newtab-dictation-listening",
+                Dictation::Finishing => "newtab-dictation-finishing",
+            })
+        })
+    };
+    if let Some(preview) = composer.preview.as_mut() {
+        let max_height = (content.height() * 0.38).clamp(88.0, 280.0);
+        let grid_width = dashboard_width(content.width());
+        let columns = columns_for_width(grid_width);
+        let preview_span = preview.span.fit(columns, widgets::MAX_HEIGHT);
+        let stride = (grid_width + GAP) / f32::from(columns);
+        let panel_width = (stride * f32::from(preview_span.w) + 14.0)
+            .max(286.0)
+            .min(rect.width());
+        let size_key = Id::unique((
+            "newtab_widget_preview_height",
+            &preview.title,
+            preview.span.w,
+            preview.span.h,
+        ));
+        let cached_height = ui.ctx().data(|data| data.get_temp::<f32>(size_key));
+        let height = cached_height.unwrap_or(max_height).clamp(88.0, max_height);
+        let bounds = Rect::from_min_size(
+            pos2(
+                rect.center().x - panel_width / 2.0,
+                rect.top() - height - 10.0,
+            ),
+            vec2(panel_width, height),
+        );
+        ui.interact(
+            bounds,
+            Id::unique("newtab_widget_preview_surface"),
+            Sense::click(),
+        );
+        let surface = glass_surface(ui, bounds, palette, Role::DashboardCard);
+        let mut body = ui.new_child(
+            UiBuilder::new()
+                .id_salt("newtab_widget_preview")
+                .max_rect(bounds.shrink(15.0)),
+        );
+        body.visuals_mut().override_text_color = Some(palette.text);
+        body.horizontal_wrapped(|ui| {
+            ui.strong(&preview.title);
+            let summary = format!("{} × {}", preview.span.w, preview.span.h);
+            egui::ComboBox::from_id_salt("newtab_preview_widget_size")
+                .selected_text(if preview.automatic {
+                    format!("{} · {summary}", tr("newtab-widget-fit-content"))
+                } else {
+                    summary
+                })
+                .show_glass(ui, |ui| {
+                    if ui
+                        .selectable_label(preview.automatic, tr("newtab-widget-fit-content"))
+                        .clicked()
+                    {
+                        preview.automatic = true;
+                        preview.span = custom::preferred_span(&preview.title, &preview.blocks);
+                    }
+                    for (span, label) in widgets::SIZES {
+                        if ui
+                            .selectable_label(!preview.automatic && span == preview.span, tr(label))
+                            .clicked()
+                        {
+                            preview.span = span;
+                            preview.automatic = false;
+                        }
+                    }
+                });
+        });
+        if let Some(issue) = composer.issue {
+            body.small(egui::RichText::new(tr(issue)).color(palette.text_muted));
+        }
+        body.add_space(6.0);
+        let scroll = egui::ScrollArea::vertical()
+            .max_height(body.available_height())
+            .show(&mut body, |ui| {
+                custom_widget_controls(
+                    ui,
+                    palette,
+                    &mut preview.blocks,
+                    jiff::Timestamp::now().as_second(),
+                    (f32::from(preview_span.h) * stride - 84.0)
+                        .clamp(46.0, (max_height - 80.0).max(46.0)),
+                    None,
+                );
+            });
+        let wanted = (scroll.inner_rect.top() - bounds.top() + scroll.content_size.y + 15.0)
+            .clamp(88.0, max_height)
+            .ceil();
+        if (height - wanted).abs() >= 1.0 {
+            ui.ctx().data_mut(|data| data.insert_temp(size_key, wanted));
+            ui.ctx().request_repaint();
+        }
+        surface.finish(ui, bounds, Role::DashboardCard);
+    } else if let Some(status) = status {
+        let bounds = Rect::from_min_size(
+            pos2(rect.left(), rect.top() - 43.0),
+            vec2(rect.width(), 34.0),
+        );
+        let surface = glass_surface(ui, bounds, palette, Role::SearchPill);
+        centered_text(ui, bounds.shrink(8.0), status, 12.0, palette.text);
+        surface.finish(ui, bounds, Role::SearchPill);
+    }
 }
 
 fn backdrop(
@@ -626,14 +1013,8 @@ fn cards(
     width: f32,
     actions: &mut Vec<UiAction>,
 ) {
-    let columns = if width >= 770.0 {
-        widgets::COLUMNS
-    } else if width >= 490.0 {
-        8
-    } else {
-        ((width + GAP) / 76.0).floor().clamp(2.0, 6.0) as u8
-    };
-    let mut placed = widgets::arrange(&chrome.settings.new_tab_widgets, columns);
+    let columns = columns_for_width(width);
+    let mut placed = widgets::arrange(&custom::tiles(chrome.settings), columns);
     let editing = ui.ctx().data(|data| data.get_temp::<bool>(editing_id())) == Some(true);
     if editing {
         ui.horizontal_wrapped(|ui| {
@@ -641,12 +1022,13 @@ fn cards(
             overlay_glass::popup(egui::Popup::menu(&add), ui.ctx(), |ui| {
                 for kind in Kind::ALL {
                     let available = placed.iter().all(|widget| widget.kind != kind);
+                    let before = placed.clone();
                     if ui
                         .add_enabled(available, egui::Button::new(kind.label()))
                         .clicked()
                         && widgets::add(&mut placed, kind, columns)
                     {
-                        save_widgets(chrome, &placed, actions);
+                        save_widgets(chrome, &before, &placed, actions);
                         ui.close();
                     }
                 }
@@ -665,8 +1047,13 @@ fn cards(
         .map(|widget| widget.cell.row + widget.span.h)
         .max()
         .unwrap_or(0);
-    let rows = if editing {
-        (occupied + 3).min(widgets::ROWS)
+    let active_drag = ui.ctx().dragged_id().or_else(|| ui.ctx().drag_stopped_id());
+    let rows = if editing
+        || placed
+            .iter()
+            .any(|widget| is_edit_handle(ui, widget.kind, active_drag))
+    {
+        (occupied + widgets::MAX_HEIGHT).min(widgets::ROWS)
     } else {
         occupied
     };
@@ -678,9 +1065,17 @@ fn cards(
         ..Metrics::new(board, columns, cell, GAP)
     };
     let mut change = None;
+    let reveal = ui.ctx().data(|data| data.get_temp::<u64>(reveal_id()));
     for (index, widget) in placed.iter().enumerate() {
         let rect = grid.rect(widget.cell, widget.span);
-        if !ui.is_rect_visible(rect) {
+        if let Kind::Custom(id) = widget.kind
+            && Some(id) == reveal
+        {
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+            ui.ctx().data_mut(|data| data.remove::<u64>(reveal_id()));
+        }
+        let dragging = is_edit_handle(ui, widget.kind, active_drag);
+        if !ui.is_rect_visible(rect) && !dragging {
             continue;
         }
         let control = widget.span.h == 1;
@@ -690,18 +1085,49 @@ fn cards(
             Role::DashboardCard
         };
         let surface = glass_surface(ui, rect, palette, role);
+        let compact = control || rect.width() < 126.0 || rect.height() < 108.0;
+        let options_open = egui::Popup::is_id_open(ui.ctx(), widget_options_id(ui, widget.kind));
+        let edit_controls = (editing || dragging || options_open || ui.rect_contains_pointer(rect))
+            .then(|| CardEditControls::new(rect, compact));
+        let body_rect = edit_controls.map_or(rect, |controls| controls.content);
         let mut card = ui.new_child(
             UiBuilder::new()
                 .id_salt(("newtab_card", widget.kind))
-                .max_rect(rect),
+                .max_rect(body_rect),
         );
-        card.set_clip_rect(ui.clip_rect().intersect(rect));
+        card.set_clip_rect(ui.clip_rect().intersect(body_rect));
         if editing {
             card.disable();
             card.set_opacity(ui.opacity());
         }
-        if control || rect.width() < 126.0 || rect.height() < 108.0 {
-            compact_widget(&card, chrome, palette, rect, *widget, editing, actions);
+        let symbol_only = edit_controls.is_some_and(|controls| controls.symbol_only);
+        if let Kind::Custom(id) = widget.kind {
+            if let Some(custom) = chrome
+                .settings
+                .new_tab_custom_widgets
+                .iter_mut()
+                .find(|item| item.id == id)
+            {
+                draw_custom_widget(
+                    &mut card,
+                    palette,
+                    body_rect,
+                    custom,
+                    compact,
+                    symbol_only,
+                    actions,
+                );
+            }
+        } else if compact {
+            compact_widget(
+                &card,
+                chrome,
+                palette,
+                body_rect,
+                *widget,
+                symbol_only,
+                actions,
+            );
         } else {
             let inner = rect.shrink(15.0);
             match widget.kind {
@@ -710,21 +1136,466 @@ fn cards(
                 Kind::Pinned => pinned(&card, chrome, palette, inner, actions),
                 Kind::Checklist => checklist(&mut card, chrome, palette, inner),
                 Kind::Workspace => pulse(&card, chrome, palette, inner),
+                Kind::Custom(_) => {},
             }
         }
-        if editing {
-            change = edit_widget(ui, palette, grid, &placed, index).or(change);
+        if let Some(controls) = edit_controls {
+            let fit = if let Kind::Custom(id) = widget.kind {
+                chrome
+                    .settings
+                    .new_tab_custom_widgets
+                    .iter()
+                    .find(|card| card.id == id)
+                    .map(|card| custom::preferred_span(&card.title, &card.blocks))
+            } else {
+                widgets::defaults()
+                    .iter()
+                    .find(|item| item.kind == widget.kind)
+                    .map(|item| item.span)
+            };
+            change = edit_widget(ui, palette, grid, &placed, index, controls, fit).or(change);
         }
         surface.finish(ui, rect, role);
     }
-    if let Some(next) = change {
-        save_widgets(chrome, &next, actions);
+    match change {
+        Some(WidgetEdit::Commit(next)) => save_widgets(chrome, &placed, &next, actions),
+        Some(WidgetEdit::Preview { widget, resizing }) => {
+            paint_widget_preview(ui, palette, grid, widget, resizing);
+        },
+        None => {},
     }
 }
 
-fn save_widgets(chrome: &mut ChromeContext, widgets: &[Widget], actions: &mut Vec<UiAction>) {
-    chrome.settings.new_tab_widgets = widgets.to_vec();
+fn save_widgets(
+    chrome: &mut ChromeContext,
+    before: &[Widget],
+    after: &[Widget],
+    actions: &mut Vec<UiAction>,
+) {
+    let updated = widgets::apply_view_edit(&custom::tiles(chrome.settings), before, after);
+    custom::save_layout(chrome.settings, &updated);
     actions.push(UiAction::PersistSettings);
+}
+
+fn draw_custom_widget(
+    ui: &mut Ui,
+    palette: &Palette,
+    rect: Rect,
+    card: &mut CustomWidget,
+    compact: bool,
+    symbol_only: bool,
+    actions: &mut Vec<UiAction>,
+) {
+    let timestamp = jiff::Timestamp::now();
+    let now = timestamp.as_second();
+    let repaint = if card
+        .blocks
+        .iter()
+        .any(|block| matches!(block, Block::Timer { ends_at: Some(end), .. } if *end > now))
+    {
+        Some(1)
+    } else if card
+        .blocks
+        .iter()
+        .any(|block| matches!(block, Block::Date { .. } | Block::Clock { .. }))
+    {
+        Some(60 - now.rem_euclid(60))
+    } else {
+        None
+    };
+    if let Some(seconds) = repaint {
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs(seconds as u64));
+    }
+    let glyph = match card.blocks.first() {
+        Some(Block::Checklist(_)) => Icon::Todo,
+        Some(Block::Timer { .. } | Block::Clock { .. }) => Icon::Clock,
+        Some(Block::Links(_)) => Icon::Globe,
+        Some(Block::Image(_)) => Icon::Image,
+        Some(Block::Counter { .. } | Block::Metric { .. }) => Icon::TrendUp,
+        Some(Block::Date { .. }) => Icon::Calendar,
+        _ => Icon::Note,
+    };
+    if symbol_only {
+        if rect.height() >= 12.0 {
+            icons::draw_icon(
+                ui.painter(),
+                Rect::from_center_size(rect.center(), vec2(14.0, 14.0)),
+                glyph,
+                palette.accent,
+            );
+        }
+        return;
+    }
+    if compact {
+        let title = match card.blocks.as_slice() {
+            [
+                Block::Timer {
+                    minutes, ends_at, ..
+                },
+            ] => timer_text(*minutes, *ends_at, now),
+            [Block::Counter { value, .. }] => format!("{} · {value}", card.title),
+            [Block::Clock { zone, .. }] => {
+                custom::clock_time(zone, timestamp).unwrap_or_else(|| card.title.clone())
+            },
+            _ => card.title.clone(),
+        };
+        let response = button(ui, rect, ("custom_widget", card.id), &card.title, palette)
+            .on_hover_text(&card.title);
+        centered_text(ui, rect.shrink2(vec2(5.0, 0.0)), &title, 12.0, palette.text);
+        overlay_glass::popup(egui::Popup::menu(&response).width(260.0), ui.ctx(), |ui| {
+            ui.strong(&card.title);
+            egui::ScrollArea::vertical()
+                .max_height(285.0)
+                .show(ui, |ui| {
+                    custom_widget_controls(
+                        ui,
+                        palette,
+                        &mut card.blocks,
+                        now,
+                        220.0,
+                        Some(actions),
+                    );
+                });
+        });
+        return;
+    }
+    let inner = rect.shrink(15.0);
+    heading(ui, inner, palette, glyph, &card.title);
+    let body = inner.with_min_y(inner.top() + 27.0);
+    let mut body_ui = ui.new_child(UiBuilder::new().id_salt("widget_body").max_rect(body));
+    egui::ScrollArea::vertical()
+        .max_height(body.height())
+        .auto_shrink([false; 2])
+        .show(&mut body_ui, |ui| {
+            custom_widget_controls(
+                ui,
+                palette,
+                &mut card.blocks,
+                now,
+                (body.height() - 24.0).max(30.0),
+                Some(actions),
+            );
+        });
+}
+
+fn timer_text(minutes: u16, ends_at: Option<i64>, now: i64) -> String {
+    let seconds = ends_at.map_or(i64::from(minutes) * 60, |end| {
+        end.saturating_sub(now).max(0)
+    });
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn custom_widget_controls(
+    ui: &mut Ui,
+    palette: &Palette,
+    blocks: &mut [Block],
+    now: i64,
+    image_height: f32,
+    mut actions: Option<&mut Vec<UiAction>>,
+) {
+    ui.visuals_mut().override_text_color = Some(palette.text);
+    let single = blocks.len() == 1;
+    for (index, block) in blocks.iter_mut().enumerate() {
+        if index > 0 {
+            ui.add_space(5.0);
+        }
+        ui.push_id(index, |ui| {
+            let interactive = actions.is_some();
+            let mut changed = false;
+            match block {
+                Block::Image(photo) => {
+                    let height = if single {
+                        image_height
+                    } else {
+                        image_height.min(160.0)
+                    };
+                    draw_widget_photo(ui, photo, height, actions.as_deref_mut());
+                },
+                Block::Text(text) => {
+                    ui.label(text.as_str());
+                },
+                Block::Bullets(rows) => {
+                    for row in rows {
+                        ui.label(format!("• {row}"));
+                    }
+                },
+                Block::Checklist(items) => {
+                    for item in items {
+                        changed |= ui
+                            .add_enabled(
+                                interactive,
+                                egui::Checkbox::new(&mut item.done, &item.text),
+                            )
+                            .changed();
+                    }
+                },
+                Block::Note { label, text } => {
+                    ui.strong(label.as_str());
+                    if interactive {
+                        changed = ui
+                            .add(
+                                egui::TextEdit::multiline(text)
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text(tr("newtab-write-note")),
+                            )
+                            .changed();
+                        if changed {
+                            Block::limit_note(text);
+                        }
+                    } else {
+                        ui.label(if text.is_empty() {
+                            tr("newtab-write-note")
+                        } else {
+                            text.as_str()
+                        });
+                    }
+                },
+                Block::Links(links) => {
+                    for link in links {
+                        if interactive {
+                            if ui.link(&link.label).on_hover_text(&link.url).clicked()
+                                && let Some(actions) = actions.as_deref_mut()
+                            {
+                                actions.push(UiAction::Navigate(link.url.clone()));
+                            }
+                        } else {
+                            ui.label(egui::RichText::new(&link.label).color(palette.accent))
+                                .on_hover_text(&link.url);
+                        }
+                    }
+                },
+                Block::Metric { label, text } => {
+                    ui.strong(label.as_str());
+                    ui.label(egui::RichText::new(text.as_str()).size(20.0));
+                },
+                Block::Counter {
+                    label,
+                    value,
+                    goal,
+                    step,
+                } => {
+                    ui.strong(label.as_str());
+                    ui.horizontal_wrapped(|ui| {
+                        let (limit, delta) = (custom::COUNTER_LIMIT, *step);
+                        if ui
+                            .add_enabled(interactive && *value > -limit, egui::Button::new("−"))
+                            .on_hover_text(tr("newtab-decrease-counter"))
+                            .clicked()
+                        {
+                            *value = (*value - delta).max(-limit);
+                            changed = true;
+                        }
+                        ui.label(
+                            egui::RichText::new(value.to_string())
+                                .monospace()
+                                .size(17.0),
+                        );
+                        if ui
+                            .add_enabled(interactive && *value < limit, egui::Button::new("+"))
+                            .on_hover_text(tr("newtab-increase-counter"))
+                            .clicked()
+                        {
+                            *value = (*value + delta).min(limit);
+                            changed = true;
+                        }
+                    });
+                    if let Some(goal) = *goal {
+                        ui.add(
+                            egui::ProgressBar::new((*value as f32 / goal as f32).clamp(0.0, 1.0))
+                                .fill(palette.accent)
+                                .text(format!("{value} / {goal}")),
+                        );
+                    }
+                },
+                Block::Timer {
+                    label,
+                    minutes,
+                    ends_at,
+                } => {
+                    if !label.is_empty() {
+                        ui.strong(label.as_str());
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(timer_text(*minutes, *ends_at, now)).size(22.0),
+                        );
+                        if interactive
+                            && ends_at.is_none_or(|end| end <= now)
+                            && ui.button(tr("newtab-start-countdown")).clicked()
+                        {
+                            *ends_at = Some(now + i64::from(*minutes) * 60);
+                            changed = true;
+                        }
+                        if interactive
+                            && ends_at.is_some()
+                            && ui.button(tr("newtab-reset-countdown")).clicked()
+                        {
+                            *ends_at = None;
+                            changed = true;
+                        }
+                    });
+                },
+                Block::Date { label, date } => {
+                    if !label.is_empty() {
+                        ui.strong(label.as_str());
+                    }
+                    let today = jiff::ZonedDateTime::now().date();
+                    if let Some(days) = date
+                        .parse::<jiff::civil::Date>()
+                        .ok()
+                        .and_then(|day| today.until(day).ok())
+                        .map(|span| span.get_days())
+                    {
+                        let text = if days < 0 {
+                            tr("newtab-date-passed").to_owned()
+                        } else if days == 0 {
+                            tr("newtab-date-today").to_owned()
+                        } else {
+                            crate::l10n::message("newtab-days-left", [("days", days.into())])
+                        };
+                        ui.label(text);
+                    }
+                    ui.small(date.as_str());
+                },
+                Block::Clock { label, zone } => {
+                    if !label.is_empty() {
+                        ui.strong(label.as_str());
+                    }
+                    if let Some(time) = custom::clock_time(zone, jiff::Timestamp::now()) {
+                        ui.label(egui::RichText::new(time).size(22.0));
+                    } else {
+                        ui.label(tr("newtab-widget-zone-unavailable"));
+                    }
+                },
+            }
+            if changed && let Some(actions) = actions.as_deref_mut() {
+                actions.push(UiAction::PersistSettings);
+            }
+        });
+    }
+}
+
+fn draw_widget_photo(
+    ui: &mut Ui,
+    photo: &crate::widget_photo::Photo,
+    max_height: f32,
+    actions: Option<&mut Vec<UiAction>>,
+) {
+    let Some((asset, texture)) = photo
+        .asset
+        .as_ref()
+        .and_then(|asset| Some((asset, asset.texture(ui.ctx())?)))
+    else {
+        ui.label(tr("newtab-widget-photo-unavailable"));
+        return;
+    };
+    let size = texture.resolution_vec2();
+    let scale = (ui.available_width() / size.x)
+        .min(max_height / size.y)
+        .max(0.01);
+    let size = size * scale;
+    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), size.y), Sense::hover());
+    let rect = Rect::from_center_size(line.center(), size);
+    ui.painter().add(
+        egui::epaint::RectShape::filled(rect, 9, Color32::WHITE)
+            .with_texture(texture.id(), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0))),
+    );
+    let description = if photo.title.is_empty() {
+        tr("newtab-widget-photo")
+    } else {
+        &photo.title
+    };
+    ui.interact(rect, ui.scope_id().with("photo"), Sense::hover())
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, description));
+    if let Some(actions) = actions {
+        if ui
+            .link(egui::RichText::new(&asset.credit).small())
+            .on_hover_text(&asset.source_page)
+            .clicked()
+        {
+            actions.push(UiAction::Navigate(asset.source_page.clone()));
+        }
+    } else {
+        ui.small(&asset.credit);
+    }
+}
+
+fn move_handle_id(ui: &Ui, kind: Kind) -> Id {
+    ui.scope_id().with(("move_widget", kind))
+}
+
+fn resize_handle_id(ui: &Ui, kind: Kind) -> Id {
+    ui.scope_id().with(("resize_widget", kind))
+}
+
+fn widget_options_id(ui: &Ui, kind: Kind) -> Id {
+    move_handle_id(ui, kind).with("options")
+}
+
+fn is_edit_handle(ui: &Ui, kind: Kind, active: Option<Id>) -> bool {
+    active.is_some_and(|id| id == move_handle_id(ui, kind) || id == resize_handle_id(ui, kind))
+}
+
+#[derive(Clone, Copy)]
+struct CardEditControls {
+    grip: Rect,
+    remove: Rect,
+    resize: Rect,
+    content: Rect,
+    symbol_only: bool,
+}
+
+impl CardEditControls {
+    fn new(rect: Rect, compact: bool) -> Self {
+        let hit = (rect.size().min_elem() * 0.5).clamp(16.0, 22.0);
+        let half = hit / 2.0;
+        let box_at = |x, y| Rect::from_center_size(pos2(x, y), vec2(hit, hit));
+        if compact && rect.width() >= 112.0 {
+            // On a pill the actions share its center line and the content
+            // stops before the controls, clear of the rounded cap.
+            let y = rect.center().y;
+            let x = rect.right() - half - 9.0;
+            let spacing = hit + 3.0;
+            let grip = box_at(x - 2.0 * spacing, y);
+            let content = rect.with_max_x(grip.left() - 2.0);
+            return Self {
+                grip,
+                remove: box_at(x, y),
+                resize: box_at(x - spacing, y),
+                symbol_only: content.width() < 82.0,
+                content,
+            };
+        }
+        if compact {
+            let top = rect.top() + half + 4.0;
+            let bottom = rect.bottom() - half - 4.0;
+            let x = rect.center().x;
+            let offset = (half + 2.0).min(rect.width() / 4.0);
+            return Self {
+                grip: box_at(x - offset, top),
+                remove: box_at(x + offset, top),
+                resize: box_at(x + offset, bottom),
+                content: box_at(x - offset, bottom),
+                symbol_only: true,
+            };
+        }
+        let right = rect.right() - half - 8.0;
+        let top = rect.top() + 25.0;
+        Self {
+            grip: box_at(right - hit - 4.0, top),
+            remove: box_at(right, top),
+            resize: box_at(right, rect.bottom() - half - 8.0),
+            content: rect,
+            symbol_only: false,
+        }
+    }
+}
+
+enum WidgetEdit {
+    Commit(Vec<Widget>),
+    Preview { widget: Widget, resizing: bool },
 }
 
 fn edit_widget(
@@ -733,107 +1604,127 @@ fn edit_widget(
     grid: Metrics,
     placed: &[Widget],
     index: usize,
-) -> Option<Vec<Widget>> {
+    controls: CardEditControls,
+    fit: Option<crate::grid::Span>,
+) -> Option<WidgetEdit> {
     let widget = placed[index];
     let rect = grid.rect(widget.cell, widget.span);
-    let compact = widget.span.w == 1 || widget.span.h == 1;
-    let close = if compact {
-        Rect::from_min_size(rect.right_top() + vec2(-22.0, 2.0), vec2(20.0, 20.0))
-    } else {
-        Rect::from_min_size(rect.right_top() + vec2(-27.0, 8.0), vec2(22.0, 22.0))
-    };
     let remove = tr("newtab-take-this-card-off");
-    draw_icon(ui, close.center(), Icon::Close, palette.text);
-    if button(
+    let glyph = (controls.remove.width() - 6.0).min(15.0);
+    let draw = |rect: Rect, icon| {
+        icons::draw_icon(
+            ui.painter(),
+            Rect::from_center_size(rect.center(), vec2(glyph, glyph)),
+            icon,
+            palette.text,
+        );
+    };
+    let remove_response = button(
         ui,
-        close,
+        controls.remove,
         ("newtab_remove_widget", widget.kind),
         remove,
         palette,
-    )
-    .on_hover_text(remove)
-    .clicked()
-    {
-        return Some(
+    );
+    draw(controls.remove, Icon::Close);
+    if overlay_glass::tooltip(remove_response, palette, remove).clicked() {
+        return Some(WidgetEdit::Commit(
             placed
                 .iter()
                 .copied()
                 .filter(|other| other.kind != widget.kind)
                 .collect(),
-        );
+        ));
     }
 
-    let grip = if widget.span.w == 1 {
-        close.translate(vec2(rect.left() + 2.0 - close.left(), 0.0))
-    } else {
-        close.translate(vec2(-24.0, 0.0))
-    };
-    let resize = Rect::from_min_size(
-        pos2(close.left(), rect.bottom() - close.width() - 2.0),
-        close.size(),
-    );
     let move_label = tr("newtab-widget-options");
     let resize_label = tr("newtab-resize-widget");
     let drag = ui.interact(
-        grip,
-        ui.scope_id().with(("move_widget", widget.kind)),
+        controls.grip,
+        move_handle_id(ui, widget.kind),
         Sense::click_and_drag(),
     );
     drag.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, move_label));
     let corner = ui.interact(
-        resize,
-        ui.scope_id().with(("resize_widget", widget.kind)),
+        controls.resize,
+        resize_handle_id(ui, widget.kind),
         Sense::drag(),
     );
-    draw_icon(ui, grip.center(), Icon::DragHandle, palette.text);
-    draw_icon(ui, resize.center(), Icon::Resize, palette.text);
-    let drag = drag
-        .on_hover_cursor(CursorIcon::Grab)
-        .on_hover_text(tr("newtab-drag-widget"));
-    let corner = corner
-        .on_hover_cursor(CursorIcon::ResizeNwSe)
-        .on_hover_text(resize_label);
+    for response in [&drag, &corner] {
+        if response.hovered() || response.is_pointer_button_down_on() {
+            ui.painter()
+                .rect_filled(response.rect, 7, palette.surface_hover);
+        }
+    }
+    draw(controls.grip, Icon::DragHandle);
+    draw(controls.resize, Icon::Resize);
+    corner.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, resize_label));
+    let drag = drag.on_hover_cursor(CursorIcon::Grab);
+    let corner = corner.on_hover_cursor(CursorIcon::ResizeNwSe);
+    if !egui::Popup::is_id_open(ui.ctx(), widget_options_id(ui, widget.kind)) {
+        overlay_glass::tooltip(drag.clone(), palette, tr("newtab-drag-widget"));
+        overlay_glass::tooltip(corner.clone(), palette, resize_label);
+    }
 
     let mut change = None;
-    overlay_glass::popup(egui::Popup::menu(&drag), ui.ctx(), |ui| {
-        for (label, col, row) in [
-            ("newtab-move-left", -1, 0),
-            ("newtab-move-right", 1, 0),
-            ("newtab-move-up", 0, -1),
-            ("newtab-move-down", 0, 1),
-        ] {
-            let candidate = Widget {
-                cell: Cell::new(
-                    widget.cell.col.saturating_add_signed(col),
-                    widget.cell.row.saturating_add_signed(row),
-                ),
-                ..widget
-            };
-            let next = widgets::reposition(placed, index, candidate, grid.columns, grid.rows);
-            if ui
-                .add_enabled(next.is_some(), egui::Button::new(tr(label)))
-                .clicked()
-            {
-                change = next;
-                ui.close();
+    overlay_glass::popup(
+        egui::Popup::menu(&drag).id(widget_options_id(ui, widget.kind)),
+        ui.ctx(),
+        |ui| {
+            for (label, col, row) in [
+                ("newtab-move-left", -1, 0),
+                ("newtab-move-right", 1, 0),
+                ("newtab-move-up", 0, -1),
+                ("newtab-move-down", 0, 1),
+            ] {
+                let candidate = Widget {
+                    cell: Cell::new(
+                        widget.cell.col.saturating_add_signed(col),
+                        widget.cell.row.saturating_add_signed(row),
+                    ),
+                    ..widget
+                };
+                let next = widgets::reposition(placed, index, candidate, grid.columns, grid.rows);
+                if ui
+                    .add_enabled(next.is_some(), egui::Button::new(tr(label)))
+                    .clicked()
+                {
+                    change = next.map(WidgetEdit::Commit);
+                    ui.close();
+                }
             }
-        }
-        ui.separator();
-        for (span, label) in widgets::SIZES {
-            let candidate = Widget { span, ..widget };
-            let next = widgets::reposition(placed, index, candidate, grid.columns, grid.rows);
-            if ui
-                .add_enabled(
-                    next.is_some(),
-                    egui::Button::new(tr(label)).selected(span == widget.span),
-                )
-                .clicked()
-            {
-                change = next;
-                ui.close();
+            ui.separator();
+            if let Some(span) = fit {
+                let span = span.fit(grid.columns - widget.cell.col, grid.rows - widget.cell.row);
+                let candidate = Widget { span, ..widget };
+                let next = widgets::reposition(placed, index, candidate, grid.columns, grid.rows);
+                if ui
+                    .add_enabled(
+                        next.is_some(),
+                        egui::Button::new(tr("newtab-widget-fit-content")),
+                    )
+                    .clicked()
+                {
+                    change = next.map(WidgetEdit::Commit);
+                    ui.close();
+                }
             }
-        }
-    });
+            for (span, label) in widgets::SIZES {
+                let candidate = Widget { span, ..widget };
+                let next = widgets::reposition(placed, index, candidate, grid.columns, grid.rows);
+                if ui
+                    .add_enabled(
+                        next.is_some(),
+                        egui::Button::new(tr(label)).selected(span == widget.span),
+                    )
+                    .clicked()
+                {
+                    change = next.map(WidgetEdit::Commit);
+                    ui.close();
+                }
+            }
+        },
+    );
     for (response, resizing) in [(drag, false), (corner, true)] {
         let delta = if let Some(delta) = response.total_drag_delta() {
             ui.ctx()
@@ -866,22 +1757,60 @@ fn edit_widget(
             candidate.cell = grid.cell_at(rect.min + delta, widget.span);
         }
         if let Some(next) = widgets::reposition(placed, index, candidate, grid.columns, grid.rows) {
-            if response.drag_stopped() {
-                change = Some(next);
+            change = if response.drag_stopped() {
+                Some(WidgetEdit::Commit(next))
             } else {
-                ui.ctx()
-                    .layer_painter(egui::LayerId::new(egui::Order::Foreground, response.id))
-                    .with_clip_rect(ui.clip_rect())
-                    .rect_stroke(
-                        grid.rect(candidate.cell, candidate.span),
-                        Role::DashboardCard.radius(),
-                        Stroke::new(2.0, palette.accent),
-                        StrokeKind::Inside,
-                    );
-            }
+                Some(WidgetEdit::Preview {
+                    widget: candidate,
+                    resizing,
+                })
+            };
         }
     }
     change
+}
+
+fn paint_widget_preview(ui: &Ui, palette: &Palette, grid: Metrics, widget: Widget, resizing: bool) {
+    let outline = grid.rect(widget.cell, widget.span);
+    if !ui.is_rect_visible(outline) {
+        return;
+    }
+    // Capture after every card so the native glass compositor places this
+    // ink above the old card, including when the target fits inside it.
+    let preview = Surface::begin_if(ui, palette.translucency == Translucency::LiquidGlass);
+    let role = if widget.span.h == 1 {
+        Role::DashboardControl
+    } else {
+        Role::DashboardCard
+    };
+    let radius = role.radius().min((outline.size().min_elem() * 0.5) as u8);
+    let painter = ui.painter();
+    painter.rect_stroke(
+        outline,
+        radius,
+        Stroke::new(4.0, palette.surface),
+        StrokeKind::Inside,
+    );
+    painter.rect_stroke(
+        outline,
+        radius,
+        Stroke::new(2.0, palette.accent),
+        StrokeKind::Inside,
+    );
+    if resizing {
+        let size = crate::l10n::message(
+            "newtab-widget-grid-size",
+            [
+                ("columns", i32::from(widget.span.w).into()),
+                ("rows", i32::from(widget.span.h).into()),
+            ],
+        );
+        let center = outline.center_bottom() - vec2(0.0, 16.0);
+        let chip = Rect::from_center_size(center, vec2(45.0_f32.min(outline.width() - 8.0), 20.0));
+        painter.rect_filled(chip, 8, palette.surface);
+        centered_text(ui, chip.shrink2(vec2(2.0, 0.0)), &size, 11.0, palette.text);
+    }
+    preview.finish(ui, outline, Role::DashboardDragPreview);
 }
 
 fn clock(ui: &Ui, palette: &Palette, rect: Rect) {
@@ -918,7 +1847,7 @@ fn compact_widget(
     palette: &Palette,
     rect: Rect,
     widget: Widget,
-    editing: bool,
+    symbol_only: bool,
     actions: &mut Vec<UiAction>,
 ) {
     let (glyph, value, icon, action) = match widget.kind {
@@ -976,7 +1905,19 @@ fn compact_widget(
             None,
             None,
         ),
+        Kind::Custom(_) => return,
     };
+    if symbol_only {
+        if rect.height() >= 12.0 {
+            icons::draw_icon(
+                ui.painter(),
+                Rect::from_center_size(rect.center(), vec2(14.0, 14.0)),
+                glyph,
+                palette.accent,
+            );
+        }
+        return;
+    }
     let title = widget.kind.label();
     let label = if value.is_empty() {
         title.to_owned()
@@ -1003,9 +1944,7 @@ fn compact_widget(
             .on_hover_text(label);
     }
     let horizontal = rect.width() >= rect.height() * 1.5;
-    let icon_at = if editing && widget.span.w == 1 {
-        rect.center()
-    } else if horizontal {
+    let icon_at = if horizontal {
         rect.left_center() + vec2(20.0, 0.0)
     } else {
         rect.center_top() + vec2(0.0, rect.height() * 0.32)
@@ -1020,12 +1959,10 @@ fn compact_widget(
     } else {
         draw_icon(ui, icon_at, glyph, palette.accent);
     }
-    if editing && widget.span.w == 1 {
-        return;
-    }
     if horizontal {
-        let end = rect.right() - if editing { 42.0 } else { 12.0 };
-        let labels = rect.with_min_x(rect.left() + 35.0).with_max_x(end);
+        let labels = rect
+            .with_min_x(rect.left() + 35.0)
+            .with_max_x(rect.right() - 9.0);
         if value.is_empty() {
             text(ui, labels, title, 12.5, palette.text);
         } else {

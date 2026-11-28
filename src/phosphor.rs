@@ -8,6 +8,9 @@
 #![allow(dead_code)]
 
 pub mod glyph {
+    /// Phosphor `microphone`
+    pub const MICROPHONE: &str = "\u{e326}";
+
     /// Phosphor `bell`
     pub const BELL: &str = "\u{e0ce}";
 

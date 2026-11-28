@@ -104,6 +104,17 @@ MIN_MACOS="$(sed -n 's/^MACOSX_DEPLOYMENT_TARGET[^"]*"\([0-9.]*\)".*/\1/p' .carg
 APP="$OUTPUT/Heion.app"
 BIN_DIR="$APP/Contents/MacOS"
 RES_DIR="$APP/Contents/Resources"
+APP_DISPLAY_NAME=Heion
+APP_BUNDLE_ID=app.zervo.browser
+WIDGET_TEST=0
+case " $(printf '%s' "$FEATURES" | tr ',' ' ') " in
+    *" local-widget-test "*)
+        WIDGET_TEST=1
+        APP_DISPLAY_NAME="Heion Widget Test"
+        APP_BUNDLE_ID=app.heion.widgettest
+        [ -z "$UPDATER_FRAMEWORK" ] || die "the widget test uses a separate app and profile"
+        ;;
+esac
 
 # The GStreamer framework ships its own pkg-config that knows where the
 # framework is, so putting its bin first is all the build needs to find it.
@@ -223,9 +234,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>                  <string>Heion</string>
-    <key>CFBundleDisplayName</key>           <string>Heion</string>
-    <key>CFBundleIdentifier</key>            <string>app.zervo.browser</string>
+    <key>CFBundleName</key>                  <string>$APP_DISPLAY_NAME</string>
+    <key>CFBundleDisplayName</key>           <string>$APP_DISPLAY_NAME</string>
+    <key>CFBundleIdentifier</key>            <string>$APP_BUNDLE_ID</string>
     <key>CFBundleExecutable</key>            <string>Heion</string>
     <key>CFBundleIconFile</key>              <string>Zervo</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
@@ -278,6 +289,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if [ "$WIDGET_TEST" = 1 ]; then
+    plutil -remove CFBundleURLTypes "$APP/Contents/Info.plist"
+    plutil -remove CFBundleDocumentTypes "$APP/Contents/Info.plist"
+fi
 
 # macOS can render the layered icon in its selected appearance when the
 # active Xcode toolchain supports Icon Composer. Keep the flat ICNS fallback.
@@ -386,6 +402,22 @@ case " $(lipo -archs "$BIN") " in
                 -Xlinker -install_name -Xlinker '@rpath/HeionImagePlayground.dylib' \
                 platform/macos/HeionImagePlayground.swift -o "$PLAYGROUND"
             sign_or_fail "$PLAYGROUND"
+        fi
+        # The widget composer loads its bridge only where Foundation Models is
+        # available. The browser executable retains its own deployment target.
+        if [ -d "$SDK/System/Library/Frameworks/FoundationModels.framework" ]; then
+            mkdir -p "$APP/Contents/Frameworks"
+            WIDGET_PLAYGROUND="$APP/Contents/Frameworks/HeionWidgetPlayground.dylib"
+            xcrun --sdk macosx swiftc -sdk "$SDK" -target arm64-apple-macosx26.0 \
+                -parse-as-library -emit-library -O -framework AVFoundation -framework Speech \
+                -framework FoundationModels \
+                -Xlinker -install_name -Xlinker '@rpath/HeionWidgetPlayground.dylib' \
+                platform/macos/HeionWidgetPlayground.swift -o "$WIDGET_PLAYGROUND"
+            sign_or_fail "$WIDGET_PLAYGROUND"
+            plutil -replace NSMicrophoneUsageDescription -string "Heion uses the microphone when you dictate a New Tab widget prompt or give a website access." "$APP/Contents/Info.plist"
+            plutil -insert NSSpeechRecognitionUsageDescription -string "Heion transcribes your New Tab widget prompt on this Mac when you choose Speak." "$APP/Contents/Info.plist"
+        elif [ "$WIDGET_TEST" = 1 ]; then
+            die "the widget test needs an SDK with Foundation Models"
         fi
         ;;
 esac

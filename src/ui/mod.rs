@@ -157,6 +157,20 @@ pub enum UiAction {
     ImportWallpaper,
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     GenerateWallpaper,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    OpenWidgetComposer {
+        speak: bool,
+    },
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    StartWidgetDictation,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    StopWidgetDictation,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    GenerateWidget,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    SaveCustomWidget,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    CloseWidgetComposer,
     ClearBrowsingData(crate::browsing_data::Selection),
     AddWidget(crate::dashboard::WidgetKind),
     RemoveWidget(usize),
@@ -247,6 +261,8 @@ pub struct ChromeContext<'a> {
     pub favicons: &'a HashMap<TabId, crate::favicons::LiveIcon>,
     pub saved_favicons: &'a crate::favicons::Store,
     pub wallpaper: &'a crate::newtab_wallpaper::State,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub widget_composer: &'a mut crate::widget_composer::Composer,
     pub downloads: &'a crate::downloads::DownloadManager,
     pub updates: &'a crate::updates::Snapshot,
     /// Where to take the blurred copy of the page, when one is due this frame.

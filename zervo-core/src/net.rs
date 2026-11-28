@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 /// automated clients say who they are and where to complain, and refuses
 /// anonymous ones; the others do not mind being told.
 const USER_AGENT: &str = concat!(
-    "Zervo/",
+    "Heion/",
     env!("CARGO_PKG_VERSION"),
     " (https://github.com/Goddv/Heion) rustls"
 );
@@ -54,10 +54,19 @@ pub struct Response {
 /// hosts want different answers, and asking for the wrong one gets an HTML
 /// error page that decodes as neither.
 pub fn get(url: &str, accept: &str, limit: usize) -> Result<Response, String> {
+    get_with_timeout(url, accept, limit, TOTAL_TIMEOUT)
+}
+
+pub fn get_with_timeout(
+    url: &str,
+    accept: &str,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Response, String> {
     let mut target = url::Url::parse(url).map_err(|error| format!("{url}: {error}"))?;
     // One deadline for the whole thing, not one per hop: five redirects each
     // taking their own sweet time is the same wait as one that never ends.
-    let deadline = Instant::now() + TOTAL_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     for _ in 0..MAX_HOPS {
         if Instant::now() >= deadline {
             return Err(format!("{url}: took too long"));
@@ -161,8 +170,8 @@ fn fetch_once(
     limit: usize,
     deadline: Instant,
 ) -> Result<Hop, String> {
-    if url.scheme() != "https" {
-        return Err(format!("{url}: only https is fetched"));
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return Err(format!("{url}: HTTPS without credentials is required"));
     }
     let host = url
         .host_str()
@@ -196,7 +205,11 @@ fn fetch_once(
     let mut refused = format!("{host}: unreachable");
     let mut connected = None;
     for address in addresses {
-        match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| format!("{host}: took too long"))?;
+        match TcpStream::connect_timeout(&address, remaining.min(CONNECT_TIMEOUT)) {
             Ok(socket) => {
                 connected = Some(socket);
                 break;

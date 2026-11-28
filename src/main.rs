@@ -55,8 +55,11 @@ mod keyboard;
 mod library;
 #[cfg(target_os = "macos")]
 mod macos_appearance;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_sheet;
 mod morphicons;
 mod newtab;
+mod newtab_custom;
 mod newtab_wallpaper;
 mod notifications;
 mod overlay_glass;
@@ -67,7 +70,8 @@ mod transition;
 mod trouble;
 mod updates;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-mod wallpaper_playground;
+mod widget_composer;
+mod widget_photo;
 // macOS has its own paths inline, using the AppKit bindings it already has.
 #[cfg(not(target_os = "macos"))]
 mod platform;
@@ -210,6 +214,9 @@ struct RunningApp {
     favicons: HashMap<TabId, favicons::LiveIcon>,
     saved_favicons: favicons::Store,
     wallpaper: newtab_wallpaper::State,
+    photo_refresh: widget_photo::Refresh,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    widget_composer: widget_composer::Composer,
     /// Whether the settings page currently covers the content area.
     settings_open: bool,
     modifiers: ModifiersState,
@@ -644,7 +651,7 @@ impl ApplicationHandler<WakerEvent> for App {
         let mut wallpaper = newtab_wallpaper::State::default();
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
-            wallpaper.can_generate = wallpaper_playground::available();
+            wallpaper.can_generate = macos_sheet::wallpaper_available();
         }
         if let Some(path) = newtab_wallpaper::saved_path().filter(|path| path.is_file()) {
             wallpaper.load(newtab_wallpaper::Input::Restore(path), waker.0.clone());
@@ -662,6 +669,9 @@ impl ApplicationHandler<WakerEvent> for App {
             favicons: HashMap::new(),
             saved_favicons: favicons::Store::default(),
             wallpaper,
+            photo_refresh: widget_photo::Refresh::default(),
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            widget_composer: widget_composer::Composer::default(),
             settings_open: false,
             modifiers: ModifiersState::default(),
             cursor: None,
@@ -794,6 +804,92 @@ impl ApplicationHandler<WakerEvent> for App {
                 }
                 app.state.window.request_redraw();
             },
+            WakerEvent::WidgetPhotosRefreshed(updates) => {
+                if app
+                    .photo_refresh
+                    .finish(&mut app.settings.new_tab_custom_widgets, updates)
+                {
+                    app.settings.save();
+                }
+                app.state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            WakerEvent::CustomWidgetGenerated { ticket, result } => {
+                let composer = &mut app.widget_composer;
+                if composer.tab.is_some() && composer.ticket == ticket {
+                    let preview = result
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        .and_then(newtab_custom::Preview::decode);
+                    if preview
+                        .as_ref()
+                        .is_some_and(newtab_custom::Preview::has_photos)
+                    {
+                        let mut preview = preview.expect("draft with photo");
+                        let proxy = app.animation_waker.0.clone();
+                        let used = widget_photo::shown_pages(&app.settings.new_tab_custom_widgets);
+                        composer.loading_photo = std::thread::Builder::new()
+                            .name("widget-photo".into())
+                            .spawn(move || {
+                                let result = preview
+                                    .resolve_photos(used)
+                                    .map(|()| preview)
+                                    .map_err(|_| ());
+                                let _ = proxy
+                                    .send_event(WakerEvent::WidgetPhotosLoaded { ticket, result });
+                            })
+                            .is_ok();
+                        composer.generation = composer.loading_photo;
+                        composer.issue =
+                            (!composer.loading_photo).then_some("newtab-widget-photo-failed");
+                    } else {
+                        composer.generation = false;
+                        composer.issue = preview
+                            .is_none()
+                            .then_some("newtab-widget-generation-failed");
+                        composer.preview = preview;
+                    }
+                    app.state.window.request_redraw();
+                }
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            WakerEvent::WidgetPhotosLoaded { ticket, result } => {
+                let composer = &mut app.widget_composer;
+                if composer.tab.is_some() && composer.ticket == ticket {
+                    composer.generation = false;
+                    composer.loading_photo = false;
+                    composer.issue = result.is_err().then_some("newtab-widget-photo-failed");
+                    composer.preview = result.ok();
+                    app.state.window.request_redraw();
+                }
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            WakerEvent::WidgetTranscript { ticket, text, done } => {
+                use widget_composer::Dictation;
+                let composer = &mut app.widget_composer;
+                if composer.tab.is_some()
+                    && composer.ticket == ticket
+                    && composer.dictation.is_some()
+                {
+                    match text {
+                        Ok(Some(text)) if !text.is_empty() => {
+                            composer.prompt = text;
+                            composer.preview = None;
+                        },
+                        Ok(_) if !done && composer.dictation == Some(Dictation::Starting) => {
+                            composer.dictation = Some(Dictation::Listening);
+                        },
+                        Err(issue) => composer.issue = Some(issue),
+                        _ => {},
+                    }
+                    if done {
+                        composer.dictation = None;
+                        composer.focus_prompt = true;
+                    }
+                    app.state.window.request_redraw();
+                }
+            },
             WakerEvent::AnimationFrame => {
                 app.animation_pending = false;
                 app.state.window.request_redraw();
@@ -841,6 +937,34 @@ impl ApplicationHandler<WakerEvent> for App {
 }
 
 impl RunningApp {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    fn start_widget_dictation(&mut self) {
+        use widget_composer::Dictation;
+        let composer = &mut self.widget_composer;
+        if composer.tab.is_some() && !composer.busy() {
+            composer.issue = None;
+            if macos_sheet::start_widget_dictation(composer.ticket, self.animation_waker.0.clone())
+            {
+                composer.dictation = Some(Dictation::Starting);
+            } else {
+                composer.issue = Some("newtab-dictation-failed");
+                composer.focus_prompt = true;
+            }
+        }
+        self.state.window.request_redraw();
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    fn close_widget_composer(&mut self) {
+        if self.widget_composer.generation {
+            macos_sheet::cancel_widget_generation();
+        }
+        if self.widget_composer.dictation.is_some() {
+            macos_sheet::cancel_widget_dictation();
+        }
+        self.widget_composer.close();
+    }
+
     fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         let state = self.state.clone();
 
@@ -1393,6 +1517,17 @@ impl RunningApp {
             .active_tab()
             .map(|tab| (tab.id, tab.kind));
         let new_tab = matches!(showing, Some((_, TabKind::NewTab)));
+        let photo_tab = showing
+            .filter(|(_, kind)| *kind == TabKind::NewTab && self.settings.new_tab_show_widgets)
+            .map(|(id, _)| id);
+        self.photo_refresh.show(photo_tab);
+        if photo_tab.is_some() {
+            self.photo_refresh.start(
+                &self.settings.new_tab_custom_widgets,
+                self.animation_waker.0.clone(),
+            );
+        }
+
         let palette = self.palette();
         #[cfg(target_os = "macos")]
         let (palette, native_available, reduce_transparency, window_glass) = {
@@ -1517,6 +1652,16 @@ impl RunningApp {
         if self.egui_glow.egui_ctx.theme() != widget_theme {
             self.egui_glow.egui_ctx.set_theme(widget_theme);
         }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        if let Some(tab) = self.widget_composer.tab
+            && !state
+                .browser
+                .borrow()
+                .active_tab()
+                .is_some_and(|active| active.id == tab && active.kind == TabKind::NewTab)
+        {
+            self.close_widget_composer();
+        }
         let pull_progress = self.visible_pull_progress();
         self.egui_glow.run(&state.window, |root| {
             let settings = &mut self.settings;
@@ -1563,6 +1708,8 @@ impl RunningApp {
                 favicons: &self.favicons,
                 saved_favicons: &self.saved_favicons,
                 wallpaper: &self.wallpaper,
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                widget_composer: &mut self.widget_composer,
                 downloads: &self.downloads,
                 updates: &self.update_snapshot,
                 capture: capture.clone(),
@@ -2222,6 +2369,16 @@ impl RunningApp {
                     state.window.request_redraw();
                     return;
                 }
+                if state
+                    .browser
+                    .borrow()
+                    .active_tab()
+                    .is_some_and(|tab| tab.kind == TabKind::NewTab)
+                {
+                    self.photo_refresh.request();
+                    state.window.request_redraw();
+                    return;
+                }
                 // A trouble page has no webview to reload — it *is* what
                 // happened instead of one. Reloading it means trying the site
                 // again, which is the whole point of the page, so the address
@@ -2326,11 +2483,72 @@ impl RunningApp {
                 if !self.wallpaper.busy {
                     self.wallpaper.error = None;
                     self.wallpaper.busy =
-                        wallpaper_playground::open(&state.window, self.animation_waker.0.clone());
+                        macos_sheet::open_wallpaper(&state.window, self.animation_waker.0.clone());
                     if !self.wallpaper.busy {
                         self.wallpaper.error = Some(newtab_wallpaper::Error::Unavailable);
                     }
                 }
+                state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            UiAction::OpenWidgetComposer { speak } => {
+                self.widget_composer.tab = state.browser.borrow().active_tab().map(|tab| tab.id);
+                self.widget_composer.focus_prompt = !speak;
+                if speak {
+                    self.start_widget_dictation();
+                }
+                state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            UiAction::StartWidgetDictation => self.start_widget_dictation(),
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            UiAction::StopWidgetDictation => {
+                use widget_composer::Dictation;
+                if self.widget_composer.dictation == Some(Dictation::Starting) {
+                    macos_sheet::cancel_widget_dictation();
+                    self.widget_composer.dictation = None;
+                    self.widget_composer.ticket = self.widget_composer.ticket.wrapping_add(1);
+                    self.widget_composer.focus_prompt = true;
+                } else if self.widget_composer.dictation == Some(Dictation::Listening) {
+                    self.widget_composer.dictation = Some(Dictation::Finishing);
+                    macos_sheet::stop_widget_dictation();
+                }
+                state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            UiAction::GenerateWidget => {
+                let composer = &mut self.widget_composer;
+                if !composer.busy() {
+                    composer.preview = None;
+                    composer.issue = None;
+                    composer.generation = macos_sheet::generate_widget(
+                        composer.prompt.trim(),
+                        composer.ticket,
+                        self.animation_waker.0.clone(),
+                    );
+                    if !composer.generation {
+                        composer.issue = Some("newtab-widget-generation-failed");
+                    }
+                }
+                state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            UiAction::SaveCustomWidget => {
+                if let Some(preview) = self.widget_composer.preview.as_ref() {
+                    if let Some(id) = newtab_custom::insert(&mut self.settings, preview) {
+                        self.settings.new_tab_show_widgets = true;
+                        self.settings.save();
+                        self.close_widget_composer();
+                        newtab::reveal_created(&self.egui_glow.egui_ctx, id);
+                    } else {
+                        self.widget_composer.issue = Some("newtab-widget-creation-failed");
+                    }
+                }
+                state.window.request_redraw();
+            },
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            UiAction::CloseWidgetComposer => {
+                self.close_widget_composer();
                 state.window.request_redraw();
             },
             UiAction::ImportPasswords => {
@@ -3000,6 +3218,8 @@ fn install_fonts(ctx: &egui::Context) {
 
 impl Drop for RunningApp {
     fn drop(&mut self) {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        self.close_widget_composer();
         let _ = self.state.rendering_context.make_current();
         #[cfg(target_os = "macos")]
         if let Some(overlays) = &self.glass_overlays {
@@ -3030,6 +3250,23 @@ enum WakerEvent {
     },
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     WallpaperGenerated(Result<Option<Vec<u8>>, newtab_wallpaper::Error>),
+    WidgetPhotosRefreshed(Vec<widget_photo::Update>),
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    CustomWidgetGenerated {
+        ticket: u64,
+        result: Result<Option<Vec<u8>>, ()>,
+    },
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    WidgetPhotosLoaded {
+        ticket: u64,
+        result: Result<newtab_custom::Preview, ()>,
+    },
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    WidgetTranscript {
+        ticket: u64,
+        text: Result<Option<String>, &'static str>,
+        done: bool,
+    },
     /// The window's display is ready for the next animation frame.
     AnimationFrame,
     /// AppKit's application appearance changed.

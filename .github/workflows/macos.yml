@@ -232,6 +232,16 @@ jobs:
           test -s "$APP/Contents/Resources/Assets.car"
           test "$(plutil -extract CFBundleIconName raw "$APP/Contents/Info.plist")" = Heion
 
+          echo "--- widget composer ---"
+          BRIDGE="$APP/Contents/Frameworks/HeionWidgetPlayground.dylib"
+          if [ "$WANT_ARCH" = arm64 ]; then
+            test "$(lipo -archs "$BRIDGE")" = arm64
+            test -n "$(plutil -extract NSSpeechRecognitionUsageDescription raw "$APP/Contents/Info.plist")"
+            codesign --verify --strict "$BRIDGE"
+          else
+            test ! -e "$BRIDGE"
+          fi
+
           echo "--- signature ---"
           codesign -dv --verbose=4 "$APP" 2>&1 | head -20
           codesign --verify --strict --verbose=2 "$APP"

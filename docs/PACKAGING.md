@@ -57,6 +57,12 @@ Updater-enabled bundles require macOS 12 or later and a Heion Ed25519 public
 key. The workflow can publish ad-hoc or notarized update-enabled releases.
 See [macOS updates](UPDATES.md) for release setup.
 
+The Apple Silicon release uses the macOS 26 SDK to bundle the optional
+Foundation Models bridge for New Tab widget generation. Heion loads it on
+compatible Macs with Apple Intelligence enabled. For isolated widget
+development, build with `--features local-widget-test` to use the separate
+test bundle identifier, profile, and keychain namespace.
+
 ### Unsigned builds — what your users will see
 
 Preview builds and releases made without signing credentials use ad-hoc signatures.

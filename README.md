@@ -60,10 +60,16 @@ left, or use the sliders in the upper right to open **Customize New Tab**.
   the **Animate wallpapers** setting.
 - Choose a PNG, JPEG, or WebP image, or create a wallpaper with Apple’s
   Image Playground on a supported Apple Silicon Mac.
-- Open **Edit widgets** to add, remove, drag, or resize the clock, recent
-  pages, pinned tabs, checklist, and Space counts. Resize from the corner or
-  open the grip for exact sizes, including a two-column pill. Heion saves the
-  layout, and the whole dashboard can be hidden.
+- Open **Edit widgets** to add the clock, recent pages, pinned tabs, checklist,
+  and Space counts. Hover over any card to move, resize, or remove it. Resize
+  from the corner or open the grip for exact sizes, including a two-column
+  pill. Heion saves the layout, and the whole dashboard can be hidden.
+- Choose **Speak** or **Write** at the bottom of New Tab to describe a widget.
+  Apple Intelligence builds a preview on your Mac so you can choose a size
+  before adding it. A world clock shows each city's time zone. A photo widget
+  can fetch pictures from Wikimedia Commons and rotate them on each New Tab.
+  Widget generation requires macOS 26 or later on an Apple Silicon Mac with
+  Apple Intelligence enabled.
 
 **Settings → Appearance** controls the window theme, accent, and page frame.
 AppKit Liquid Glass is available on macOS 26 and later. See the
@@ -124,6 +130,7 @@ See [Packaging and distribution](docs/PACKAGING.md).
 | `zervo-core/src/glass.rs` | the one place a surface is drawn |
 | `src/backdrop.rs` | the blurred copy surfaces frost against, and the corner cut |
 | `src/newtab.rs`, `src/newtab_wallpaper.rs` | New Tab dashboard, grid animation, and wallpapers |
+| `src/newtab_custom.rs`, `src/widget_photo.rs` | Generated widget layouts, content, and photo rotation |
 | `zervo-core/src/newtab_widgets.rs` | Saved dashboard layouts and resize presets |
 | `src/pull_refresh.rs` | Scroll-position checks and pull-to-refresh feedback |
 | `src/favicons.rs`, `src/browsing_data.rs` | Local website icons and site-data controls |
@@ -139,8 +146,8 @@ including how the chrome and the engine share a graphics context.
 ## Platform support
 
 Heion releases target macOS on Apple Silicon and Intel. Image Playground
-requires Apple Intelligence support and availability. Linux and Windows
-release builds are paused.
+and widget generation require Apple Intelligence support and availability.
+Linux and Windows release builds are paused.
 
 Some sites may render incorrectly or fail to play streaming video because
 Servo is still implementing parts of the web platform. Extensions and sync

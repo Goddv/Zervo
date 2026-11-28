@@ -241,7 +241,12 @@ fn decode(stored: &str) -> Option<String> {
 }
 
 fn service(site: &str) -> String {
-    format!("Zervo — {site}")
+    let namespace = if cfg!(feature = "local-widget-test") {
+        "Heion Widget Test"
+    } else {
+        "Zervo"
+    };
+    format!("{namespace} — {site}")
 }
 
 fn index_path() -> Option<std::path::PathBuf> {

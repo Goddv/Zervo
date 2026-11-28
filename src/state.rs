@@ -539,6 +539,10 @@ impl BrowserState {
     }
 
     pub fn add_tab(&mut self, workspace: usize, url: impl Into<String>) -> TabId {
+        let url = url.into();
+        if matches!(url.as_str(), "heion://newtab" | "zervo://newtab") {
+            return self.add_zervo_page(workspace);
+        }
         let id = self.next_tab_id;
         self.next_tab_id += 1;
         self.session_dirty = true;
@@ -866,6 +870,14 @@ fn spaces_path() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opens_the_internal_new_tab_as_the_homepage() {
+        let state = BrowserState::from_saved(SavedSpaces::default(), "heion://newtab", "", false);
+        let tab = state.active_tab().unwrap();
+        assert!(matches!(tab.kind, TabKind::NewTab));
+        assert_eq!(tab.url, "heion://newtab");
+    }
 
     #[test]
     fn restores_spaces_and_pins_without_discarding_an_explicit_url() {
