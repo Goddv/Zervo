@@ -2008,8 +2008,14 @@ fn draw_downloads_card(
                                 "pause",
                             );
                         } else {
-                            if *can_retry &&
-                                control(ui, Icon::Reload, tr("chrome-start-again"), true, "restart")
+                            if *can_retry
+                                && control(
+                                    ui,
+                                    Icon::Reload,
+                                    tr("chrome-start-again"),
+                                    true,
+                                    "restart",
+                                )
                             {
                                 actions.push(UiAction::RestartDownload(*download));
                             }

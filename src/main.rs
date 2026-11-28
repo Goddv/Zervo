@@ -517,6 +517,8 @@ impl ApplicationHandler<WakerEvent> for App {
             // is unaffected — a canvas asking for `webgl` still gets it, so
             // this adds a context rather than replacing one.
             dom_webgl2_enabled: true,
+            #[cfg(feature = "media-source")]
+            dom_media_source_enabled: true,
             shell_background_color_rgba: shell_background,
 
             // ── The web platform block ──────────────────────────────────
@@ -2702,7 +2704,11 @@ impl RunningApp {
                     && let Ok(url) = Url::parse(&item.url)
                 {
                     let request = servo::UrlRequest::new(url).download(item.filename.clone());
-                    let source = state.browser.borrow().workspaces.iter()
+                    let source = state
+                        .browser
+                        .borrow()
+                        .workspaces
+                        .iter()
                         .flat_map(|workspace| &workspace.tabs)
                         .filter_map(|tab| tab.webview.as_ref())
                         .find(|view| view.id() == item.source)

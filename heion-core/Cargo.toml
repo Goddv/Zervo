@@ -2,11 +2,11 @@
 name = "heion-core"
 # Tracks the binary's version: `net`'s user agent is built from it, and a
 # wallpaper host should be told the version of the browser that is asking.
-version = "0.1.2+1"
+version = "0.1.2+2"
 edition = "2024"
 rust-version = "1.100"
 license = "MPL-2.0"
-description = "Zervo's engine-independent parts: theme, glass, grid, gestures, storage, and a small HTTPS client"
+description = "Heion's engine-independent parts: theme, glass, grid, gestures, storage, and a small HTTPS client"
 publish = false
 
 [dependencies]

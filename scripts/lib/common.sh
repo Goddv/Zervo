@@ -109,10 +109,34 @@ zervo_binary_path() {
 }
 
 # ── Building ──────────────────────────────────────────────────────────────
-# One place that knows how to invoke cargo, so every package is built the same
-# way. --locked is the point: a release must resolve the dependency graph the
-# committed Cargo.lock describes, and nothing else. Cargo will fail rather than
-# quietly update the lockfile.
+zervo_cargo() {
+    if [ -n "${HEION_SERVO_CHECKOUT:-}" ]; then
+        local checkout="${HEION_SERVO_CHECKOUT//\\/\\\\}"
+        checkout="${checkout//\"/\\\"}"
+        cargo --config "patch.crates-io.servo.path=\"$checkout/components/servo\"" "$@"
+    else
+        cargo "$@"
+    fi
+}
+
+zervo_resolve_servo() {
+    local checkout="$1" platform="$2"
+    shift 2
+    zervo_cargo metadata --format-version 1 --filter-platform "$platform" "$@" | \
+        python3 -c '
+import json
+import sys
+from pathlib import Path
+
+manifest = (Path(sys.argv[1]) / "components/servo/Cargo.toml").resolve()
+if not any(p["name"] == "servo" and Path(p["manifest_path"]).resolve() == manifest
+           for p in json.load(sys.stdin)["packages"]):
+    sys.exit(f"Cargo did not select the patched Servo at {manifest}")
+' "$checkout"
+}
+
+# Release builds use the shared Cargo.lock. Local builds following Servo can
+# opt into updating it when the engine dependency graph changes.
 zervo_cargo_build() {
     local profile="$1" features="$2" triple="${3:-}"
     local args
@@ -131,9 +155,8 @@ zervo_cargo_build() {
             args+=("${extra[@]}")
         fi
     fi
-
     say "cargo ${args[*]}"
-    cargo "${args[@]}"
+    zervo_cargo "${args[@]}"
 }
 
 # Remove a working directory when the script ends, however it ends.

@@ -62,7 +62,7 @@ jobs:
           sccache: "false"
 
       - name: Prepare pinned Servo
-        run: scripts/prepare-servo.sh
+        run: scripts/prepare-servo.sh --pinned ../servo
 
       - name: Clippy
         # `-D warnings` is the point: the lint policy lives in the workspace's
@@ -81,7 +81,7 @@ jobs:
           persist-credentials: false
       - name: Prepare Servo for the dependency audit
         run: |
-          scripts/prepare-servo.sh
+          scripts/prepare-servo.sh --pinned ../servo
           # Give cargo-deny version constraints for inherited Git dependencies
           # in the audit checkout. Cargo still uses the same locked revisions.
           python3 - <<'PY'
@@ -146,7 +146,7 @@ jobs:
         # `# shellcheck source=` directive for the same reason.
         run: |
           shellcheck -x scripts/bundle-macos.sh scripts/make-icns.sh scripts/lib/common.sh \
-            scripts/build-sparkle.sh scripts/fetch-sparkle-tools.sh scripts/prepare-servo.sh \
+            scripts/build-sparkle.sh scripts/fetch-sparkle-tools.sh scripts/prepare-servo.sh scripts/build-gstreamer-mse.sh \
             scripts/make-appcast.sh scripts/stage-appcast.sh
 
   workflows:

@@ -106,16 +106,17 @@ download prompt when building:
 cargo build --profile dev-fast --features engine-downloads
 ```
 
-See [docs/SERVO.md](docs/SERVO.md) for the engine pin and patch status.
+See [docs/SERVO.md](docs/SERVO.md) for the Servo update workflow and patch status.
 
 ### Packaging
 
 ```bash
-./scripts/bundle-macos.sh --dmg --features engine-downloads,media
+./scripts/bundle-macos.sh --dmg --features engine-downloads,media-source
 ```
 
 GitHub Actions builds Apple Silicon and Intel disk images from `main`.
-Tagged releases also include the source archive and checksums.
+Tagged releases also include the source archive, resolved Servo revisions,
+Cargo lockfile, and checksums.
 See [Packaging and distribution](docs/PACKAGING.md).
 
 ## Layout

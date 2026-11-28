@@ -118,10 +118,17 @@ esac
 
 # The GStreamer framework ships its own pkg-config that knows where the
 # framework is, so putting its bin first is all the build needs to find it.
-GSTREAMER_ROOT="/Library/Frameworks/GStreamer.framework/Versions/1.0"
+GSTREAMER_ROOT="${HEION_GSTREAMER_ROOT:-/Library/Frameworks/GStreamer.framework/Versions/1.0}"
 # Normalised, because cargo accepts both `--features a,b` and `--features "a b"`
 # and the old comma-only match quietly did not see the second form.
 case " $(printf '%s' "$FEATURES" | tr ',' ' ') " in
+    *" media-source "*)
+        [ -d "$GSTREAMER_ROOT" ] || die "GStreamer is missing at $GSTREAMER_ROOT"
+        export PATH="$GSTREAMER_ROOT/bin:$PATH"
+        export PKG_CONFIG_PATH="$GSTREAMER_ROOT/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+        export PKG_CONFIG_ALLOW_CROSS=1
+        WITH_MEDIA=1
+        WITH_MEDIA_SOURCE=1 ;;
     *" media "*)
         [ -d "$GSTREAMER_ROOT" ] || die "--features media needs GStreamer at $GSTREAMER_ROOT; see docs/PACKAGING.md"
         export PATH="$GSTREAMER_ROOT/bin:$PATH"
@@ -134,8 +141,10 @@ case " $(printf '%s' "$FEATURES" | tr ',' ' ') " in
         # package, and every dylib in the framework carries both slices, so the
         # single set of .pc files is correct for either target.
         export PKG_CONFIG_ALLOW_CROSS=1
-        WITH_MEDIA=1 ;;
-    *) WITH_MEDIA=0 ;;
+        WITH_MEDIA=1
+        WITH_MEDIA_SOURCE=0 ;;
+    *) WITH_MEDIA=0
+       WITH_MEDIA_SOURCE=0 ;;
 esac
 
 # ── The binary, for one architecture or two ───────────────────────────────
@@ -144,6 +153,25 @@ if [ "$UNIVERSAL" = 1 ] && [ -n "$TRIPLE" ]; then
 fi
 if [ "$UNIVERSAL" = 1 ] && [ "${#PREBUILT[@]}" -gt 0 ]; then
     die "--universal and --binary are mutually exclusive: pass one --binary per architecture and they are merged"
+fi
+
+if [ "$BUILD" = 1 ]; then
+    servo_destination="${HEION_SERVO_CHECKOUT:-$(zervo_target_dir)/heion-servo}"
+    if [ "${HEION_SERVO_MODE:-latest}" = pinned ]; then
+        HEION_SERVO_CHECKOUT="$(scripts/prepare-servo.sh --pinned "$servo_destination")"
+    else
+        HEION_SERVO_CHECKOUT="$(scripts/prepare-servo.sh "$servo_destination")"
+        # Local builds can pick up Cargo dependency changes along with Servo.
+        # Release CI supplies a shared lockfile and explicitly sets this to 1.
+        export ZERVO_LOCKED="${ZERVO_LOCKED:-0}"
+    fi
+    export HEION_SERVO_CHECKOUT
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    if [ "${ZERVO_LOCKED:-1}" = 1 ]; then
+        zervo_resolve_servo "$HEION_SERVO_CHECKOUT" "$host" --locked
+    else
+        zervo_resolve_servo "$HEION_SERVO_CHECKOUT" "$host"
+    fi
 fi
 
 if [ "${#PREBUILT[@]}" -gt 0 ]; then
@@ -187,14 +215,24 @@ cp assets/licenses/NotoSansJP-OFL.txt "$RES_DIR/"
 
 if [ "$WITH_MEDIA" = 1 ]; then
     say "bundling GStreamer"
-    ./scripts/bundle-gstreamer.py "$APP"
+    BUNDLE_ARCHS="$(lipo -archs "$BIN_DIR/Heion")"
+    if [ "$WITH_MEDIA_SOURCE" = 1 ]; then
+        mse_library="${HEION_GSTREAMER_MSE_LIBRARY:-}"
+        if [ -z "$mse_library" ]; then
+            mse_library="$(scripts/build-gstreamer-mse.sh --download "$(zervo_target_dir)/gstreamer-mse" "$BUNDLE_ARCHS")"
+        fi
+        [ "$(lipo -archs "$mse_library")" = "$BUNDLE_ARCHS" ] ||
+            die "the patched GStreamer MSE library does not match the app architectures"
+        ./scripts/bundle-gstreamer.py "$APP" "$mse_library"
+    else
+        ./scripts/bundle-gstreamer.py "$APP"
+    fi
 
     # The GStreamer framework is universal, so every dylib copied out of it
     # carries both architectures. In a universal bundle that is exactly right.
     # In a single-architecture one it is 81 MB of code that can never run —
     # roughly a quarter of the whole bundle — so it is thinned to match the
     # binary beside it.
-    BUNDLE_ARCHS="$(lipo -archs "$BIN_DIR/Heion")"
     case "$BUNDLE_ARCHS" in
         *" "*) : ;;
         *)

@@ -1,4 +1,4 @@
-//! Reading and writing Zervo's own small JSON files.
+//! Reading and writing Heion's own small JSON files.
 //!
 //! Four things keep state on disk — the settings, the library, the password
 //! index and the wallpaper manifest — and all four did the same thing:

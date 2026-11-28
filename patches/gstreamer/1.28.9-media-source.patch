@@ -1,0 +1,616 @@
+--- a/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstappendpipeline-private.h
++++ b/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstappendpipeline-private.h
+@@ -39,6 +39,9 @@
+
+ typedef struct
+ {
++  void (*append_done)           (GstAppendPipeline   * self,
++                                 guint32               seqnum,
++                                 gpointer              user_data);
+   void (*received_init_segment) (GstAppendPipeline   * self,
+                                  gpointer              user_data);
+   void (*duration_changed)      (GstAppendPipeline   * self,
+@@ -62,6 +65,13 @@
+ GST_MSE_PRIVATE
+ GstFlowReturn gst_append_pipeline_append (GstAppendPipeline * self,
+     GstBuffer * buffer);
++
++GST_MSE_PRIVATE
++GstFlowReturn gst_append_pipeline_append_with_seqnum (GstAppendPipeline * self,
++    GstBuffer * buffer, guint32 seqnum);
++
++GST_MSE_PRIVATE
++gboolean gst_append_pipeline_flush (GstAppendPipeline * self);
+
+ GST_MSE_PRIVATE
+ GstFlowReturn gst_append_pipeline_eos (GstAppendPipeline * self);
+--- a/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstappendpipeline.c
++++ b/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstappendpipeline.c
+@@ -332,6 +332,9 @@
+       if (gst_message_has_name (message, END_OF_APPEND)) {
+         GST_TRACE_OBJECT (self, "end of append");
+         consume_all_samples (self);
++        if (self->callbacks.callbacks.append_done)
++          self->callbacks.callbacks.append_done (self,
++              gst_message_get_seqnum (message), self->callbacks.user_data);
+         goto done;
+       }
+       if (gst_message_has_name (message, SHUTDOWN)) {
+@@ -353,6 +356,8 @@
+       gst_clear_object (&self->streams);
+       self->streams = streams;
+       process_init_segment (self);
++      if (self->have_outstanding_samples)
++        consume_all_samples (self);
+       goto done;
+     }
+     case GST_MESSAGE_EOS:
+@@ -408,8 +413,10 @@
+
+   if (is_end_of_append_event (event)) {
+     GST_TRACE_OBJECT (self, "end of append event");
+-    if (gst_bus_post (self->bus, gst_message_new_application (NULL,
+-                gst_structure_new_empty (END_OF_APPEND)))) {
++    GstMessage *message = gst_message_new_application (NULL,
++        gst_structure_new_empty (END_OF_APPEND));
++    gst_message_set_seqnum (message, gst_event_get_seqnum (event));
++    if (gst_bus_post (self->bus, message)) {
+       return GST_PAD_PROBE_DROP;
+     } else {
+       GST_ERROR_OBJECT (self, "failed to post end of append");
+@@ -818,17 +825,39 @@
+ GstFlowReturn
+ gst_append_pipeline_append (GstAppendPipeline * self, GstBuffer * buffer)
+ {
++  return gst_append_pipeline_append_with_seqnum (self, buffer,
++      gst_util_seqnum_next ());
++}
++
++GstFlowReturn
++gst_append_pipeline_append_with_seqnum (GstAppendPipeline * self,
++    GstBuffer * buffer, guint32 seqnum)
++{
+   g_return_val_if_fail (GST_IS_APPEND_PIPELINE (self), GST_FLOW_ERROR);
+   GstFlowReturn push_result = gst_app_src_push_buffer (self->src, buffer);
+   if (push_result != GST_FLOW_OK)
+     return push_result;
+
+-  if (!gst_element_send_event (GST_ELEMENT_CAST (self->src),
+-          new_end_of_append_event ())) {
++  GstEvent *event = new_end_of_append_event ();
++  gst_event_set_seqnum (event, seqnum);
++  if (!gst_element_send_event (GST_ELEMENT_CAST (self->src), event)) {
+     GST_ERROR_OBJECT (self, "failed to push end-of-append event");
+     return GST_FLOW_ERROR;
+   }
+   return GST_FLOW_OK;
++}
++
++gboolean
++gst_append_pipeline_flush (GstAppendPipeline * self)
++{
++  GstElement *source = GST_ELEMENT (self->src);
++  guint32 seqnum = gst_util_seqnum_next ();
++  GstEvent *event = gst_event_new_flush_start ();
++  gst_event_set_seqnum (event, seqnum);
++  gboolean started = gst_element_send_event (source, event);
++  event = gst_event_new_flush_stop (FALSE);
++  gst_event_set_seqnum (event, seqnum);
++  return gst_element_send_event (source, event) && started;
+ }
+
+ GstFlowReturn
+--- a/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstmediasource.c
++++ b/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstmediasource.c
+@@ -951,7 +951,7 @@
+ }
+
+ static void
+-abort_all_source_buffers (GstMediaSource * self)
++finish_all_source_buffers (GstMediaSource * self)
+ {
+   for (guint i = 0;; i++) {
+     GstSourceBuffer *buf = gst_source_buffer_list_index (self->buffers, i);
+@@ -959,9 +959,31 @@
+       return;
+     }
+     GST_LOG_OBJECT (self, "shutting down %" GST_PTR_FORMAT, buf);
+-    gst_source_buffer_abort (buf, NULL);
++    gst_source_buffer_finish (buf);
+     gst_object_unref (buf);
+   }
++}
++
++static void
++set_duration_to_buffered_end (GstMediaSource * self)
++{
++  GstClockTime end = 0;
++  for (guint i = 0;; i++) {
++    GstSourceBuffer *buffer = gst_source_buffer_list_index (self->buffers, i);
++    if (buffer == NULL)
++      break;
++    GArray *ranges = gst_source_buffer_get_buffered (buffer, NULL);
++    if (ranges != NULL) {
++      for (guint n = 0; n < ranges->len; n++) {
++        GstMediaSourceRange range = g_array_index (ranges, GstMediaSourceRange, n);
++        end = MAX (end, range.end);
++      }
++      g_array_unref (ranges);
++    }
++    gst_object_unref (buffer);
++  }
++  if (end > 0 && GST_CLOCK_TIME_IS_VALID (end))
++    gst_media_source_set_duration (self, end, NULL);
+ }
+
+ /**
+@@ -1012,8 +1034,8 @@
+       decode_error (self);
+       break;
+     default:
+-      update_duration (self);
+-      abort_all_source_buffers (self);
++      set_duration_to_buffered_end (self);
++      finish_all_source_buffers (self);
+       break;
+   }
+
+--- a/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstmsesrc.c
++++ b/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstmsesrc.c
+@@ -116,6 +116,7 @@
+   GstMediaSourceTrack *track;
+   GstCaps *most_recent_caps;
+   GstSegment segment;
++  guint32 segment_seqnum;
+
+   gboolean sent_stream_collection;
+   gboolean sent_stream_start;
+@@ -188,6 +189,7 @@
+ gst_mse_src_pad_init (GstMseSrcPad * self)
+ {
+   gst_segment_init (&self->segment, GST_FORMAT_TIME);
++  self->segment_seqnum = GST_SEQNUM_INVALID;
+   self->sent_stream_collection = FALSE;
+   self->sent_stream_start = FALSE;
+   self->sent_initial_caps = FALSE;
+@@ -266,7 +268,7 @@
+ static GstStateChangeReturn gst_mse_src_change_state (GstElement * element,
+     GstStateChange transition);
+ static gboolean gst_mse_src_send_event (GstElement * element, GstEvent * event);
+-static void update_ready_state_for_init_segment (GstMseSrc * self);
++static gboolean update_ready_state_for_init_segment (GstMseSrc * self);
+ static void update_ready_state (GstMseSrc * self);
+
+ G_DEFINE_TYPE_WITH_CODE (GstMseSrc, gst_mse_src, GST_TYPE_ELEMENT,
+@@ -783,40 +785,48 @@
+ }
+
+ static void
+-flush_stream (GstMseSrc * self, Stream * stream, gboolean is_seek)
+-{
+-  GstMseSrcPad *pad = GST_MSE_SRC_PAD (stream->pad);
+-  gst_pad_push_event (GST_PAD (pad), gst_event_new_flush_start ());
+-
+-  if (is_seek) {
+-    GST_DEBUG_OBJECT (pad, "flushing for seek to %" GST_TIMEP_FORMAT,
+-        &self->start_time);
+-    set_flushing_and_signal (pad);
+-    gst_media_source_track_flush (stream->track);
+-    gst_pad_stop_task (GST_PAD (pad));
+-    GST_DEBUG_OBJECT (pad, "stopped task");
+-    GstSegment *segment = &(pad->segment);
+-    segment->base = 0;
+-    segment->start = self->start_time;
+-    segment->position = self->start_time;
+-    segment->time = self->start_time;
+-    segment->rate = self->rate;
+-  } else {
+-    gst_media_source_track_flush (stream->track);
+-  }
+-
+-  g_atomic_int_set (&pad->does_need_segment, TRUE);
+-
+-  gst_pad_push_event (GST_PAD (pad), gst_event_new_flush_stop (is_seek));
+-}
+-
+-static void
+-flush_all_streams (GstMseSrc * self, gboolean is_seek)
++start_seek_flush (GstMseSrc * self, guint32 seqnum)
+ {
+   GHashTableIter iter;
+   g_hash_table_iter_init (&iter, self->streams);
+   for (gpointer value; g_hash_table_iter_next (&iter, NULL, &value);) {
+-    flush_stream (self, (Stream *) value, is_seek);
++    Stream *stream = value;
++    GstEvent *event = gst_event_new_flush_start ();
++    gst_event_set_seqnum (event, seqnum);
++    gst_pad_push_event (stream->pad, event);
++  }
++
++  g_hash_table_iter_init (&iter, self->streams);
++  for (gpointer value; g_hash_table_iter_next (&iter, NULL, &value);) {
++    Stream *stream = value;
++    GstMseSrcPad *pad = GST_MSE_SRC_PAD (stream->pad);
++    set_flushing_and_signal (pad);
++    gst_media_source_track_flush (stream->track);
++    gst_pad_stop_task (stream->pad);
++    pad->segment.base = 0;
++    pad->segment.start = self->start_time;
++    pad->segment.position = self->start_time;
++    pad->segment.time = self->start_time;
++    pad->segment.rate = self->rate;
++    pad->segment_seqnum = seqnum;
++    g_atomic_int_set (&pad->does_need_segment, TRUE);
++  }
++
++  FLOW_COMBINER_LOCK (self);
++  gst_flow_combiner_reset (self->flow_combiner);
++  FLOW_COMBINER_UNLOCK (self);
++}
++
++static void
++finish_seek_flush (GstMseSrc * self, guint32 seqnum)
++{
++  GHashTableIter iter;
++  g_hash_table_iter_init (&iter, self->streams);
++  for (gpointer value; g_hash_table_iter_next (&iter, NULL, &value);) {
++    Stream *stream = value;
++    GstEvent *event = gst_event_new_flush_stop (TRUE);
++    gst_event_set_seqnum (event, seqnum);
++    gst_pad_push_event (stream->pad, event);
+   }
+ }
+
+@@ -845,7 +855,10 @@
+   GST_DEBUG_OBJECT (self, "tearing down stream %s",
+       gst_media_source_track_get_id (stream->track));
+
+-  flush_stream (self, stream, FALSE);
++  gst_pad_push_event (stream->pad, gst_event_new_flush_start ());
++  gst_media_source_track_flush (stream->track);
++  g_atomic_int_set (&GST_MSE_SRC_PAD (stream->pad)->does_need_segment, TRUE);
++  gst_pad_push_event (stream->pad, gst_event_new_flush_stop (FALSE));
+   gst_pad_set_active (stream->pad, FALSE);
+
+   if (gst_stream_collection_get_size (self->collection) > 0) {
+@@ -892,7 +905,8 @@
+ }
+
+ static void
+-gst_mse_src_seek (GstMseSrc * self, GstClockTime start_time, gdouble rate)
++gst_mse_src_seek (GstMseSrc * self, GstClockTime start_time, gdouble rate,
++    guint32 seqnum)
+ {
+   GST_OBJECT_LOCK (self);
+   self->start_time = start_time;
+@@ -900,7 +914,7 @@
+   GST_OBJECT_UNLOCK (self);
+
+   MEDIA_SOURCE_LOCK (self);
+-  flush_all_streams (self, TRUE);
++  start_seek_flush (self, seqnum);
+   if (self->media_source) {
+     GST_DEBUG_OBJECT (self, "seeking on media source %" GST_PTR_FORMAT,
+         self->media_source);
+@@ -908,6 +922,7 @@
+   } else {
+     GST_DEBUG_OBJECT (self, "detached, not seeking on media source");
+   }
++  finish_seek_flush (self, seqnum);
+   MEDIA_SOURCE_UNLOCK (self);
+   resume_all_streams (self);
+ }
+@@ -929,16 +944,18 @@
+   gst_event_parse_seek (event, &rate, &format, NULL, &seek_type, &start, NULL,
+       NULL);
+
+-  gst_event_unref (event);
+-
+-  if (format != GST_FORMAT_TIME || seek_type != GST_SEEK_TYPE_SET || rate < 0) {
++  if (format != GST_FORMAT_TIME || seek_type != GST_SEEK_TYPE_SET ||
++      start < 0 || rate < 0) {
+     GST_ERROR_OBJECT (self,
+         "Rejecting unsupported seek event: %" GST_PTR_FORMAT, event);
++    gst_event_unref (event);
+     return FALSE;
+   }
+
+   GST_DEBUG_OBJECT (self, "handling %" GST_PTR_FORMAT, event);
+-  gst_mse_src_seek (self, start, rate);
++  guint32 seqnum = gst_event_get_seqnum (event);
++  gst_event_unref (event);
++  gst_mse_src_seek (self, start, rate, seqnum);
+   return TRUE;
+ }
+
+@@ -1015,6 +1032,8 @@
+     GST_DEBUG_OBJECT (pad, "sending new segment starting@%" GST_TIMEP_FORMAT,
+         &pad->segment.time);
+     GstEvent *event = gst_event_new_segment (&pad->segment);
++    if (pad->segment_seqnum != GST_SEQNUM_INVALID)
++      gst_event_set_seqnum (event, pad->segment_seqnum);
+     if (!gst_pad_push_event (GST_PAD (pad), event)) {
+       GST_ERROR_OBJECT (pad, "failed to push new segment");
+       goto pause;
+@@ -1080,6 +1099,10 @@
+     GstEvent *event = GST_EVENT (g_steal_pointer (&object));
+     if (GST_EVENT_TYPE (event) == GST_EVENT_EOS) {
+       GST_LOG_OBJECT (self, "EOS");
++      if (pad->segment_seqnum != GST_SEQNUM_INVALID) {
++        event = gst_event_make_writable (event);
++        gst_event_set_seqnum (event, pad->segment_seqnum);
++      }
+     }
+     if (!gst_pad_push_event (GST_PAD (pad), event)) {
+       GST_ERROR_OBJECT (self, "failed to push enqueued event");
+@@ -1216,7 +1239,8 @@
+   GstElement *element = GST_ELEMENT (self);
+   GstObject *object = GST_OBJECT (self);
+
+-  update_ready_state_for_init_segment (self);
++  if (!update_ready_state_for_init_segment (self))
++    return;
+
+   STREAMS_LOCK (self);
+
+@@ -1337,15 +1361,17 @@
+   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_READY_STATE]);
+ }
+
+-static void
++static gboolean
+ update_ready_state_for_init_segment (GstMseSrc * self)
+ {
++  gboolean have_metadata = FALSE;
+   MEDIA_SOURCE_LOCK (self);
+
+   if (self->media_source == NULL) {
+     goto done;
+   }
+   if (self->ready_state != GST_MSE_SRC_READY_STATE_HAVE_NOTHING) {
++    have_metadata = TRUE;
+     goto done;
+   }
+   GstSourceBufferList *buffers = gst_media_source_get_source_buffers
+@@ -1359,14 +1385,17 @@
+     all_received_init_segment &= gst_source_buffer_has_init_segment (buf);
+     gst_object_unref (buf);
+   }
++  gst_object_unref (buffers);
+   if (!all_received_init_segment) {
+-    return;
++    goto done;
+   }
+   set_ready_state (self, MAX (self->ready_state,
+           GST_MSE_SRC_READY_STATE_HAVE_METADATA));
++  have_metadata = TRUE;
+
+ done:
+   MEDIA_SOURCE_UNLOCK (self);
++  return have_metadata;
+ }
+
+ static gboolean
+--- a/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstsourcebuffer-private.h
++++ b/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstsourcebuffer-private.h
+@@ -47,6 +47,9 @@
+ void gst_source_buffer_teardown (GstSourceBuffer * self);
+
+ GST_MSE_PRIVATE
++void gst_source_buffer_finish (GstSourceBuffer * self);
++
++GST_MSE_PRIVATE
+ gboolean gst_source_buffer_has_init_segment (GstSourceBuffer * self);
+
+ GST_MSE_PRIVATE
+--- a/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstsourcebuffer.c
++++ b/subprojects/gst-plugins-bad/gst-libs/gst/mse/gstsourcebuffer.c
+@@ -150,6 +150,8 @@
+   gboolean generate_timestamps;
+   GstClockTime timestamp_offset;
+   gboolean updating;
++  gboolean aborting;
++  guint32 append_seqnum;
+   gboolean errored;
+   gsize size_limit;
+   gsize size;
+@@ -202,7 +204,8 @@
+   SourceBufferEvent event;
+ } SourceBufferEventItem;
+
+-#define DEFAULT_BUFFER_SIZE 1 << 24
++#define DEFAULT_BUFFER_SIZE ((gsize) 16 * 1024 * 1024)
++#define DEFAULT_VIDEO_BUFFER_SIZE ((gsize) 128 * 1024 * 1024)
+ #define DEFAULT_APPEND_MODE GST_SOURCE_BUFFER_APPEND_MODE_SEGMENTS
+
+ static GParamSpec *properties[N_PROPS];
+@@ -216,6 +219,9 @@
+ static inline gboolean is_removed_unlocked (GstSourceBuffer * self);
+ static void reset_parser_state_unlocked (GstSourceBuffer * self);
+ static void append_error_unlocked (GstSourceBuffer * self);
++static void append_successful_unlocked (GstSourceBuffer * self, gboolean ended);
++static inline gboolean is_updating (GstSourceBuffer * self);
++static inline void set_updating (GstSourceBuffer * self);
+
+ static void seek_track_buffer_unlocked (GstMediaSourceTrack * track,
+     GstMediaSourceTrackBuffer * buffer, GstSourceBuffer * self);
+@@ -244,6 +250,8 @@
+
+ static void on_duration_changed (GstAppendPipeline * pipeline,
+     gpointer user_data);
++static void on_append_done (GstAppendPipeline * pipeline, guint32 seqnum,
++    gpointer user_data);
+ static void on_eos (GstAppendPipeline * pipeline, GstMediaSourceTrack * track,
+     gpointer user_data);
+ static void on_error (GstAppendPipeline * pipeline, gpointer user_data);
+@@ -316,8 +324,11 @@
+   self->generate_timestamps = generate_timestamps;
+   self->append_mode = append_mode;
+   self->content_type = g_strdup (content_type);
++  if (g_ascii_strncasecmp (content_type, "video/", 6) == 0)
++    self->size_limit = DEFAULT_VIDEO_BUFFER_SIZE;
+
+   GstAppendPipelineCallbacks callbacks = {
++    .append_done = on_append_done,
+     .duration_changed = on_duration_changed,
+     .eos = on_eos,
+     .error = on_error,
+@@ -702,7 +713,8 @@
+   GstSourceBuffer *self = GST_SOURCE_BUFFER (user_data);
+
+   GST_OBJECT_LOCK (self);
+-  append_error_unlocked (self);
++  if (!self->aborting)
++    append_error_unlocked (self);
+   GST_OBJECT_UNLOCK (self);
+ }
+
+@@ -1486,6 +1498,32 @@
+     GstClockTime end, GError ** error)
+ {
+   g_return_val_if_fail (GST_IS_SOURCE_BUFFER (self), FALSE);
++
++  GST_OBJECT_LOCK (self);
++  if (is_removed_unlocked (self) || is_updating (self)) {
++    g_set_error (error, GST_MEDIA_SOURCE_ERROR,
++        GST_MEDIA_SOURCE_ERROR_INVALID_STATE, "source buffer cannot be updated");
++    GST_OBJECT_UNLOCK (self);
++    return FALSE;
++  }
++  if (!GST_CLOCK_TIME_IS_VALID (start) || end <= start) {
++    g_set_error (error, GST_MEDIA_SOURCE_ERROR, GST_MEDIA_SOURCE_ERROR_TYPE,
++        "invalid removal range");
++    GST_OBJECT_UNLOCK (self);
++    return FALSE;
++  }
++  set_updating (self);
++  schedule_event_unlocked (self, ON_UPDATE_START);
++  TRACKS_LOCK (self);
++  GHashTableIter iter;
++  g_hash_table_iter_init (&iter, self->track_buffers);
++  for (gpointer value; g_hash_table_iter_next (&iter, NULL, &value);) {
++    GstMediaSourceTrackBuffer *buffer = value;
++    gst_media_source_track_buffer_remove_range (buffer, start, end);
++  }
++  TRACKS_UNLOCK (self);
++  append_successful_unlocked (self, FALSE);
++  GST_OBJECT_UNLOCK (self);
+   return TRUE;
+ }
+
+@@ -1604,7 +1642,7 @@
+ will_overflow_unlocked (GstSourceBuffer * self, gsize bytes)
+ {
+   gsize total = compute_total_size_unlocked (self);
+-  return total + bytes > self->size_limit;
++  return total > self->size_limit || bytes > self->size_limit - total;
+ }
+
+ static void
+@@ -1676,6 +1714,17 @@
+   clear_updating (self);
+   schedule_event_unlocked (self, ON_UPDATE);
+   schedule_event_unlocked (self, ON_UPDATE_END);
++}
++
++static void
++on_append_done (G_GNUC_UNUSED GstAppendPipeline * pipeline, guint32 seqnum,
++    gpointer user_data)
++{
++  GstSourceBuffer *self = GST_SOURCE_BUFFER (user_data);
++  GST_OBJECT_LOCK (self);
++  if (is_updating (self) && self->append_seqnum == seqnum)
++    append_successful_unlocked (self, is_ended_unlocked (self));
++  GST_OBJECT_UNLOCK (self);
+ }
+
+ static gboolean
+@@ -1762,20 +1811,17 @@
+
+   if (!GST_IS_BUFFER (pending_data)) {
+     GST_TRACE_OBJECT (self, "no pending data");
+-    append_successful_unlocked (self, is_ended_unlocked (self));
+     goto done;
+   }
+
+-  GstFlowReturn result = gst_append_pipeline_append (self->append_pipeline,
+-      pending_data);
++  GstFlowReturn result = gst_append_pipeline_append_with_seqnum (
++      self->append_pipeline, pending_data, self->append_seqnum);
+
+   if (result != GST_FLOW_OK) {
+     GST_ERROR_OBJECT (self, "failed to append: %s", gst_flow_get_name (result));
+     append_error_unlocked (self);
+     goto done;
+   }
+-
+-  append_successful_unlocked (self, is_ended_unlocked (self));
+
+ done:
+   GST_OBJECT_UNLOCK (self);
+@@ -1938,7 +1984,7 @@
+   GST_OBJECT_LOCK (self);
+   TRACKS_LOCK (self);
+
+-  if (is_removed_unlocked (self) || is_updating (self)) {
++  if (is_removed_unlocked (self) || is_updating (self) || self->aborting) {
+     g_set_error (error,
+         GST_MEDIA_SOURCE_ERROR, GST_MEDIA_SOURCE_ERROR_INVALID_STATE,
+         "source buffer is removed or still updating");
+@@ -1976,6 +2022,7 @@
+   g_return_val_if_fail (self->pending_data == NULL, FALSE);
+
+   set_pending_data_unlocked (self, buf);
++  self->append_seqnum = gst_util_seqnum_next ();
+   set_updating (self);
+
+   schedule_event_unlocked (self, ON_UPDATE_START);
+@@ -2009,14 +2056,42 @@
+ gst_source_buffer_abort (GstSourceBuffer * self, GError ** error)
+ {
+   g_return_val_if_fail (GST_IS_SOURCE_BUFFER (self), FALSE);
+-  if (gst_append_pipeline_eos (self->append_pipeline) == GST_FLOW_OK) {
+-    return TRUE;
+-  } else {
+-    g_set_error (error,
+-        GST_MEDIA_SOURCE_ERROR, GST_MEDIA_SOURCE_ERROR_INVALID_STATE,
+-        "failed to abort source buffer");
++
++  GST_OBJECT_LOCK (self);
++  if (is_removed_unlocked (self) || is_ended_unlocked (self) || self->aborting) {
++    g_set_error (error, GST_MEDIA_SOURCE_ERROR,
++        GST_MEDIA_SOURCE_ERROR_INVALID_STATE, "source buffer cannot be aborted");
++    GST_OBJECT_UNLOCK (self);
+     return FALSE;
+   }
++  gboolean updating = is_updating (self);
++  self->aborting = TRUE;
++  clear_pending_data_unlocked (self);
++  clear_updating (self);
++  self->append_window_start = 0;
++  self->append_window_end = GST_CLOCK_TIME_NONE;
++  GST_OBJECT_UNLOCK (self);
++
++  /* A downstream element can complete an append while it handles the flush. */
++  gboolean flushed = gst_append_pipeline_flush (self->append_pipeline);
++
++  GST_OBJECT_LOCK (self);
++  self->aborting = FALSE;
++  if (updating) {
++    schedule_event_unlocked (self, ON_ABORT);
++    schedule_event_unlocked (self, ON_UPDATE_END);
++  }
++  GST_OBJECT_UNLOCK (self);
++  if (!flushed)
++    g_set_error (error, GST_MEDIA_SOURCE_ERROR,
++        GST_MEDIA_SOURCE_ERROR_INVALID_STATE, "failed to flush source buffer");
++  return flushed;
++}
++
++void
++gst_source_buffer_finish (GstSourceBuffer * self)
++{
++  gst_append_pipeline_eos (self->append_pipeline);
+ }
+
+ gboolean

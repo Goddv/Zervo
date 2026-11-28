@@ -68,13 +68,57 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: "1"
-  # Servo only supports the official GStreamer distribution on macOS, and pins
-  # this version. Both packages are needed: the runtime and the headers.
-  GSTREAMER_VERSION: 1.22.3
+  # Keep the universal SDK in sync with the version of the MSE patch.
+  GSTREAMER_VERSION: 1.28.9
 
 jobs:
+  servo:
+    name: Resolve Servo and Cargo dependencies
+    runs-on: ubuntu-24.04
+    outputs:
+      upstream: ${{ steps.revisions.outputs.upstream }}
+      fork: ${{ steps.revisions.outputs.fork }}
+      tree: ${{ steps.lockfile.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+        with:
+          key: servo-release
+          sccache: "false"
+      - name: Resolve both Servo main branches
+        id: revisions
+        run: scripts/prepare-servo.sh --resolve >> "$GITHUB_OUTPUT"
+      - name: Prepare Servo and generate the shared Cargo lockfile
+        id: lockfile
+        env:
+          HEION_SERVO_UPSTREAM: ${{ steps.revisions.outputs.upstream }}
+          HEION_SERVO_FORK: ${{ steps.revisions.outputs.fork }}
+        run: |
+          # shellcheck source=scripts/lib/common.sh
+          source scripts/lib/common.sh
+          scripts/prepare-servo.sh ../servo
+          zervo_resolve_servo ../servo aarch64-apple-darwin
+          tree="$(git -C ../servo write-tree)"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/servo-build"
+          {
+            printf 'Upstream: https://github.com/servo/servo/commit/%s\n' "$HEION_SERVO_UPSTREAM"
+            printf 'Fork: https://github.com/Goddv/servo/commit/%s\n' "$HEION_SERVO_FORK"
+            printf 'Patched tree: %s\n' "$tree"
+          } > "$RUNNER_TEMP/servo-build/servo-revisions.txt"
+          cp Cargo.lock "$RUNNER_TEMP/servo-build/Cargo.lock"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zervo-servo-build
+          path: ${{ runner.temp }}/servo-build/
+          if-no-files-found: error
+          overwrite: true
+
   build:
     name: ${{ matrix.arch }} .app
+    needs: servo
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     strategy:
@@ -104,8 +148,22 @@ jobs:
         with:
           key: macos
 
-      - name: Prepare pinned Servo
-        run: scripts/prepare-servo.sh
+      - name: Prepare the resolved Servo source
+        env:
+          HEION_SERVO_UPSTREAM: ${{ needs.servo.outputs.upstream }}
+          HEION_SERVO_FORK: ${{ needs.servo.outputs.fork }}
+          SERVO_TREE: ${{ needs.servo.outputs.tree }}
+        run: |
+          scripts/prepare-servo.sh ../servo
+          test "$(git -C ../servo write-tree)" = "$SERVO_TREE"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: zervo-servo-build
+          path: ${{ runner.temp }}/servo-build
+
+      - name: Use the shared lockfile
+        run: cp "$RUNNER_TEMP/servo-build/Cargo.lock" Cargo.lock
 
       - name: Build patched Sparkle
         if: inputs.updater-public-key != ''
@@ -116,9 +174,9 @@ jobs:
       - name: Install GStreamer
         if: inputs.media
         run: |
-          BASE=https://github.com/servo/servo-build-deps/releases/download/macOS
+          BASE="https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION"
           for PKG in gstreamer-1.0 gstreamer-1.0-devel; do
-            curl -L -sS --retry 5 --retry-delay 2 --retry-all-errors \
+            curl -fLsS --retry 5 --retry-delay 2 --retry-all-errors \
                  -o "/tmp/$PKG.pkg" "$BASE/$PKG-$GSTREAMER_VERSION-universal.pkg"
             sudo installer -pkg "/tmp/$PKG.pkg" -target /
           done
@@ -164,6 +222,10 @@ jobs:
         env:
           FEATURES_ENGINE_DOWNLOADS: ${{ inputs.engine-downloads }}
           FEATURES_MEDIA: ${{ inputs.media }}
+          HEION_SERVO_CHECKOUT: ../servo
+          HEION_SERVO_UPSTREAM: ${{ needs.servo.outputs.upstream }}
+          HEION_SERVO_FORK: ${{ needs.servo.outputs.fork }}
+          ZERVO_LOCKED: "1"
           # Through the environment, not interpolated into the script body:
           # `profile` is a free-form string on the workflow_call side.
           PROFILE: ${{ inputs.profile }}
@@ -176,7 +238,7 @@ jobs:
           set -o pipefail
           FEATURES=""
           if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
-          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media"; fi
+          if [ "$FEATURES_MEDIA" = "true" ]; then FEATURES="${FEATURES:+$FEATURES,}media-source"; fi
 
           ARGS=(--profile "$PROFILE" --dmg)
           if [ -n "$ZERVO_SPARKLE_PUBLIC_KEY" ]; then
@@ -200,6 +262,7 @@ jobs:
         # run on, and whether the signature the loader insists on is present.
         env:
           WANT_ARCH: ${{ matrix.arch }}
+          FEATURES_MEDIA: ${{ inputs.media }}
         run: |
           APP=target/Heion.app
           BIN="$APP/Contents/MacOS/Heion"
@@ -243,6 +306,10 @@ jobs:
           fi
 
           echo "--- signature ---"
+          if [ "$FEATURES_MEDIA" = true ]; then
+            test "$(lipo -archs "$APP/Contents/MacOS/lib/libgstmse-1.0.0.dylib")" = "$WANT_ARCH"
+            test -f "$APP/Contents/MacOS/lib/libgstmse.dylib"
+          fi
           codesign -dv --verbose=4 "$APP" 2>&1 | head -20
           codesign --verify --strict --verbose=2 "$APP"
 
@@ -282,9 +349,10 @@ jobs:
           FEATURES=""
           if [ "$FEATURES_ENGINE_DOWNLOADS" = "true" ]; then FEATURES="engine-downloads"; fi
           if [ "$FEATURES_MEDIA" = "true" ]; then
-            FEATURES="${FEATURES:+$FEATURES,}media"
+            FEATURES="${FEATURES:+$FEATURES,}media-source"
             GSTREAMER_ROOT=/Library/Frameworks/GStreamer.framework/Versions/1.0
             export PATH="$GSTREAMER_ROOT/bin:$PATH"
+            export PKG_CONFIG_PATH="$GSTREAMER_ROOT/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
             export DYLD_LIBRARY_PATH="$GSTREAMER_ROOT/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
           fi
           ARGS=(--locked)

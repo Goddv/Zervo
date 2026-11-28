@@ -21,7 +21,10 @@ import shutil
 import subprocess
 import sys
 
-GSTREAMER_ROOT = "/Library/Frameworks/GStreamer.framework/Versions/1.0"
+GSTREAMER_ROOT = os.environ.get(
+    "HEION_GSTREAMER_ROOT", "/Library/Frameworks/GStreamer.framework/Versions/1.0"
+)
+MSE_LIBRARY = "libgstmse-1.0.0.dylib"
 
 # Taken from the `gstreamer_plugin_lists` directory of the servo 0.5.0 crate
 # (common.rs.in and macos.rs.in). Kept here rather than read out of the crate
@@ -64,8 +67,14 @@ def non_system_dependencies(binary):
         )
     output = result.stdout
     found = set()
+    dylib = binary.endswith(".dylib")
+    skip_id = dylib
     for line in output.splitlines():
         if not line.startswith("\t"):
+            skip_id = dylib
+            continue
+        if skip_id:
+            skip_id = False
             continue
         dependency = line.split(" ", 1)[0].strip()
         if not is_system_library(dependency) and "librustc-stable_rt" not in dependency:
@@ -91,7 +100,7 @@ def resolve_rpath(dependency, rpath):
     raise SystemExit(f"cannot resolve rpath dependency: {dependency}")
 
 
-def rewrite_to_relative(binary, dependencies):
+def rewrite_to_relative(binary, dependencies, prefix="@rpath", strict=False):
     """Point `binary` at its dependencies inside the bundle instead of at
     wherever GStreamer happens to be installed on this machine.
 
@@ -108,17 +117,21 @@ def rewrite_to_relative(binary, dependencies):
     for dependency in dependencies:
         if is_system_library(dependency):
             continue
-        new_path = os.path.join("@rpath", os.path.basename(dependency))
+        new_path = os.path.join(prefix, os.path.basename(dependency))
+        if dependency == new_path:
+            continue
         result = subprocess.run(
             ["install_name_tool", "-change", dependency, new_path, binary],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
+            if strict:
+                raise SystemExit(f"could not relocate {binary}:\n  {result.stderr.strip()}")
             print(f"  ! install_name_tool on {os.path.basename(binary)}: {result.stderr.strip()}")
 
 
-def main(app):
+def main(app, mse_library=None):
     if not os.path.exists(GSTREAMER_ROOT):
         raise SystemExit(
             f"GStreamer is not installed at {GSTREAMER_ROOT}.\n"
@@ -161,10 +174,21 @@ def main(app):
     # The plugins are dlopened by name, so otool never mentions them. They have
     # to be listed explicitly or playback fails at runtime with no missing
     # symbol to point at why.
-    pending = non_system_dependencies(binary)
+    binary_dependencies = non_system_dependencies(binary)
+    pending = set(binary_dependencies)
     missing = []
-    for plugin in PLUGINS:
-        path = os.path.join(gstreamer_libs, "gstreamer-1.0", f"lib{plugin}.dylib")
+    plugins = [*PLUGINS]
+    if mse_library:
+        plugins.append("gstmse")
+        mse_plugin = os.path.join(gstreamer_libs, "gstreamer-1.0", "libgstmse.dylib")
+        if not os.path.isfile(mse_plugin):
+            raise SystemExit(f"missing MSE plugin: {mse_plugin}")
+    extra_plugin_dir = os.environ.get("HEION_GSTREAMER_EXTRA_PLUGIN_DIR")
+    for plugin in plugins:
+        plugin_name = f"lib{plugin}.dylib"
+        path = os.path.join(gstreamer_libs, "gstreamer-1.0", plugin_name)
+        if not os.path.isfile(path) and extra_plugin_dir:
+            path = os.path.join(extra_plugin_dir, plugin_name)
         if os.path.exists(path):
             pending.add(path)
         else:
@@ -175,7 +199,7 @@ def main(app):
         # reason to throw away a bundle that took hours to build. Failing here
         # is what a stale list used to do, with a traceback naming otool.
         print(f"  ! not in this GStreamer, skipped: {', '.join(missing)}")
-    rewrite_to_relative(binary, pending)
+    rewrite_to_relative(binary, binary_dependencies, strict=bool(mse_library))
 
     copied = set()
     by_basename = {}
@@ -185,17 +209,25 @@ def main(app):
         for dependency in batch:
             copied.add(dependency)
             source = resolve_rpath(dependency, gstreamer_libs)
-            transitive = non_system_dependencies(source)
-
             name = os.path.basename(source)
+            if mse_library and name == MSE_LIBRARY:
+                source = mse_library
+            transitive = non_system_dependencies(source)
             destination = os.path.join(libraries, name)
             if not os.path.exists(destination):
                 shutil.copyfile(source, destination)
                 os.chmod(destination, 0o755)
-                by_basename[name] = source
+                by_basename[name] = os.path.realpath(source)
                 count += 1
-                rewrite_to_relative(destination, transitive)
-            elif by_basename.get(name) not in (None, source):
+                if mse_library:
+                    subprocess.run(
+                        ["install_name_tool", "-id", f"@rpath/{name}", destination],
+                        check=True,
+                    )
+                    rewrite_to_relative(destination, transitive, "@loader_path", strict=True)
+                else:
+                    rewrite_to_relative(destination, transitive)
+            elif by_basename.get(name) not in (None, os.path.realpath(source)):
                 # Everything is flattened into one directory, so two libraries
                 # with the same file name and different contents cannot both be
                 # there. First writer used to win in silence, and whatever
@@ -215,6 +247,6 @@ def main(app):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         raise SystemExit(__doc__)
-    main(sys.argv[1])
+    main(sys.argv[1], *sys.argv[2:])

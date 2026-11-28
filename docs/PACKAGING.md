@@ -3,7 +3,7 @@
 Build a macOS app and disk image for the current architecture.
 
 ```bash
-./scripts/bundle-macos.sh --dmg --features engine-downloads,media
+./scripts/bundle-macos.sh --dmg --features engine-downloads,media-source
 ```
 
 GitHub Actions builds Apple Silicon and Intel disk images on every push to
@@ -34,7 +34,7 @@ downloads beat one that runs on both, and because each of these is about 80 MB
 smaller: a single-architecture bundle has its GStreamer libraries thinned to
 match, and a universal one cannot be.
 
-Cross-compiling with `--features media` needs one extra thing, and the script
+Cross-compiling with `--features media-source` needs one extra thing, and the script
 sets it: `glib-sys` and `gstreamer-sys` refuse to run `pkg-config` for a target
 that is not the host. `PKG_CONFIG_ALLOW_CROSS=1` is normally a loaded gun,
 because one set of `.pc` files usually describes one architecture; here it does
@@ -59,9 +59,13 @@ See [macOS updates](UPDATES.md) for release setup.
 
 The Apple Silicon release uses the macOS 26 SDK to bundle the optional
 Foundation Models bridge for New Tab widget generation. Heion loads it on
-compatible Macs with Apple Intelligence enabled. For isolated widget
-development, build with `--features local-widget-test` to use the separate
-test bundle identifier, profile, and keychain namespace.
+compatible Macs with Apple Intelligence enabled. Use full Xcode when
+packaging locally so Swift can expand the Foundation Models macros. Set
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` for the packaging
+command and use `--no-build` to reuse a Rust binary built with the same
+profile and features. For isolated widget development, build with
+`--features local-widget-test` to use the separate test bundle identifier,
+profile, and keychain namespace.
 
 ### Unsigned builds — what your users will see
 
@@ -181,15 +185,14 @@ crate's fingerprint, so it costs a full rebuild of Servo.
 
 ### Audio and video
 
-`--features media` needs the official GStreamer distribution installed at
-`/Library/Frameworks/GStreamer.framework`. Servo supports no other source for it
-on macOS, and pins 1.22.3. Both packages are needed — the runtime and the
-headers:
+The GitHub macOS release enables `media-source` for adaptive streaming.
+Install both the GStreamer 1.28.9 runtime and development packages to build
+locally with the same SDK.
 
 ```bash
-BASE=https://github.com/servo/servo-build-deps/releases/download/macOS
-curl -L -o /tmp/gstreamer.pkg       $BASE/gstreamer-1.0-1.22.3-universal.pkg
-curl -L -o /tmp/gstreamer-devel.pkg $BASE/gstreamer-1.0-devel-1.22.3-universal.pkg
+BASE=https://gstreamer.freedesktop.org/data/pkg/osx/1.28.9
+curl -fL -o /tmp/gstreamer.pkg       "$BASE/gstreamer-1.0-1.28.9-universal.pkg"
+curl -fL -o /tmp/gstreamer-devel.pkg "$BASE/gstreamer-1.0-devel-1.28.9-universal.pkg"
 sudo installer -pkg /tmp/gstreamer.pkg -target /
 sudo installer -pkg /tmp/gstreamer-devel.pkg -target /
 ```
@@ -204,9 +207,8 @@ crate.
 
 Expect the bundle to grow by roughly 100 MB — 150 MB before thinning.
 
-That pin is old. Servo has not moved off 1.22.3, released in June 2023, and the
-release it downloads from has not been touched since August 2023, while upstream
-GStreamer is on 1.28. Heion cannot get ahead of the engine here.
+The bundler builds the patched MSE library against the installed SDK.
+Use `media` for progressive audio and video without MSE.
 
 ---
 

@@ -1,0 +1,2019 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 95beac8c93f..a1469393e0e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3531,6 +3531,29 @@ dependencies = [
+  "system-deps",
+ ]
+
++[[package]]
++name = "gstreamer-mse"
++version = "0.25.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a7ca9904b80a0688047407ee2ef6373645e0ecf1f8b6a185b55fce6aec106a97"
++dependencies = [
++ "glib",
++ "gstreamer",
++ "gstreamer-mse-sys",
++]
++
++[[package]]
++name = "gstreamer-mse-sys"
++version = "0.25.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "38a61799981f19ed14d3761dc88896f824834d8a2560fa746d219777b20e5f86"
++dependencies = [
++ "glib-sys",
++ "gstreamer-sys",
++ "libc",
++ "system-deps",
++]
++
+ [[package]]
+ name = "gstreamer-play"
+ version = "0.25.0"
+@@ -9049,6 +9072,7 @@ dependencies = [
+  "gstreamer-app",
+  "gstreamer-audio",
+  "gstreamer-base",
++ "gstreamer-mse",
+  "gstreamer-play",
+  "gstreamer-sdp",
+  "gstreamer-sys",
+diff --git a/components/config/prefs.rs b/components/config/prefs.rs
+index a2fe9b30678..d2d3e8d0d23 100644
+--- a/components/config/prefs.rs
++++ b/components/config/prefs.rs
+@@ -236,6 +236,8 @@ pub struct Preferences {
+     pub dom_touch_events_legacy_apis_enabled: bool,
+     /// <https://html.spec.whatwg.org/multipage/#transient-activation-duration>
+     pub dom_transient_activation_duration_ms: i64,
++    /// Expose the experimental Media Source Extensions interfaces.
++    pub dom_media_source_enabled: bool,
+     // feature: Web Animations | #36950 | Web/API/Web_Animations_API
+     pub dom_web_animations_enabled: bool,
+     /// Enable WebGL2 APIs.
+@@ -516,6 +518,7 @@ impl Preferences {
+             dom_webgl2_enabled: false,
+             dom_webgpu_enabled: false,
+             dom_webgpu_wgpu_backend: String::new(),
++            dom_media_source_enabled: false,
+             dom_webrtc_enabled: false,
+             dom_webrtc_transceiver_enabled: false,
+             dom_webxr_enabled: true,
+diff --git a/components/media/backends/gstreamer/Cargo.toml b/components/media/backends/gstreamer/Cargo.toml
+index f8c07efc688..a83795214eb 100644
+--- a/components/media/backends/gstreamer/Cargo.toml
++++ b/components/media/backends/gstreamer/Cargo.toml
+@@ -15,6 +15,7 @@ path = "lib.rs"
+
+ [features]
+ glx = ["servo-media-gstreamer-render-unix/gl-x11"]
++media-source = ["dep:gstreamer-mse"]
+ wayland = ["servo-media-gstreamer-render-unix/gl-wayland"]
+ v1_28 = ["gstreamer/v1_28"]
+
+@@ -27,6 +28,7 @@ gstreamer = { workspace = true }
+ gstreamer-app = { workspace = true }
+ gstreamer-audio = { workspace = true }
+ gstreamer-base = { workspace = true }
++gstreamer-mse = { version = "0.25", optional = true }
+ gstreamer-play = { workspace = true }
+ gstreamer-sdp = { workspace = true }
+ gstreamer-sys = { workspace = true }
+diff --git a/components/media/backends/gstreamer/lib.rs b/components/media/backends/gstreamer/lib.rs
+index e72c84e89cf..8c34b2e0ebb 100644
+--- a/components/media/backends/gstreamer/lib.rs
++++ b/components/media/backends/gstreamer/lib.rs
+@@ -8,6 +8,8 @@ pub mod audio_stream_reader;
+ mod datachannel;
+ mod device_monitor;
+ pub mod media_capture;
++#[cfg(feature = "media-source")]
++mod media_source;
+ pub mod media_stream;
+ mod media_stream_source;
+ pub mod player;
+@@ -136,6 +138,17 @@ impl GStreamerBackend {
+             return Err(ErrorLoadingPlugins(errors));
+         }
+
++        #[cfg(all(feature = "media-source", target_os = "macos"))]
++        if let Some(decoder) = gstreamer::Registry::get().lookup_feature("dav1ddec") &&
++            decoder
++                .plugin()
++                .is_some_and(|plugin| plugin.version() == "0.15.4-RELEASE")
++        {
++            // This build of dav1ddec fails on a non-writable output frame after
++            // an adaptive quality switch. Leave the other decoder ranks intact.
++            decoder.set_rank(gstreamer::Rank::NONE);
++        }
++
+         type MediaInstancesVec = Vec<(usize, Weak<Mutex<dyn MediaInstance>>)>;
+         let instances: HashMap<ClientContextId, MediaInstancesVec> = Default::default();
+         let instances = Arc::new(Mutex::new(instances));
+@@ -304,6 +317,33 @@ impl Backend for GStreamerBackend {
+         SupportsMediaType::No
+     }
+
++    #[cfg(feature = "media-source")]
++    fn create_media_source(
++        &self,
++    ) -> Option<Box<dyn servo_media_player::media_source::MediaSource>> {
++        let factory = gstreamer::ElementFactory::find("msesrc")?;
++        factory.load().ok()?;
++        Some(Box::new(media_source::GStreamerMediaSource::new()))
++    }
++
++    #[cfg(feature = "media-source")]
++    fn supports_media_source_type(&self, media_type: &str) -> bool {
++        if cfg!(target_os = "macos") &&
++            let Ok(mime) = media_type.parse::<Mime>() &&
++            let Some(codecs) = mime.get_parameter("codecs") &&
++            codecs.split(',').map(str::trim).any(|codec| {
++                matches!(codec.split('.').next(), Some("av01" | "av1" | "x-av1"))
++            })
++        {
++            // On macOS the available AV1 decoders can fail partway through
++            // adaptive playback. Allow sites to select a different MSE codec.
++            return false;
++        }
++        !media_type.contains('\0')
++            && self.can_play_type(media_type) != SupportsMediaType::No
++            && gstreamer_mse::MediaSource::is_type_supported(media_type)
++    }
++
+     fn set_capture_mocking(&self, mock: bool) {
+         self.capture_mocking.store(mock, Ordering::Release)
+     }
+diff --git a/components/media/backends/gstreamer/media_source.rs b/components/media/backends/gstreamer/media_source.rs
+new file mode 100644
+index 00000000000..fba5cf5f010
+--- /dev/null
++++ b/components/media/backends/gstreamer/media_source.rs
+@@ -0,0 +1,240 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++use std::any::Any;
++use std::ops::Range;
++use std::ptr;
++use std::sync::Arc;
++
++use glib::translate::{ToGlibPtr, from_glib_full};
++use gstreamer::ClockTime;
++use gstreamer_mse::{MediaSourceEOSError, MediaSourceReadyState, MseSrc, SourceBufferAppendMode};
++use servo_media_player::media_source::{
++    EndOfStream, MediaSource, MediaSourceError as Error, ReadyState, SourceBuffer,
++    SourceBufferCallback, SourceBufferEvent as Event,
++};
++
++#[derive(Clone)]
++pub(crate) struct GStreamerMediaSource(gstreamer_mse::MediaSource);
++
++impl GStreamerMediaSource {
++    pub(crate) fn new() -> Self {
++        Self(gstreamer_mse::MediaSource::new())
++    }
++
++    pub(crate) fn attach(&self, src: &MseSrc) -> Result<(), Error> {
++        if self.ready_state() != ReadyState::Closed {
++            return Err(Error::InvalidState);
++        }
++        self.0.attach(src);
++        Ok(())
++    }
++}
++
++impl MediaSource for GStreamerMediaSource {
++    fn detach(&self) {
++        self.0.detach();
++    }
++
++    fn ready_state(&self) -> ReadyState {
++        match self.0.ready_state() {
++            MediaSourceReadyState::Open => ReadyState::Open,
++            MediaSourceReadyState::Ended => ReadyState::Ended,
++            _ => ReadyState::Closed,
++        }
++    }
++
++    fn duration(&self) -> f64 {
++        seconds(self.0.duration(), f64::INFINITY)
++    }
++
++    fn set_duration(&self, value: f64) -> Result<(), Error> {
++        self.0.set_duration(clock_time(value)?).map_err(map_error)
++    }
++
++    fn add_buffer(&self, media_type: &str) -> Result<Box<dyn SourceBuffer>, Error> {
++        validate_type(media_type)?;
++        let buffer = self.0.add_source_buffer(media_type).map_err(map_error)?;
++        Ok(Box::new(GStreamerSourceBuffer(buffer)))
++    }
++
++    fn remove_buffer(&self, buffer: &dyn SourceBuffer) -> Result<(), Error> {
++        let buffer = (buffer as &dyn Any)
++            .downcast_ref::<GStreamerSourceBuffer>()
++            .ok_or(Error::NotFound)?;
++        self.0.remove_source_buffer(&buffer.0).map_err(map_error)
++    }
++
++    fn buffer_is_active(&self, buffer: &dyn SourceBuffer) -> bool {
++        let Some(buffer) = (buffer as &dyn Any).downcast_ref::<GStreamerSourceBuffer>() else {
++            return false;
++        };
++        let buffers = self.0.active_source_buffers();
++        (0..buffers.length()).any(|index| buffers.index(index).as_ref() == Some(&buffer.0))
++    }
++
++    fn end_of_stream(&self, reason: EndOfStream) -> Result<(), Error> {
++        let reason = match reason {
++            EndOfStream::Normal => MediaSourceEOSError::None,
++            EndOfStream::Network => MediaSourceEOSError::Network,
++            EndOfStream::Decode => MediaSourceEOSError::Decode,
++        };
++        self.0.end_of_stream(reason).map_err(map_error)
++    }
++
++    fn set_live_seekable_range(&self, range: Range<f64>) -> Result<(), Error> {
++        self.0
++            .set_live_seekable_range(clock_time(range.start)?, clock_time(range.end)?)
++            .map_err(map_error)
++    }
++
++    fn clear_live_seekable_range(&self) -> Result<(), Error> {
++        self.0.clear_live_seekable_range().map_err(map_error)
++    }
++}
++
++struct GStreamerSourceBuffer(gstreamer_mse::SourceBuffer);
++
++impl SourceBuffer for GStreamerSourceBuffer {
++    fn set_event_callback(&self, callback: SourceBufferCallback) {
++        let callback = Arc::new(callback);
++        let forward = move |event| {
++            let callback = Arc::clone(&callback);
++            move |_: &gstreamer_mse::SourceBuffer| callback(event)
++        };
++        self.0.connect_on_update_start(forward(Event::UpdateStart));
++        self.0.connect_on_update(forward(Event::Update));
++        self.0.connect_on_update_end(forward(Event::UpdateEnd));
++        self.0.connect_on_error(forward(Event::Error));
++        self.0.connect_on_abort(forward(Event::Abort));
++    }
++
++    fn updating(&self) -> bool {
++        self.0.is_updating()
++    }
++
++    fn buffered(&self) -> Result<Vec<Range<f64>>, Error> {
++        use gstreamer_mse::ffi::{GstMediaSourceRange, gst_source_buffer_get_buffered};
++
++        let mut error = ptr::null_mut();
++        // SAFETY: The source buffer is alive and the C API returns owned references
++        // to the array and to any reported error.
++        unsafe {
++            let array = gst_source_buffer_get_buffered(self.0.to_glib_none().0, &mut error);
++            let mut ranges = Vec::new();
++            if !array.is_null() {
++                let len = (*array).len as usize;
++                if len != 0 {
++                    let intervals = std::slice::from_raw_parts(
++                        (*array).data.cast::<GstMediaSourceRange>(),
++                        len,
++                    );
++                    ranges.extend(intervals.iter().map(|interval| {
++                        (interval.start as f64 / 1e9)..(interval.end as f64 / 1e9)
++                    }));
++                }
++                glib::ffi::g_array_unref(array);
++            }
++            if !error.is_null() {
++                return Err(map_error(from_glib_full(error)));
++            }
++            Ok(ranges)
++        }
++    }
++
++    fn append(&self, data: Vec<u8>) -> Result<(), Error> {
++        self.0
++            .append_buffer(gstreamer::Buffer::from_mut_slice(data))
++            .map_err(map_error)
++    }
++
++    fn remove(&self, range: Range<f64>) -> Result<(), Error> {
++        self.0
++            .remove(clock_time(range.start)?, clock_time(range.end)?)
++            .map_err(map_error)
++    }
++
++    fn abort(&self) -> Result<(), Error> {
++        self.0.abort().map_err(map_error)
++    }
++
++    fn change_type(&self, media_type: &str) -> Result<(), Error> {
++        validate_type(media_type)?;
++        self.0.change_content_type(media_type).map_err(map_error)
++    }
++
++    fn sequence_mode(&self) -> bool {
++        self.0.append_mode() == SourceBufferAppendMode::Sequence
++    }
++
++    fn set_sequence_mode(&self, enabled: bool) -> Result<(), Error> {
++        let mode = if enabled {
++            SourceBufferAppendMode::Sequence
++        } else {
++            SourceBufferAppendMode::Segments
++        };
++        self.0.set_append_mode(mode).map_err(map_error)
++    }
++
++    fn timestamp_offset(&self) -> f64 {
++        seconds(self.0.timestamp_offset(), 0.)
++    }
++
++    fn set_timestamp_offset(&self, value: f64) -> Result<(), Error> {
++        self.0
++            .set_timestamp_offset(clock_time(value)?)
++            .map_err(map_error)
++    }
++
++    fn append_window(&self) -> Range<f64> {
++        seconds(self.0.append_window_start(), 0.)
++            ..seconds(self.0.append_window_end(), f64::INFINITY)
++    }
++
++    fn set_append_window_start(&self, value: f64) -> Result<(), Error> {
++        self.0
++            .set_append_window_start(clock_time(value)?)
++            .map_err(map_error)
++    }
++
++    fn set_append_window_end(&self, value: f64) -> Result<(), Error> {
++        self.0
++            .set_append_window_end(clock_time(value)?)
++            .map_err(map_error)
++    }
++}
++
++fn seconds(time: Option<ClockTime>, missing: f64) -> f64 {
++    time.map_or(missing, |time| time.nseconds() as f64 / 1e9)
++}
++
++fn clock_time(seconds: f64) -> Result<Option<ClockTime>, Error> {
++    if seconds == f64::INFINITY {
++        return Ok(None);
++    }
++    let nanoseconds = seconds * 1e9;
++    if !(0.0..u64::MAX as f64).contains(&nanoseconds) {
++        return Err(Error::InvalidType);
++    }
++    Ok(Some(ClockTime::from_nseconds(nanoseconds as u64)))
++}
++
++fn validate_type(media_type: &str) -> Result<(), Error> {
++    if media_type.is_empty() || media_type.contains('\0') {
++        return Err(Error::InvalidType);
++    }
++    Ok(())
++}
++
++fn map_error(error: glib::Error) -> Error {
++    use gstreamer_mse::MediaSourceError as NativeError;
++
++    match error.kind() {
++        Some(NativeError::Type) => Error::InvalidType,
++        Some(NativeError::NotSupported) => Error::NotSupported,
++        Some(NativeError::NotFound) => Error::NotFound,
++        Some(NativeError::QuotaExceeded) => Error::QuotaExceeded,
++        _ => Error::InvalidState,
++    }
++}
+diff --git a/components/media/backends/gstreamer/player.rs b/components/media/backends/gstreamer/player.rs
+index ada73d585e2..f8f7e948d59 100644
+--- a/components/media/backends/gstreamer/player.rs
++++ b/components/media/backends/gstreamer/player.rs
+@@ -22,6 +22,8 @@ use servo_base::generic_channel::{self, GenericCallback, GenericReceiver};
+ use servo_media::MediaInstanceError;
+ use servo_media_player::audio::AudioRenderer;
+ use servo_media_player::context::PlayerGLContext;
++#[cfg(feature = "media-source")]
++use servo_media_player::media_source::MediaSource;
+ use servo_media_player::metadata::Metadata;
+ use servo_media_player::video::VideoFrameRenderer;
+ use servo_media_player::{
+@@ -31,6 +33,8 @@ use servo_media_streams::registry::{MediaStreamId, get_stream};
+ use servo_media_traits::{BackendMsg, ClientContextId, MediaInstance};
+
+ use super::BACKEND_BASE_TIME;
++#[cfg(feature = "media-source")]
++use crate::media_source::GStreamerMediaSource;
+ use crate::media_stream::GStreamerMediaStream;
+ use crate::media_stream_source::{ServoMediaStreamSrc, register_servo_media_stream_src};
+ use crate::render::GStreamerRender;
+@@ -122,11 +126,13 @@ impl AsRef<[f32]> for GStreamerAudioChunk {
+ enum PlayerSource {
+     Seekable(ServoSrc),
+     Stream(ServoMediaStreamSrc),
++    #[cfg(feature = "media-source")]
++    MediaSource(gstreamer_mse::MseSrc),
+ }
+
+ impl MallocSizeOf for PlayerSource {
+     fn size_of(&self, _ops: &mut malloc_size_of::MallocSizeOfOps) -> usize {
+-        // Currently both are external types
++        // The GStreamer elements allocate outside Rust.
+         0
+     }
+ }
+@@ -197,7 +203,7 @@ impl PlayerInner {
+     }
+
+     pub fn set_playback_rate(&mut self, playback_rate: f64) -> Result<(), PlayerError> {
+-        if self.stream_type != StreamType::Seekable {
++        if self.stream_type == StreamType::Stream {
+             return Err(PlayerError::NonSeekableStream);
+         }
+
+@@ -277,7 +283,7 @@ impl PlayerInner {
+     }
+
+     pub fn seek(&mut self, time: f64) -> Result<(), PlayerError> {
+-        if self.stream_type != StreamType::Seekable {
++        if self.stream_type == StreamType::Stream {
+             return Err(PlayerError::NonSeekableStream);
+         }
+         if let Some(ref metadata) = self.last_metadata &&
+@@ -480,6 +486,9 @@ pub struct GStreamerPlayer {
+     /// Whether to enable download buffering. This is only enabled heuristically for some media,
+     /// because it causes issues in certain situations. See <https://github.com/servo/servo/issues/23241>.
+     download_buffering_enabled: AtomicBool,
++    #[cfg(feature = "media-source")]
++    #[ignore_malloc_size_of = "GStreamer object"]
++    media_source: RefCell<Option<GStreamerMediaSource>>,
+ }
+
+ /// downloadbuffer keeps the download in the user cache directory and it will
+@@ -530,6 +539,8 @@ impl GStreamerPlayer {
+             stream_type,
+             render: Arc::new(Mutex::new(GStreamerRender::new(gl_context))),
+             download_buffering_enabled: AtomicBool::new(false),
++            #[cfg(feature = "media-source")]
++            media_source: RefCell::new(None),
+         }
+     }
+
+@@ -556,9 +567,10 @@ impl GStreamerPlayer {
+         let pipeline = player.pipeline();
+
+         // FIXME(#43421): The progressive downloading breaks playback on Android.
+-        if !cfg!(target_os = "android") &&
+-            self.download_buffering_enabled.load(Ordering::Relaxed) &&
+-            ensure_download_directory()
++        if !cfg!(target_os = "android")
++            && self.stream_type != StreamType::MediaSource
++            && self.download_buffering_enabled.load(Ordering::Relaxed)
++            && ensure_download_directory()
+         {
+             // Set player to perform progressive downloading. This will make the
+             // player store the downloaded media in a local temporary file for
+@@ -674,6 +686,10 @@ impl GStreamerPlayer {
+                 })?;
+                 "servosrc://".to_value()
+             },
++            #[cfg(feature = "media-source")]
++            StreamType::MediaSource => "mse://".to_value(),
++            #[cfg(not(feature = "media-source"))]
++            StreamType::MediaSource => return Err(PlayerError::SetStreamFailed),
+         };
+         player.set_property("uri", &uri);
+
+@@ -995,6 +1011,19 @@ impl GStreamerPlayer {
+                         });
+                         PlayerSource::Stream(media_stream_src)
+                     },
++                    #[cfg(feature = "media-source")]
++                    StreamType::MediaSource => {
++                        let Ok(source) = source.dynamic_cast::<gstreamer_mse::MseSrc>() else {
++                            let _ = notify!(sender, Err(PlayerError::SetStreamFailed));
++                            return None;
++                        };
++                        is_ready_clone.call_once(|| {
++                            let _ = notify!(sender, Ok(()));
++                        });
++                        PlayerSource::MediaSource(source)
++                    },
++                    #[cfg(not(feature = "media-source"))]
++                    StreamType::MediaSource => return None,
+                 };
+
+                 inner.set_src(source);
+@@ -1013,7 +1042,13 @@ impl GStreamerPlayer {
+             (receiver, error_handler_id)
+         };
+
+-        let result = receiver.recv().unwrap();
++        let result = if self.stream_type == StreamType::MediaSource {
++            receiver
++                .recv_timeout(time::Duration::from_secs(5))
++                .unwrap_or(Err(PlayerError::SetStreamFailed))
++        } else {
++            receiver.recv().unwrap()
++        };
+         glib::signal::signal_handler_disconnect(
+             &inner.lock().unwrap().signal_adapter,
+             error_handler_id,
+@@ -1066,6 +1101,28 @@ macro_rules! inner_player_proxy {
+ }
+
+ impl Player for GStreamerPlayer {
++    #[cfg(feature = "media-source")]
++    fn attach_media_source(&self, source: &dyn MediaSource) -> Result<(), PlayerError> {
++        self.setup()?;
++        let source = (source as &dyn std::any::Any)
++            .downcast_ref::<GStreamerMediaSource>()
++            .ok_or(PlayerError::SetStreamFailed)?;
++        let element = {
++            let inner = self.inner.borrow();
++            let inner = inner.as_ref().ok_or(PlayerError::SetStreamFailed)?;
++            let inner = inner.lock().unwrap();
++            let Some(PlayerSource::MediaSource(element)) = &inner.source else {
++                return Err(PlayerError::SetStreamFailed);
++            };
++            element.clone()
++        };
++        source
++            .attach(&element)
++            .map_err(|_| PlayerError::SetStreamFailed)?;
++        *self.media_source.borrow_mut() = Some(source.clone());
++        Ok(())
++    }
++
+     inner_player_proxy!(play, ());
+     inner_player_proxy!(pause, ());
+     inner_player_proxy_getter!(paused, bool, DEFAULT_PAUSED);
+@@ -1128,6 +1185,12 @@ impl MediaInstance for GStreamerPlayer {
+
+ impl Drop for GStreamerPlayer {
+     fn drop(&mut self) {
++        #[cfg(feature = "media-source")]
++        if let Some(source) = self.media_source.get_mut().take() &&
++            source.ready_state() != servo_media_player::media_source::ReadyState::Closed
++        {
++            source.detach();
++        }
+         let _ = self.stop();
+         let (tx_ack, rx_ack) = mpsc::channel();
+         let _ = self
+diff --git a/components/media/backends/gstreamer/registry_scanner.rs b/components/media/backends/gstreamer/registry_scanner.rs
+index b9ac9c70059..08289720795 100644
+--- a/components/media/backends/gstreamer/registry_scanner.rs
++++ b/components/media/backends/gstreamer/registry_scanner.rs
+@@ -112,6 +112,7 @@ impl GStreamerRegistryScanner {
+                 self.supported_codecs.insert("vp9");
+                 self.supported_codecs.insert("x-vp9");
+                 self.supported_codecs.insert("vp9.0");
++                self.supported_codecs.insert("vp09.00.*");
+             }
+
+             if is_opus_supported {
+diff --git a/components/media/backends/ohos/lib.rs b/components/media/backends/ohos/lib.rs
+index 790c6192674..f5e038a56dc 100644
+--- a/components/media/backends/ohos/lib.rs
++++ b/components/media/backends/ohos/lib.rs
+@@ -118,7 +118,7 @@ impl Backend for OhosBackend {
+             StreamType::Stream => {
+                 warn!("Stream Type currently not supported!");
+             },
+-            StreamType::Seekable => (),
++            StreamType::Seekable | StreamType::MediaSource => (),
+         }
+
+         if let Some(_audio_renderer) = audio_renderer {
+diff --git a/components/media/player/lib.rs b/components/media/player/lib.rs
+index 10eac646864..339b93f94bc 100644
+--- a/components/media/player/lib.rs
++++ b/components/media/player/lib.rs
+@@ -10,6 +10,7 @@ extern crate servo_media_traits;
+
+ pub mod audio;
+ pub mod context;
++pub mod media_source;
+ pub mod metadata;
+ pub mod video;
+
+@@ -96,9 +97,17 @@ pub enum StreamType {
+     Stream,
+     /// The stream is seekable.
+     Seekable,
++    /// The page supplies encoded segments through a MediaSource.
++    MediaSource,
+ }
+
+ pub trait Player: Send + MediaInstance + MallocSizeOf {
++    fn attach_media_source(
++        &self,
++        _source: &dyn media_source::MediaSource,
++    ) -> Result<(), PlayerError> {
++        Err(PlayerError::SetStreamFailed)
++    }
+     fn play(&self) -> Result<(), PlayerError>;
+     fn pause(&self) -> Result<(), PlayerError>;
+     fn paused(&self) -> bool;
+diff --git a/components/media/player/media_source.rs b/components/media/player/media_source.rs
+new file mode 100644
+index 00000000000..59e0a72cb8d
+--- /dev/null
++++ b/components/media/player/media_source.rs
+@@ -0,0 +1,70 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++use std::any::Any;
++use std::ops::Range;
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum ReadyState {
++    Closed,
++    Open,
++    Ended,
++}
++
++#[derive(Clone, Copy, Debug)]
++pub enum EndOfStream {
++    Normal,
++    Network,
++    Decode,
++}
++
++#[derive(Debug)]
++pub enum MediaSourceError {
++    InvalidState,
++    InvalidType,
++    NotSupported,
++    NotFound,
++    QuotaExceeded,
++}
++
++#[derive(Clone, Copy, Debug)]
++pub enum SourceBufferEvent {
++    UpdateStart,
++    Update,
++    UpdateEnd,
++    Error,
++    Abort,
++}
++
++pub type SourceBufferCallback = Box<dyn Fn(SourceBufferEvent) + Send + Sync>;
++
++pub trait MediaSource: Any + Send + Sync {
++    fn detach(&self);
++    fn ready_state(&self) -> ReadyState;
++    fn duration(&self) -> f64;
++    fn set_duration(&self, seconds: f64) -> Result<(), MediaSourceError>;
++    fn add_buffer(&self, media_type: &str) -> Result<Box<dyn SourceBuffer>, MediaSourceError>;
++    fn remove_buffer(&self, buffer: &dyn SourceBuffer) -> Result<(), MediaSourceError>;
++    fn buffer_is_active(&self, buffer: &dyn SourceBuffer) -> bool;
++    fn end_of_stream(&self, reason: EndOfStream) -> Result<(), MediaSourceError>;
++    fn set_live_seekable_range(&self, range: Range<f64>) -> Result<(), MediaSourceError>;
++    fn clear_live_seekable_range(&self) -> Result<(), MediaSourceError>;
++}
++
++pub trait SourceBuffer: Any + Send + Sync {
++    fn set_event_callback(&self, callback: SourceBufferCallback);
++    fn updating(&self) -> bool;
++    fn buffered(&self) -> Result<Vec<Range<f64>>, MediaSourceError>;
++    fn append(&self, data: Vec<u8>) -> Result<(), MediaSourceError>;
++    fn remove(&self, range: Range<f64>) -> Result<(), MediaSourceError>;
++    fn abort(&self) -> Result<(), MediaSourceError>;
++    fn change_type(&self, media_type: &str) -> Result<(), MediaSourceError>;
++    fn sequence_mode(&self) -> bool;
++    fn set_sequence_mode(&self, enabled: bool) -> Result<(), MediaSourceError>;
++    fn timestamp_offset(&self) -> f64;
++    fn set_timestamp_offset(&self, seconds: f64) -> Result<(), MediaSourceError>;
++    fn append_window(&self) -> Range<f64>;
++    fn set_append_window_start(&self, seconds: f64) -> Result<(), MediaSourceError>;
++    fn set_append_window_end(&self, seconds: f64) -> Result<(), MediaSourceError>;
++}
+diff --git a/components/media/servo-media/lib.rs b/components/media/servo-media/lib.rs
+index b0833ada861..3e781c34505 100644
+--- a/components/media/servo-media/lib.rs
++++ b/components/media/servo-media/lib.rs
+@@ -16,6 +16,7 @@ use audio::context::{AudioContext, AudioContextOptions};
+ use audio::sink::AudioSinkError;
+ use player::audio::AudioRenderer;
+ use player::context::PlayerGLContext;
++use player::media_source::MediaSource;
+ use player::video::VideoFrameRenderer;
+ use player::{Player, PlayerEvent, StreamType};
+ use servo_base::generic_channel::GenericCallback;
+@@ -64,6 +65,12 @@ pub trait Backend: Send + Sync {
+     ) -> Result<Arc<Mutex<AudioContext>>, AudioSinkError>;
+     fn create_webrtc(&self, signaller: Box<dyn WebRtcSignaller>) -> WebRtcController;
+     fn can_play_type(&self, media_type: &str) -> SupportsMediaType;
++    fn create_media_source(&self) -> Option<Box<dyn MediaSource>> {
++        None
++    }
++    fn supports_media_source_type(&self, _media_type: &str) -> bool {
++        false
++    }
+     fn set_capture_mocking(&self, _mock: bool) {}
+     /// Allow muting/unmuting the media instances associated with the given client context identifier.
+     /// Backend implementations are responsible for keeping a match between client contexts
+diff --git a/components/script/dom/globalscope/globalscope.rs b/components/script/dom/globalscope/globalscope.rs
+index c0678eb9877..3fe76af5e3e 100644
+--- a/components/script/dom/globalscope/globalscope.rs
++++ b/components/script/dom/globalscope/globalscope.rs
+@@ -185,6 +185,10 @@ pub(crate) struct GlobalScope {
+     /// The blobs managed by this global, if any.
+     blob_state: DomRefCell<HashMapTracedValues<BlobId, BlobInfo, FxBuildHasher>>,
+
++    media_source_urls: DomRefCell<
++        HashMapTracedValues<String, Dom<crate::dom::mediasource::MediaSource>, FxBuildHasher>,
++    >,
++
+     /// <https://w3c.github.io/ServiceWorker/#environment-settings-object-service-worker-registration-object-map>
+     registration_map: DomRefCell<
+         HashMapTracedValues<
+@@ -430,6 +434,7 @@ impl GlobalScope {
+             broadcast_channel_state: DomRefCell::new(BroadcastChannelState::UnManaged),
+             constellation_interest_counts: Default::default(),
+             blob_state: Default::default(),
++            media_source_urls: Default::default(),
+             eventtarget: EventTarget::new_inherited(),
+             registration_map: DomRefCell::new(HashMapTracedValues::new_fx()),
+             indexeddb: Default::default(),
+@@ -1531,6 +1536,37 @@ impl GlobalScope {
+         BlobImpl::new_from_bytes(bytes, type_string)
+     }
+
++    pub(crate) fn register_media_source_url(
++        &self,
++        url: String,
++        source: &crate::dom::mediasource::MediaSource,
++    ) {
++        self.media_source_urls
++            .borrow_mut()
++            .insert(url, Dom::from_ref(source));
++    }
++
++    pub(crate) fn media_source_for_url(
++        &self,
++        url: &ServoUrl,
++    ) -> Option<DomRoot<crate::dom::mediasource::MediaSource>> {
++        if url.scheme() != "blob" || url.query().is_some() {
++            return None;
++        }
++        let url = url.as_str().split('#').next()?;
++        self.media_source_urls
++            .borrow()
++            .get(url)
++            .map(|source| DomRoot::from_ref(&**source))
++    }
++
++    pub(crate) fn revoke_media_source_url(&self, url: &ServoUrl) -> bool {
++        self.media_source_urls
++            .borrow_mut()
++            .remove(url.as_str())
++            .is_some()
++    }
++
+     fn track_blob_info(&self, blob_info: BlobInfo, blob_id: BlobId) {
+         self.blob_state.borrow_mut().insert(blob_id, blob_info);
+     }
+diff --git a/components/script/dom/html/embedded_content/htmlmediaelement.rs b/components/script/dom/html/embedded_content/htmlmediaelement.rs
+index ad79211ecbe..153b32da526 100644
+--- a/components/script/dom/html/embedded_content/htmlmediaelement.rs
++++ b/components/script/dom/html/embedded_content/htmlmediaelement.rs
+@@ -55,10 +55,9 @@ use crate::dom::bindings::codegen::Bindings::TextTrackBinding::{
+     TextTrackKind, TextTrackMethods, TextTrackMode,
+ };
+ use crate::dom::bindings::codegen::Bindings::TextTrackCueBinding::TextTrackCueMethods;
+-use crate::dom::bindings::codegen::Bindings::URLBinding::URLMethods;
+ use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
+ use crate::dom::bindings::codegen::UnionTypes::{
+-    MediaStreamOrBlob, VideoTrackOrAudioTrackOrTextTrack,
++    MediaStreamOrMediaSourceOrBlob, VideoTrackOrAudioTrackOrTextTrack,
+ };
+ use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
+ use crate::dom::bindings::inheritance::Castable;
+@@ -86,6 +85,7 @@ use crate::dom::html::htmlvideoelement::HTMLVideoElement;
+ use crate::dom::mediaerror::MediaError;
+ use crate::dom::mediafragmentparser::MediaFragmentParser;
+ use crate::dom::medialist::MediaList;
++use crate::dom::mediasource::MediaSource;
+ use crate::dom::mediastream::MediaStream;
+ use crate::dom::node::virtualmethods::VirtualMethods;
+ use crate::dom::node::{Node, NodeDamage, NodeTraits, UnbindContext};
+@@ -128,14 +128,18 @@ const SEEK_POSITION_THRESHOLD: f64 = 0.5;
+ #[derive(JSTraceable, MallocSizeOf)]
+ enum SrcObject {
+     MediaStream(Dom<MediaStream>),
++    MediaSource(Dom<MediaSource>),
+     Blob(Dom<Blob>),
+ }
+
+-impl From<MediaStreamOrBlob> for SrcObject {
+-    fn from(src_object: MediaStreamOrBlob) -> SrcObject {
++impl From<MediaStreamOrMediaSourceOrBlob> for SrcObject {
++    fn from(src_object: MediaStreamOrMediaSourceOrBlob) -> SrcObject {
+         match src_object {
+-            MediaStreamOrBlob::Blob(blob) => SrcObject::Blob(Dom::from_ref(&*blob)),
+-            MediaStreamOrBlob::MediaStream(stream) => {
++            MediaStreamOrMediaSourceOrBlob::Blob(blob) => SrcObject::Blob(Dom::from_ref(&*blob)),
++            MediaStreamOrMediaSourceOrBlob::MediaSource(source) => {
++                SrcObject::MediaSource(Dom::from_ref(&*source))
++            },
++            MediaStreamOrMediaSourceOrBlob::MediaStream(stream) => {
+                 SrcObject::MediaStream(Dom::from_ref(&*stream))
+             },
+         }
+@@ -188,6 +192,7 @@ pub(crate) struct HTMLMediaElement {
+     ready_state: Cell<ReadyState>,
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
+     src_object: DomRefCell<Option<SrcObject>>,
++    attached_media_source: MutNullableDom<MediaSource>,
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-currentsrc>
+     #[no_trace]
+     current_src: AtomicRefCell<String>,
+@@ -411,6 +416,7 @@ impl HTMLMediaElement {
+             network_state: Cell::new(NetworkState::Empty),
+             ready_state: Cell::new(ReadyState::HaveNothing),
+             src_object: Default::default(),
++            attached_media_source: Default::default(),
+             current_src: Default::default(),
+             generation_id: Cell::new(0),
+             fired_loadeddata_event: Cell::new(false),
+@@ -498,6 +504,7 @@ impl HTMLMediaElement {
+                 }
+             }
+         } else if is_playing &&
++            !self.playback_requested() &&
+             let Some(ref player) = *self.player.borrow() &&
+             let Err(error) = player.lock().unwrap().pause()
+         {
+@@ -1080,7 +1087,7 @@ impl HTMLMediaElement {
+                 // > to fire an event named waiting at the element.
+                 if was_potentially_playing &&
+                     !self.ended_playback(LoopCondition::Included) &&
+-                    !self.error.get().is_none() &&
++                    self.error.get().is_none() &&
+                     !self.is_paused_for_user_interaction() &&
+                     !self.is_paused_for_in_band_content()
+                 {
+@@ -1623,6 +1630,19 @@ impl HTMLMediaElement {
+
+     /// <https://html.spec.whatwg.org/multipage/#concept-media-load-resource>
+     fn resource_fetch_algorithm(&self, cx: &JSContext, resource: Resource) {
++        let resource = match resource {
++            Resource::Url(url) => match self.global().media_source_for_url(&url) {
++                Some(source) => Resource::MediaSource(source),
++                None => Resource::Url(url),
++            },
++            Resource::Object => match self.src_object.borrow().as_ref() {
++                Some(SrcObject::MediaSource(source)) => {
++                    Resource::MediaSource(DomRoot::from_ref(&**source))
++                },
++                _ => Resource::Object,
++            },
++            resource => resource,
++        };
+         if let Err(e) = self.create_media_player(&resource) {
+             error!("Create media player error {:?}", e);
+             self.resource_selection_algorithm_failure_steps(cx);
+@@ -1638,6 +1658,18 @@ impl HTMLMediaElement {
+
+         // Step 5. Run the appropriate steps from the following list:
+         match resource {
++            Resource::MediaSource(source) => {
++                let attached = self
++                    .player
++                    .borrow()
++                    .as_ref()
++                    .is_some_and(|player| source.attach(&*player.lock().unwrap()).is_ok());
++                if attached {
++                    self.attached_media_source.set(Some(&source));
++                } else {
++                    self.resource_selection_algorithm_failure_steps(cx);
++                }
++            },
+             Resource::Url(url) => {
+                 // Step 5.remote.1. Optionally, run the following substeps. This is the expected
+                 // behavior if the user agent intends to not attempt to fetch the resource until the
+@@ -1689,7 +1721,7 @@ impl HTMLMediaElement {
+                 if let Some(ref src_object) = *self.src_object.borrow() {
+                     match src_object {
+                         SrcObject::Blob(blob) => {
+-                            let blob_url = URL::CreateObjectURL(&self.global(), blob);
++                            let blob_url = URL::create_blob_url(&self.global(), blob);
+                             *self.blob_url.borrow_mut() =
+                                 Some(ServoUrl::parse(&blob_url.str()).expect("infallible"));
+                             self.fetch_request(cx, None, None);
+@@ -1711,6 +1743,9 @@ impl HTMLMediaElement {
+                                 }
+                             }
+                         },
++                        SrcObject::MediaSource(_) => {
++                            unreachable!("Handled by media source selection")
++                        },
+                     }
+                 }
+             },
+@@ -1781,6 +1816,10 @@ impl HTMLMediaElement {
+
+     /// <https://html.spec.whatwg.org/multipage/#potentially-playing>
+     fn is_potentially_playing(&self) -> bool {
++        self.playback_requested() && !self.is_blocked_media_element()
++    }
++
++    fn playback_requested(&self) -> bool {
+         // > A media element is said to be potentially playing when
+         // > its paused attribute is false, the element has not ended playback,
+         // > playback has not stopped due to errors,
+@@ -1788,14 +1827,13 @@ impl HTMLMediaElement {
+         !self.paused.get() &&
+             !self.ended_playback(LoopCondition::Included) &&
+             self.error.get().is_none() &&
+-            !self.is_blocked_media_element()
++            !self.is_paused_for_user_interaction() &&
++            !self.is_paused_for_in_band_content()
+     }
+
+     /// <https://html.spec.whatwg.org/multipage/#blocked-media-element>
+     fn is_blocked_media_element(&self) -> bool {
+-        self.ready_state.get() <= ReadyState::HaveCurrentData ||
+-            self.is_paused_for_user_interaction() ||
+-            self.is_paused_for_in_band_content()
++        self.ready_state.get() <= ReadyState::HaveCurrentData
+     }
+
+     /// <https://html.spec.whatwg.org/multipage/#paused-for-user-interaction>
+@@ -1866,9 +1904,6 @@ impl HTMLMediaElement {
+                 current_fetch_context.cancel(CancelReason::Abort);
+             }
+
+-            // TODO Step 7.3. If the media element's assigned media provider object is a MediaSource
+-            // object, then detach it.
+-
+             // Step 7.4. Forget the media element's media-resource-specific tracks.
+             self.AudioTracks(cx).clear();
+             self.VideoTracks(cx).clear();
+@@ -2240,6 +2275,7 @@ impl HTMLMediaElement {
+
+     fn create_media_player(&self, resource: &Resource) -> Result<(), ()> {
+         let stream_type = match *resource {
++            Resource::MediaSource(_) => StreamType::MediaSource,
+             Resource::Object => {
+                 if let Some(ref src_object) = *self.src_object.borrow() {
+                     match src_object {
+@@ -2360,6 +2396,10 @@ impl HTMLMediaElement {
+     }
+
+     fn reset_media_player(&self, no_gc: &NoGC) {
++        if let Some(source) = self.attached_media_source.get() {
++            self.attached_media_source.set(None);
++            source.detach();
++        }
+         if self.player.borrow().is_none() {
+             return;
+         }
+@@ -2952,11 +2992,16 @@ impl HTMLMediaElement {
+             },
+             PlaybackState::Playing => {
+                 media_session_playback_state = MediaSessionPlaybackState::Playing;
+-                if self.ready_state.get() == ReadyState::HaveMetadata {
+-                    self.change_ready_state(cx, ReadyState::HaveEnoughData);
++                match self.ready_state.get() {
++                    ReadyState::HaveMetadata => self.change_ready_state(cx, ReadyState::HaveEnoughData),
++                    ReadyState::HaveCurrentData => self.change_ready_state(cx, ReadyState::HaveFutureData),
++                    _ => {},
+                 }
+             },
+             PlaybackState::Buffering => {
++                if self.ready_state.get() >= ReadyState::HaveFutureData {
++                    self.change_ready_state(cx, ReadyState::HaveCurrentData);
++                }
+                 // Do not send the media session playback state change event
+                 // in this case as a None_ state is expected to clean up the
+                 // session.
+@@ -2976,7 +3021,11 @@ impl HTMLMediaElement {
+
+     fn seekable(&self) -> TimeRangesContainer {
+         let mut seekable = TimeRangesContainer::default();
+-        if let Some(ref player) = *self.player.borrow() {
++        if let Some(source) = self.attached_media_source.get() {
++            for range in source.seekable() {
++                let _ = seekable.add(range.start, range.end);
++            }
++        } else if let Some(ref player) = *self.player.borrow() {
+             let ranges = player.lock().unwrap().seekable();
+             for range in ranges {
+                 let _ = seekable.add(range.start, range.end);
+@@ -3359,19 +3408,24 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
+     }
+
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
+-    fn GetSrcObject(&self) -> Option<MediaStreamOrBlob> {
++    fn GetSrcObject(&self) -> Option<MediaStreamOrMediaSourceOrBlob> {
+         (*self.src_object.borrow())
+             .as_ref()
+             .map(|src_object| match src_object {
+-                SrcObject::Blob(blob) => MediaStreamOrBlob::Blob(DomRoot::from_ref(blob)),
++                SrcObject::Blob(blob) => {
++                    MediaStreamOrMediaSourceOrBlob::Blob(DomRoot::from_ref(blob))
++                },
++                SrcObject::MediaSource(source) => {
++                    MediaStreamOrMediaSourceOrBlob::MediaSource(DomRoot::from_ref(source))
++                },
+                 SrcObject::MediaStream(stream) => {
+-                    MediaStreamOrBlob::MediaStream(DomRoot::from_ref(stream))
++                    MediaStreamOrMediaSourceOrBlob::MediaStream(DomRoot::from_ref(stream))
+                 },
+             })
+     }
+
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
+-    fn SetSrcObject(&self, cx: &mut JSContext, value: Option<MediaStreamOrBlob>) {
++    fn SetSrcObject(&self, cx: &mut JSContext, value: Option<MediaStreamOrMediaSourceOrBlob>) {
+         *self.src_object.borrow_mut() = value.map(|value| value.into());
+         self.media_element_load_algorithm(cx);
+     }
+@@ -3595,7 +3649,11 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-buffered>
+     fn Buffered(&self, cx: &mut JSContext) -> DomRoot<TimeRanges> {
+         let mut buffered = TimeRangesContainer::default();
+-        if let Some(ref player) = *self.player.borrow() {
++        if let Some(source) = self.attached_media_source.get() {
++            for range in source.buffered() {
++                let _ = buffered.add(range.start, range.end);
++            }
++        } else if let Some(ref player) = *self.player.borrow() {
+             let ranges = player.lock().unwrap().buffered();
+             for range in ranges {
+                 let _ = buffered.add(range.start, range.end);
+@@ -3872,6 +3930,7 @@ impl MicrotaskRunnable for MediaElementMicrotask {
+ enum Resource {
+     Object,
+     Url(ServoUrl),
++    MediaSource(DomRoot<MediaSource>),
+ }
+
+ #[derive(Debug, MallocSizeOf, PartialEq)]
+diff --git a/components/script/dom/media/mediasource.rs b/components/script/dom/media/mediasource.rs
+new file mode 100644
+index 00000000000..5fdfde5dc24
+--- /dev/null
++++ b/components/script/dom/media/mediasource.rs
+@@ -0,0 +1,313 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++use std::cell::RefCell;
++use std::ops::Range;
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use js::rust::HandleObject;
++use script_bindings::cformat;
++use script_bindings::reflector::reflect_dom_object_with_proto;
++use servo_media::ServoMedia;
++use servo_media::player::Player;
++use servo_media::player::media_source::{
++    EndOfStream, MediaSource as Backend, MediaSourceError, ReadyState,
++};
++use stylo_atoms::Atom;
++
++use crate::dom::bindings::codegen::Bindings::MediaSourceBinding::{
++    EndOfStreamError, MediaSourceMethods, MediaSourceReadyState,
++};
++use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::num::Finite;
++use crate::dom::bindings::refcounted::Trusted;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::{Dom, DomRoot};
++use crate::dom::bindings::str::DOMString;
++use crate::dom::eventtarget::EventTarget;
++use crate::dom::sourcebuffer::SourceBuffer;
++use crate::dom::sourcebufferlist::SourceBufferList;
++use crate::dom::window::Window;
++
++#[dom_struct]
++pub(crate) struct MediaSource {
++    eventtarget: EventTarget,
++    buffers: Dom<SourceBufferList>,
++    active_buffers: Dom<SourceBufferList>,
++    #[no_trace]
++    #[ignore_malloc_size_of = "Allocated by the media backend"]
++    backend: Box<dyn Backend>,
++    #[no_trace]
++    live_range: RefCell<Option<Range<f64>>>,
++}
++
++impl MediaSource {
++    pub(crate) fn attach(&self, player: &dyn Player) -> Result<(), ()> {
++        player.attach_media_source(&*self.backend).map_err(|_| ())?;
++        self.queue_event(Atom::from("sourceopen"));
++        Ok(())
++    }
++
++    pub(crate) fn detach(&self) {
++        if self.backend.ready_state() == ReadyState::Closed {
++            return;
++        }
++        self.backend.detach();
++        for buffer in self.buffers.items() {
++            self.active_buffers.remove(&buffer);
++            self.buffers.remove(&buffer);
++        }
++        self.live_range.borrow_mut().take();
++        self.queue_event(Atom::from("sourceclose"));
++    }
++
++    pub(crate) fn ready_state(&self) -> ReadyState {
++        self.backend.ready_state()
++    }
++
++    pub(crate) fn update_after_buffer_operation(&self, old_state: ReadyState) {
++        if old_state == ReadyState::Ended && self.ready_state() == ReadyState::Open {
++            self.queue_event(Atom::from("sourceopen"));
++        }
++    }
++
++    pub(crate) fn has_buffer(&self, buffer: &SourceBuffer) -> bool {
++        self.buffers.contains(buffer)
++    }
++
++    pub(crate) fn refresh_active_buffers(&self) {
++        for buffer in self.buffers.items() {
++            let active = self.backend.buffer_is_active(buffer.backend());
++            let listed = self.active_buffers.contains(&buffer);
++            if active && !listed {
++                self.active_buffers.push(&buffer);
++            } else if listed && !active {
++                self.active_buffers.remove(&buffer);
++            }
++        }
++    }
++
++    pub(crate) fn buffered(&self) -> Vec<Range<f64>> {
++        self.refresh_active_buffers();
++        let buffers = self.active_buffers.items();
++        let mut ranges = buffers
++            .iter()
++            .map(|buffer| buffer.backend().buffered().unwrap_or_default());
++        let Some(mut intersection) = ranges.next() else {
++            return Vec::new();
++        };
++        for ranges in ranges {
++            intersection = intersection
++                .iter()
++                .flat_map(|left| {
++                    ranges.iter().filter_map(move |right| {
++                        let start = left.start.max(right.start);
++                        let end = left.end.min(right.end);
++                        (start < end).then_some(start..end)
++                    })
++                })
++                .collect();
++        }
++        intersection
++    }
++
++    pub(crate) fn seekable(&self) -> Vec<Range<f64>> {
++        let duration = self.Duration();
++        if duration.is_finite() {
++            return vec![0.0..duration];
++        }
++        let ranges = self.buffered();
++        let mut live = self.live_range.borrow().clone();
++        if let (Some(first), Some(last)) = (ranges.first(), ranges.last()) {
++            if let Some(live) = &mut live {
++                live.start = live.start.min(first.start);
++                live.end = live.end.max(last.end);
++            } else {
++                live = Some(0.0..last.end);
++            }
++        }
++        live.into_iter().collect()
++    }
++
++    fn queue_event(&self, name: Atom) {
++        let this = Trusted::new(self);
++        self.global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(media_source_event: move |cx| {
++                this.root().upcast::<EventTarget>().fire_event(cx, name);
++            }));
++    }
++
++    fn require_open(&self) -> ErrorResult {
++        if self.ready_state() != ReadyState::Open {
++            return Err(Error::InvalidState(None));
++        }
++        Ok(())
++    }
++
++    fn require_idle_buffers(&self) -> ErrorResult {
++        if self
++            .buffers
++            .items()
++            .iter()
++            .any(|buffer| buffer.is_updating())
++        {
++            return Err(Error::InvalidState(None));
++        }
++        Ok(())
++    }
++}
++
++impl MediaSourceMethods<crate::DomTypeHolder> for MediaSource {
++    fn Constructor(
++        cx: &mut JSContext,
++        window: &Window,
++        proto: Option<HandleObject>,
++    ) -> Fallible<DomRoot<Self>> {
++        let backend = ServoMedia::get()
++            .create_media_source()
++            .ok_or(Error::NotSupported(None))?;
++        let buffers = SourceBufferList::new(cx, window);
++        let active_buffers = SourceBufferList::new(cx, window);
++        Ok(reflect_dom_object_with_proto(
++            cx,
++            Box::new(Self {
++                eventtarget: EventTarget::new_inherited(),
++                buffers: Dom::from_ref(&*buffers),
++                active_buffers: Dom::from_ref(&*active_buffers),
++                backend,
++                live_range: RefCell::new(None),
++            }),
++            window,
++            proto,
++        ))
++    }
++
++    fn SourceBuffers(&self) -> DomRoot<SourceBufferList> {
++        DomRoot::from_ref(&*self.buffers)
++    }
++
++    fn ActiveSourceBuffers(&self) -> DomRoot<SourceBufferList> {
++        self.refresh_active_buffers();
++        DomRoot::from_ref(&*self.active_buffers)
++    }
++
++    fn ReadyState(&self) -> MediaSourceReadyState {
++        match self.ready_state() {
++            ReadyState::Closed => MediaSourceReadyState::Closed,
++            ReadyState::Open => MediaSourceReadyState::Open,
++            ReadyState::Ended => MediaSourceReadyState::Ended,
++        }
++    }
++
++    fn Duration(&self) -> f64 {
++        if self.ready_state() == ReadyState::Closed {
++            return f64::NAN;
++        }
++        self.backend.duration()
++    }
++
++    fn SetDuration(&self, duration: f64) -> ErrorResult {
++        if duration.is_nan() || duration < 0. {
++            return Err(Error::Type(cformat!("Invalid media duration")));
++        }
++        self.require_open()?;
++        self.require_idle_buffers()?;
++        self.backend.set_duration(duration).map_err(dom_error)
++    }
++
++    fn AddSourceBuffer(
++        &self,
++        cx: &mut JSContext,
++        media_type: DOMString,
++    ) -> Fallible<DomRoot<SourceBuffer>> {
++        if media_type.is_empty() {
++            return Err(Error::Type(cformat!(
++                "A source buffer needs a content type"
++            )));
++        }
++        if !ServoMedia::get().supports_media_source_type(&media_type.str()) {
++            return Err(Error::NotSupported(None));
++        }
++        self.require_open()?;
++        let backend = self
++            .backend
++            .add_buffer(&media_type.str())
++            .map_err(dom_error)?;
++        let buffer = SourceBuffer::new(cx, self, backend);
++        self.buffers.push(&buffer);
++        Ok(buffer)
++    }
++
++    fn RemoveSourceBuffer(&self, buffer: &SourceBuffer) -> ErrorResult {
++        if !self.has_buffer(buffer) {
++            return Err(Error::NotFound(None));
++        }
++        self.backend
++            .remove_buffer(buffer.backend())
++            .map_err(dom_error)?;
++        self.active_buffers.remove(buffer);
++        self.buffers.remove(buffer);
++        Ok(())
++    }
++
++    fn EndOfStream(&self, reason: Option<EndOfStreamError>) -> ErrorResult {
++        self.require_open()?;
++        self.require_idle_buffers()?;
++        let reason = match reason {
++            None => EndOfStream::Normal,
++            Some(EndOfStreamError::Network) => EndOfStream::Network,
++            Some(EndOfStreamError::Decode) => EndOfStream::Decode,
++        };
++        self.backend.end_of_stream(reason).map_err(dom_error)?;
++        self.queue_event(Atom::from("sourceended"));
++        Ok(())
++    }
++
++    fn SetLiveSeekableRange(&self, start: Finite<f64>, end: Finite<f64>) -> ErrorResult {
++        self.require_open()?;
++        if *start < 0. || *end < *start {
++            return Err(Error::Type(cformat!("Invalid live seekable range")));
++        }
++        let range = *start..*end;
++        self.backend
++            .set_live_seekable_range(range.clone())
++            .map_err(dom_error)?;
++        *self.live_range.borrow_mut() = Some(range);
++        Ok(())
++    }
++
++    fn ClearLiveSeekableRange(&self) -> ErrorResult {
++        self.require_open()?;
++        self.backend
++            .clear_live_seekable_range()
++            .map_err(dom_error)?;
++        self.live_range.borrow_mut().take();
++        Ok(())
++    }
++
++    fn IsTypeSupported(_window: &Window, media_type: DOMString) -> bool {
++        ServoMedia::get().supports_media_source_type(&media_type.str())
++    }
++
++    event_handler!(sourceopen, GetOnsourceopen, SetOnsourceopen);
++    event_handler!(sourceended, GetOnsourceended, SetOnsourceended);
++    event_handler!(sourceclose, GetOnsourceclose, SetOnsourceclose);
++}
++
++pub(super) fn dom_error(error: MediaSourceError) -> Error {
++    match error {
++        MediaSourceError::InvalidState => Error::InvalidState(None),
++        MediaSourceError::InvalidType => Error::Type(cformat!("Invalid media source argument")),
++        MediaSourceError::NotSupported => Error::NotSupported(None),
++        MediaSourceError::NotFound => Error::NotFound(None),
++        MediaSourceError::QuotaExceeded => Error::QuotaExceeded {
++            quota: None,
++            requested: None,
++        },
++    }
++}
+diff --git a/components/script/dom/media/mod.rs b/components/script/dom/media/mod.rs
+index 2fde3a6df7b..8281a712e47 100644
+--- a/components/script/dom/media/mod.rs
++++ b/components/script/dom/media/mod.rs
+@@ -11,7 +11,10 @@ pub(crate) mod mediametadata;
+ pub(crate) mod mediaquerylist;
+ pub(crate) mod mediaquerylistevent;
+ pub(crate) mod mediasession;
++pub(crate) mod mediasource;
+ pub(crate) mod mediastream;
+ pub(crate) mod mediastreamtrack;
++pub(crate) mod sourcebuffer;
++pub(crate) mod sourcebufferlist;
+ pub(crate) mod videotrack;
+ pub(crate) mod videotracklist;
+diff --git a/components/script/dom/media/sourcebuffer.rs b/components/script/dom/media/sourcebuffer.rs
+new file mode 100644
+index 00000000000..088c030fe35
+--- /dev/null
++++ b/components/script/dom/media/sourcebuffer.rs
+@@ -0,0 +1,270 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++use std::cell::{Cell, RefCell};
++use std::collections::HashMap;
++use std::rc::Rc;
++use std::sync::Mutex;
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use script_bindings::cformat;
++use script_bindings::reflector::reflect_weak_referenceable_dom_object_with_proto;
++use servo_media::ServoMedia;
++use servo_media::player::media_source::{ReadyState, SourceBuffer as Backend, SourceBufferEvent};
++use stylo_atoms::Atom;
++use uuid::Uuid;
++
++use crate::dom::bindings::codegen::Bindings::SourceBufferBinding::{
++    AppendMode, SourceBufferMethods,
++};
++use crate::dom::bindings::codegen::UnionTypes::ArrayBufferViewOrArrayBuffer;
++use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::num::Finite;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::{Dom, DomRoot};
++use crate::dom::bindings::str::DOMString;
++use crate::dom::bindings::weakref::WeakRef;
++use crate::dom::eventtarget::EventTarget;
++use crate::dom::mediasource::{MediaSource, dom_error};
++use crate::dom::timeranges::{TimeRanges, TimeRangesContainer};
++
++thread_local! {
++    static EVENT_TARGETS: RefCell<HashMap<Uuid, WeakRef<SourceBuffer>>> = RefCell::new(HashMap::new());
++}
++
++struct EventRegistration(Uuid);
++
++impl Drop for EventRegistration {
++    fn drop(&mut self) {
++        let _ = EVENT_TARGETS.try_with(|targets| targets.borrow_mut().remove(&self.0));
++    }
++}
++
++#[dom_struct]
++pub(crate) struct SourceBuffer {
++    eventtarget: EventTarget,
++    source: Dom<MediaSource>,
++    #[no_trace]
++    #[ignore_malloc_size_of = "Allocated by the media backend"]
++    backend: Box<dyn Backend>,
++    #[no_trace]
++    #[ignore_malloc_size_of = "Fixed-size identifier"]
++    _registration: EventRegistration,
++    updating: Cell<bool>,
++}
++
++impl SourceBuffer {
++    pub(crate) fn new(
++        cx: &mut JSContext,
++        source: &MediaSource,
++        backend: Box<dyn Backend>,
++    ) -> DomRoot<Self> {
++        let id = Uuid::new_v4();
++        let global = source.global();
++        let buffer = reflect_weak_referenceable_dom_object_with_proto(
++            cx,
++            Rc::new(Self {
++                eventtarget: EventTarget::new_inherited(),
++                source: Dom::from_ref(source),
++                backend,
++                _registration: EventRegistration(id),
++                updating: Cell::new(false),
++            }),
++            &*global,
++            None,
++        );
++        EVENT_TARGETS.with(|targets| targets.borrow_mut().insert(id, WeakRef::new(&*buffer)));
++        let tasks = Mutex::new(
++            global
++                .task_manager()
++                .media_element_task_source()
++                .to_sendable(),
++        );
++        buffer.backend.set_event_callback(Box::new(move |event| {
++            tasks.lock().unwrap().queue(task!(source_buffer_event: move |cx| {
++                let target = EVENT_TARGETS.with(|targets| targets.borrow().get(&id).and_then(WeakRef::root));
++                if let Some(target) = target {
++                    target.dispatch_event(cx, event);
++                }
++            }));
++        }));
++        buffer
++    }
++
++    pub(crate) fn backend(&self) -> &dyn Backend {
++        &*self.backend
++    }
++
++    pub(crate) fn is_updating(&self) -> bool {
++        self.updating.get()
++    }
++
++    fn dispatch_event(&self, cx: &mut JSContext, event: SourceBufferEvent) {
++        let name = match event {
++            SourceBufferEvent::UpdateStart => Atom::from("updatestart"),
++            SourceBufferEvent::Update => Atom::from("update"),
++            SourceBufferEvent::UpdateEnd => Atom::from("updateend"),
++            SourceBufferEvent::Abort => Atom::from("abort"),
++            SourceBufferEvent::Error => Atom::from("error"),
++        };
++        if matches!(
++            event,
++            SourceBufferEvent::Update | SourceBufferEvent::Abort | SourceBufferEvent::Error
++        ) {
++            self.updating.set(false);
++        }
++        if matches!(event, SourceBufferEvent::Update) {
++            self.source.refresh_active_buffers();
++        }
++        self.upcast::<EventTarget>().fire_event(cx, name);
++    }
++
++    fn ensure_attached(&self) -> ErrorResult {
++        if !self.source.has_buffer(self) {
++            return Err(Error::InvalidState(None));
++        }
++        Ok(())
++    }
++
++    fn ensure_idle(&self) -> ErrorResult {
++        self.ensure_attached()?;
++        if self.Updating() {
++            return Err(Error::InvalidState(None));
++        }
++        Ok(())
++    }
++}
++
++impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
++    fn Mode(&self) -> AppendMode {
++        if self.backend.sequence_mode() {
++            AppendMode::Sequence
++        } else {
++            AppendMode::Segments
++        }
++    }
++
++    fn SetMode(&self, mode: AppendMode) -> ErrorResult {
++        self.ensure_idle()?;
++        let state = self.source.ready_state();
++        self.backend
++            .set_sequence_mode(mode == AppendMode::Sequence)
++            .map_err(dom_error)?;
++        self.source.update_after_buffer_operation(state);
++        Ok(())
++    }
++
++    fn Updating(&self) -> bool {
++        self.is_updating()
++    }
++
++    fn GetBuffered(&self, cx: &mut JSContext) -> Fallible<DomRoot<TimeRanges>> {
++        self.ensure_attached()?;
++        let mut ranges = TimeRangesContainer::default();
++        for range in self.backend.buffered().map_err(dom_error)? {
++            let _ = ranges.add(range.start, range.end);
++        }
++        Ok(TimeRanges::new(cx, self.global().as_window(), ranges))
++    }
++
++    fn TimestampOffset(&self) -> Finite<f64> {
++        Finite::wrap(self.backend.timestamp_offset())
++    }
++
++    fn SetTimestampOffset(&self, offset: Finite<f64>) -> ErrorResult {
++        self.ensure_idle()?;
++        let state = self.source.ready_state();
++        self.backend
++            .set_timestamp_offset(*offset)
++            .map_err(dom_error)?;
++        self.source.update_after_buffer_operation(state);
++        Ok(())
++    }
++
++    fn AppendWindowStart(&self) -> Finite<f64> {
++        Finite::wrap(self.backend.append_window().start)
++    }
++
++    fn SetAppendWindowStart(&self, value: Finite<f64>) -> ErrorResult {
++        self.ensure_idle()?;
++        if *value < 0. || *value >= self.backend.append_window().end {
++            return Err(Error::Type(cformat!("Invalid append window start")));
++        }
++        self.backend
++            .set_append_window_start(*value)
++            .map_err(dom_error)
++    }
++
++    fn AppendWindowEnd(&self) -> f64 {
++        self.backend.append_window().end
++    }
++
++    fn SetAppendWindowEnd(&self, value: f64) -> ErrorResult {
++        self.ensure_idle()?;
++        if value.is_nan() || value <= self.backend.append_window().start {
++            return Err(Error::Type(cformat!("Invalid append window end")));
++        }
++        self.backend.set_append_window_end(value).map_err(dom_error)
++    }
++
++    fn AppendBuffer(&self, bytes: ArrayBufferViewOrArrayBuffer) -> ErrorResult {
++        self.ensure_idle()?;
++        let bytes = match bytes {
++            ArrayBufferViewOrArrayBuffer::ArrayBuffer(buffer) => buffer.to_vec(),
++            ArrayBufferViewOrArrayBuffer::ArrayBufferView(view) => view.to_vec(),
++        }
++        .ok_or_else(|| Error::Type(cformat!("Cannot append a detached buffer")))?;
++        let state = self.source.ready_state();
++        self.backend.append(bytes).map_err(dom_error)?;
++        self.updating.set(true);
++        self.source.update_after_buffer_operation(state);
++        Ok(())
++    }
++
++    fn Abort(&self) -> ErrorResult {
++        self.ensure_attached()?;
++        if self.source.ready_state() != ReadyState::Open {
++            return Err(Error::InvalidState(None));
++        }
++        self.backend.abort().map_err(dom_error)
++    }
++
++    fn Remove(&self, start: Finite<f64>, end: f64) -> ErrorResult {
++        self.ensure_idle()?;
++        if *start < 0. || end.is_nan() || end <= *start {
++            return Err(Error::Type(cformat!("Invalid removal range")));
++        }
++        let state = self.source.ready_state();
++        self.backend.remove(*start..end).map_err(dom_error)?;
++        self.updating.set(true);
++        self.source.update_after_buffer_operation(state);
++        Ok(())
++    }
++
++    fn ChangeType(&self, media_type: DOMString) -> ErrorResult {
++        if media_type.is_empty() {
++            return Err(Error::Type(cformat!(
++                "A source buffer needs a content type"
++            )));
++        }
++        self.ensure_idle()?;
++        if !ServoMedia::get().supports_media_source_type(&media_type.str()) {
++            return Err(Error::NotSupported(None));
++        }
++        let state = self.source.ready_state();
++        self.backend
++            .change_type(&media_type.str())
++            .map_err(dom_error)?;
++        self.source.update_after_buffer_operation(state);
++        Ok(())
++    }
++
++    event_handler!(updatestart, GetOnupdatestart, SetOnupdatestart);
++    event_handler!(update, GetOnupdate, SetOnupdate);
++    event_handler!(updateend, GetOnupdateend, SetOnupdateend);
++    event_handler!(error, GetOnerror, SetOnerror);
++    event_handler!(abort, GetOnabort, SetOnabort);
++}
+diff --git a/components/script/dom/media/sourcebufferlist.rs b/components/script/dom/media/sourcebufferlist.rs
+new file mode 100644
+index 00000000000..ffcaf427788
+--- /dev/null
++++ b/components/script/dom/media/sourcebufferlist.rs
+@@ -0,0 +1,96 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use script_bindings::cell::DomRefCell;
++use script_bindings::reflector::reflect_dom_object;
++use stylo_atoms::Atom;
++
++use crate::dom::bindings::codegen::Bindings::SourceBufferListBinding::SourceBufferListMethods;
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::refcounted::Trusted;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::{Dom, DomRoot};
++use crate::dom::eventtarget::EventTarget;
++use crate::dom::sourcebuffer::SourceBuffer;
++use crate::dom::window::Window;
++
++#[dom_struct]
++pub(crate) struct SourceBufferList {
++    eventtarget: EventTarget,
++    buffers: DomRefCell<Vec<Dom<SourceBuffer>>>,
++}
++
++impl SourceBufferList {
++    pub(crate) fn new(cx: &mut JSContext, window: &Window) -> DomRoot<Self> {
++        reflect_dom_object(
++            cx,
++            Box::new(Self {
++                eventtarget: EventTarget::new_inherited(),
++                buffers: Default::default(),
++            }),
++            window,
++        )
++    }
++
++    pub(crate) fn items(&self) -> Vec<DomRoot<SourceBuffer>> {
++        self.buffers
++            .borrow()
++            .iter()
++            .map(|buffer| DomRoot::from_ref(&**buffer))
++            .collect()
++    }
++
++    pub(crate) fn contains(&self, buffer: &SourceBuffer) -> bool {
++        self.buffers.borrow().iter().any(|item| &**item == buffer)
++    }
++
++    pub(crate) fn push(&self, buffer: &SourceBuffer) {
++        self.buffers.borrow_mut().push(Dom::from_ref(buffer));
++        self.queue_event(Atom::from("addsourcebuffer"));
++    }
++
++    pub(crate) fn remove(&self, buffer: &SourceBuffer) {
++        let index = self
++            .buffers
++            .borrow()
++            .iter()
++            .position(|item| &**item == buffer);
++        if let Some(index) = index {
++            self.buffers.borrow_mut().remove(index);
++            self.queue_event(Atom::from("removesourcebuffer"));
++        }
++    }
++
++    fn queue_event(&self, name: Atom) {
++        let this = Trusted::new(self);
++        self.global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(source_buffer_list_event: move |cx| {
++                this.root().upcast::<EventTarget>().fire_event(cx, name);
++            }));
++    }
++}
++
++impl SourceBufferListMethods<crate::DomTypeHolder> for SourceBufferList {
++    fn Length(&self) -> u32 {
++        self.buffers.borrow().len() as u32
++    }
++
++    fn IndexedGetter(&self, index: u32) -> Option<DomRoot<SourceBuffer>> {
++        self.buffers
++            .borrow()
++            .get(index as usize)
++            .map(|item| DomRoot::from_ref(&**item))
++    }
++
++    event_handler!(addsourcebuffer, GetOnaddsourcebuffer, SetOnaddsourcebuffer);
++    event_handler!(
++        removesourcebuffer,
++        GetOnremovesourcebuffer,
++        SetOnremovesourcebuffer
++    );
++}
+diff --git a/components/script/dom/url/url.rs b/components/script/dom/url/url.rs
+index 7af3ab63a6e..e2a3015316e 100644
+--- a/components/script/dom/url/url.rs
++++ b/components/script/dom/url/url.rs
+@@ -22,6 +22,7 @@ use url::Url;
+ use uuid::Uuid;
+
+ use crate::dom::bindings::codegen::Bindings::URLBinding::URLMethods;
++use crate::dom::bindings::codegen::UnionTypes::BlobOrMediaSource;
+ use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
+ use crate::dom::bindings::reflector::DomGlobal;
+ use crate::dom::bindings::root::{DomRoot, MutNullableDom};
+@@ -117,6 +118,15 @@ impl URL {
+         // Step 10. Return result.
+         result
+     }
++
++    pub(crate) fn create_blob_url(global: &GlobalScope, blob: &Blob) -> DOMString {
++        let origin = global.origin();
++        let id = blob.get_blob_url_id();
++        DOMString::from(Self::unicode_serialization_blob_url(
++            origin.immutable(),
++            &id,
++        ))
++    }
+ }
+
+ impl URLMethods<crate::DomTypeHolder> for URL {
+@@ -193,14 +203,16 @@ impl URLMethods<crate::DomTypeHolder> for URL {
+     }
+
+     /// <https://w3c.github.io/FileAPI/#dfn-createObjectURL>
+-    fn CreateObjectURL(global: &GlobalScope, blob: &Blob) -> DOMString {
+-        // XXX: Second field is an unicode-serialized Origin, it is a temporary workaround
+-        //      and should not be trusted. See issue https://github.com/servo/servo/issues/11722
+-        let origin = global.origin();
+-
+-        let id = blob.get_blob_url_id();
+-
+-        DOMString::from(URL::unicode_serialization_blob_url(origin.immutable(), &id))
++    fn CreateObjectURL(global: &GlobalScope, object: BlobOrMediaSource) -> DOMString {
++        match object {
++            BlobOrMediaSource::Blob(blob) => Self::create_blob_url(global, &blob),
++            BlobOrMediaSource::MediaSource(source) => {
++                let origin = global.origin();
++                let url = Self::unicode_serialization_blob_url(origin.immutable(), &Uuid::new_v4());
++                global.register_media_source_url(url.clone(), &source);
++                DOMString::from(url)
++            },
++        }
+     }
+
+     /// <https://w3c.github.io/FileAPI/#dfn-revokeObjectURL>
+@@ -210,10 +222,14 @@ impl URLMethods<crate::DomTypeHolder> for URL {
+         // this method call does nothing. User agents may display a message on the error console.
+         let origin = global.origin().immutable().clone();
+
+-        if let Ok(url) = ServoUrl::parse(&url.str()) &&
+-            url.fragment().is_none() &&
+-            let Ok(id) = parse_blob_url(&url)
++        if let Ok(url) = ServoUrl::parse(&url.str())
++            && url.scheme() == "blob"
++            && url.fragment().is_none()
++            && let Ok(id) = parse_blob_url(&url)
+         {
++            if global.revoke_media_source_url(&url) {
++                return;
++            }
+             let resource_threads = global.resource_threads();
+             let (tx, rx) = generic_channel::channel(global.time_profiler_chan().clone()).unwrap();
+             let msg = FileManagerThreadMsg::RevokeBlobURL(id, origin, tx);
+diff --git a/components/script_bindings/codegen/Bindings.conf b/components/script_bindings/codegen/Bindings.conf
+index 8c9c17aa7a7..cc88784b6ce 100644
+--- a/components/script_bindings/codegen/Bindings.conf
++++ b/components/script_bindings/codegen/Bindings.conf
+@@ -1174,6 +1174,15 @@ DOMInterfaces = {
+     'cx': ['Clone'],
+ },
+
++'MediaSource': {
++    'cx': ['AddSourceBuffer'],
++},
++
++'SourceBuffer': {
++    'weakReferenceable': True,
++    'cx': ['GetBuffered'],
++},
++
+ 'MessagePort': {
+     'weakReferenceable': True,
+     'cx': ['Close', 'PostMessage', 'PostMessage_', 'SetOnmessage', 'Start']
+diff --git a/components/script_bindings/webidls/HTMLMediaElement.webidl b/components/script_bindings/webidls/HTMLMediaElement.webidl
+index 7ceae06f151..39b891613cc 100644
+--- a/components/script_bindings/webidls/HTMLMediaElement.webidl
++++ b/components/script_bindings/webidls/HTMLMediaElement.webidl
+@@ -5,7 +5,7 @@
+ // https://html.spec.whatwg.org/multipage/#htmlmediaelement
+
+ enum CanPlayTypeResult { "" /* empty string */, "maybe", "probably" };
+-typedef (MediaStream /*or MediaSource */ or Blob) MediaProvider;
++typedef (MediaStream or MediaSource or Blob) MediaProvider;
+
+ [Exposed=Window, Abstract]
+ interface HTMLMediaElement : HTMLElement {
+diff --git a/components/script_bindings/webidls/MediaSource.webidl b/components/script_bindings/webidls/MediaSource.webidl
+new file mode 100644
+index 00000000000..2c04329299b
+--- /dev/null
++++ b/components/script_bindings/webidls/MediaSource.webidl
+@@ -0,0 +1,29 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// https://www.w3.org/TR/media-source-2/#mediasource
++
++enum MediaSourceReadyState { "closed", "open", "ended" };
++enum EndOfStreamError { "network", "decode" };
++
++[Exposed=Window, Pref="dom_media_source_enabled"]
++interface MediaSource : EventTarget {
++  [Throws] constructor();
++
++  readonly attribute SourceBufferList sourceBuffers;
++  readonly attribute SourceBufferList activeSourceBuffers;
++  readonly attribute MediaSourceReadyState readyState;
++  [SetterThrows] attribute unrestricted double duration;
++
++  attribute EventHandler onsourceopen;
++  attribute EventHandler onsourceended;
++  attribute EventHandler onsourceclose;
++
++  [Throws] SourceBuffer addSourceBuffer(DOMString type);
++  [Throws] undefined removeSourceBuffer(SourceBuffer sourceBuffer);
++  [Throws] undefined endOfStream(optional EndOfStreamError error);
++  [Throws] undefined setLiveSeekableRange(double start, double end);
++  [Throws] undefined clearLiveSeekableRange();
++  static boolean isTypeSupported(DOMString type);
++};
+diff --git a/components/script_bindings/webidls/SourceBuffer.webidl b/components/script_bindings/webidls/SourceBuffer.webidl
+new file mode 100644
+index 00000000000..fd00b5edd6b
+--- /dev/null
++++ b/components/script_bindings/webidls/SourceBuffer.webidl
+@@ -0,0 +1,28 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// https://www.w3.org/TR/media-source-2/#sourcebuffer
++
++enum AppendMode { "segments", "sequence" };
++
++[Exposed=Window, Pref="dom_media_source_enabled"]
++interface SourceBuffer : EventTarget {
++  [SetterThrows] attribute AppendMode mode;
++  readonly attribute boolean updating;
++  [Throws] readonly attribute TimeRanges buffered;
++  [SetterThrows] attribute double timestampOffset;
++  [SetterThrows] attribute double appendWindowStart;
++  [SetterThrows] attribute unrestricted double appendWindowEnd;
++
++  attribute EventHandler onupdatestart;
++  attribute EventHandler onupdate;
++  attribute EventHandler onupdateend;
++  attribute EventHandler onerror;
++  attribute EventHandler onabort;
++
++  [Throws] undefined appendBuffer(BufferSource data);
++  [Throws] undefined abort();
++  [Throws] undefined remove(double start, unrestricted double end);
++  [Throws] undefined changeType(DOMString type);
++};
+diff --git a/components/script_bindings/webidls/SourceBufferList.webidl b/components/script_bindings/webidls/SourceBufferList.webidl
+new file mode 100644
+index 00000000000..995067d44e7
+--- /dev/null
++++ b/components/script_bindings/webidls/SourceBufferList.webidl
+@@ -0,0 +1,13 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// https://www.w3.org/TR/media-source-2/#sourcebufferlist
++
++[Exposed=Window, Pref="dom_media_source_enabled"]
++interface SourceBufferList : EventTarget {
++  readonly attribute unsigned long length;
++  getter SourceBuffer (unsigned long index);
++  attribute EventHandler onaddsourcebuffer;
++  attribute EventHandler onremovesourcebuffer;
++};
+diff --git a/components/script_bindings/webidls/URL.webidl b/components/script_bindings/webidls/URL.webidl
+index 4bb54c15a2a..7c1667bb393 100644
+--- a/components/script_bindings/webidls/URL.webidl
++++ b/components/script_bindings/webidls/URL.webidl
+@@ -26,7 +26,7 @@ interface URL {
+            attribute USVString hash;
+
+   // https://w3c.github.io/FileAPI/#creating-revoking
+-  static DOMString createObjectURL(Blob blob);
++  static DOMString createObjectURL((Blob or MediaSource) source);
+   static undefined revokeObjectURL(DOMString url);
+
+   USVString toJSON();
+diff --git a/components/servo/Cargo.toml b/components/servo/Cargo.toml
+index 05c08234663..83270e6c257 100644
+--- a/components/servo/Cargo.toml
++++ b/components/servo/Cargo.toml
+@@ -87,6 +87,7 @@ js_jit = ["script/js_jit"]
+ # The `dep:` prefixes here mean that these do nothing on Android and OHOS, where these
+ # dependencies aren't declared.
+ media-gstreamer = ["dep:servo-media-gstreamer", "dep:gstreamer"]
++media-source = ["media-gstreamer", "servo-media-gstreamer/media-source"]
+
+ # Allows multiprocess and ipc mode. If enabled this still needs the correct preference flags to use multi process mode.
+ multiprocess = ["servo-base/multiprocess", "servo-constellation/multiprocess"]
+diff --git a/components/servo/gstreamer_plugins.rs b/components/servo/gstreamer_plugins.rs
+index da12062d3e5..1a0c81ec987 100644
+--- a/components/servo/gstreamer_plugins.rs
++++ b/components/servo/gstreamer_plugins.rs
+@@ -12,6 +12,8 @@ static MACOS_PLUGINS: &[&str] = &include!("gstreamer_plugin_lists/macos.rs.in");
+ #[cfg(any(target_os = "windows", target_os = "macos"))]
+ pub(crate) fn gstreamer_plugins() -> Vec<String> {
+     let mut plugins = Vec::from(COMMON_PLUGINS);
++    #[cfg(feature = "media-source")]
++    plugins.push("gstmse");
+     #[cfg(target_os = "windows")]
+     plugins.extend_from_slice(WINDOWS_PLUGINS);
+     #[cfg(target_os = "macos")]
+diff --git a/ports/servoshell/Cargo.toml b/ports/servoshell/Cargo.toml
+index 90075218b86..dd19d15aff6 100644
+--- a/ports/servoshell/Cargo.toml
++++ b/ports/servoshell/Cargo.toml
+@@ -70,6 +70,7 @@ js_backtrace = ["servo/js_backtrace"]
+ js_jit = ["servo/js_jit"]
+ max_log_level = ["log/release_max_level_info"]
+ media-gstreamer = ["servo/media-gstreamer"]
++media-source = ["servo/media-source"]
+ multiprocess = ["servo/multiprocess"]
+ native-bluetooth = ["servo/native-bluetooth"]
+ profilemozjs = ["servo/profilemozjs"]

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2.2
+
+- Play adaptive video in Servo, including HD YouTube. Fix playback stalls
+  when buffers refill, after seeking, and near the end of a stream.
+- Save downloads in the background. Cancel removes the partial file, and
+  Retry requests the download again without overwriting an existing file.
+- Refresh Servo from the Heion fork and upstream main when each macOS build
+  starts. GitHub uses one patched source tree and Cargo lockfile for both
+  installers and includes those revisions with the release.
+
 ## 0.1.2.1
 
 - Create New Tab widgets from written or spoken prompts with Apple

@@ -226,6 +226,8 @@ jobs:
           cp incoming/zervo-macos-arm64/Heion-*-arm64.dmg release/
           cp incoming/zervo-macos-x86_64/Heion-*-x86_64.dmg release/
           cp incoming/zervo-source/*-src.tar.gz release/
+          cp incoming/zervo-servo-build/servo-revisions.txt release/
+          cp incoming/zervo-servo-build/Cargo.lock release/Heion-Cargo.lock
           if [ "$UPDATE_ASSETS" = true ]; then
             for arch in arm64 x86_64; do
               dir="incoming/zervo-updates-$arch"
