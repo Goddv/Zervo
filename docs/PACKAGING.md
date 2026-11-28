@@ -477,9 +477,11 @@ update assets pass verification. Without it the result stays a draft.
 ### Project website
 
 GitHub Actions deploys the landing page in `docs/index.html` to GitHub Pages.
-It pairs local screenshots and a stylesheet in `docs/site/` with the public
-installers for the release named in the page metadata. Update that metadata,
-the version, release notes link, and both installer links for a new release.
+The workflow reads the latest stable GitHub release, verifies that both
+macOS installers are uploaded, and renders the version and download links.
+Publishing a release refreshes the site automatically. Update the fallback
+version and links in `docs/index.html` when new site content needs a newer
+release. The workflow waits until that release or a newer one is public.
 Preview from the checkout with
 `python3 -m http.server --directory docs`.
 

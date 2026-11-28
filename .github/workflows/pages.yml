@@ -3,21 +3,35 @@ name: Heion website
 on:
   push:
     branches: [main]
-    paths: [docs/index.html, 'docs/site/**', .github/workflows/pages.yml]
+    paths: [docs/index.html, 'docs/site/**', scripts/stage-website.py, .github/workflows/pages.yml]
+  release:
+    types: [published]
   workflow_run:
     workflows: [Release]
     types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: heion-pages
+  group: ${{ github.event_name == 'release' && 'heion-pages-release' || 'heion-pages' }}
   cancel-in-progress: false
 
 jobs:
+  refresh:
+    name: Refresh Pages from main after publication
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # A release event runs from its tag. The Pages environment deploys main.
+      - run: gh workflow run pages.yml --ref main
+
   build:
     name: Check downloads and stage website
     if: >-
@@ -35,32 +49,17 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: Wait for the public installers
+      - name: Stage the latest stable downloads
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$(sed -n 's/.*name="heion-release" content="\([^"]*\)".*/\1/p' docs/index.html)"
-          [[ "$tag" =~ ^heion-v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
-          release="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest")"
-          latest="$(jq -r .tag_name <<< "$release")"
-          if [ "$latest" != "$tag" ]; then
-            echo "::notice::The site will deploy when $tag is the latest public release."
-            exit 0
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$RUNNER_TEMP/heion-release.json"
+          python3 scripts/stage-website.py "$RUNNER_TEMP/heion-release.json" "$GITHUB_REPOSITORY"
+          if [ -f _site/index.html ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
-          for arch in arm64 x86_64; do
-            filename="Heion-${tag#heion-v}-$arch.dmg"
-            jq -e --arg name "$filename" 'any(.assets[]; .name == $name and .state == "uploaded")' <<< "$release"
-            grep -Fq "/releases/download/$tag/$filename" docs/index.html
-          done
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-
-      - name: Stage static files
-        if: steps.release.outputs.ready == 'true'
-        run: |
-          mkdir _site
-          cp -R docs/index.html docs/site _site/
 
       - uses: actions/upload-pages-artifact@v5
         if: steps.release.outputs.ready == 'true'
